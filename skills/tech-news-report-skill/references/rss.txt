@@ -1,0 +1,82 @@
+# 公式ベンダー・クラウド / AI
+https://aws.amazon.com/jp/blogs/news/feed/
+https://developers.googleblog.com/feed
+https://openai.com/news/rss.xml
+
+# 国内企業 技術ブログ
+https://tech.nri-net.com/rss
+https://tech.smartcamp.co.jp/rss
+https://note.shiftinc.jp/rss
+https://engineering.mercari.com/blog/feed.xml
+https://knowledge.sakura.ad.jp/feed/
+https://tech.timee.co.jp/rss
+https://blog.kinto-technologies.com/rss/feed.xml
+https://blog.g-gen.co.jp/rss
+https://tech.assured.jp/rss
+https://techblog.lycorp.co.jp/ja/feed/index.xml
+https://techlife.cookpad.com/rss
+https://developers.cyberagent.co.jp/blog/feed/
+https://techblog.zozo.com/rss
+https://engineerblog.mynavi.jp/feed
+https://paiza.hatenablog.com/rss
+
+# 海外企業 技術ブログ
+https://netflixtechblog.com/feed
+https://medium.com/feed/pinterest-engineering
+https://medium.com/feed/airbnb-engineering
+
+# 開発者コミュニティ・キュレーション
+https://zenn.dev/feed
+https://qiita.com/articles/feed
+https://techfeed.io/feeds/categories/all
+https://menthas.com/all/rss
+
+# 国内ニュースメディア・専門媒体
+https://getnews.jp/feed
+https://markezine.jp/rss/new/20/index.xml
+https://ascii.jp/tech/rss.xml
+http://feed.japan.cnet.com/rss/index.rdf
+https://rss.itmedia.co.jp/rss/2.0/ait.xml
+https://rss.itmedia.co.jp/rss/2.0/aiplus.xml
+https://rss.itmedia.co.jp/rss/2.0/techtarget.xml
+https://gigazine.net/news/rss_2.0/
+https://www.publickey1.jp/atom.xml
+https://www.gizmodo.jp/index.xml
+https://www.watch.impress.co.jp/data/rss/1.0/ipw/feed.rdf
+https://www.lifehacker.jp/feed/index.xml
+
+# 海外ニュースメディア
+https://techcrunch.com/feed/
+https://www.wired.com/feed/rss
+https://arstechnica.com/feed
+https://feeds.macrumors.com/MacRumors-All
+https://readwrite.com/feed/
+
+# 個人・専門ブログ
+https://croozblog.hatenablog.com/rss
+https://yutori-datascience.hatenablog.com/rss
+
+# イベント・勉強会
+https://connpass.com/explore/ja.atom
+
+# ポッドキャスト
+https://feeds.rebuild.fm/rebuildfm
+https://mozaic.fm/rss
+https://anchor.fm/s/67b363a4/podcast/rss
+https://misreading.chat/category/episodes/feed/
+https://www.omnycontent.com/d/playlist/d8e7b479-b984-4fd8-814d-ab5000e1f09f/3d1bf240-f750-48c5-98e9-ae28007960ed/fb84400b-fcc7-4d6b-a951-ae2800796113/podcast.rss
+https://anchor.fm/s/9010910/podcast/rss
+https://anchor.fm/s/42b89b8c/podcast/rss
+https://rss.art19.com/07ef6b45-d4fc-4d94-b211-e02a27b7e2a6
+https://api.robotstart.jp/api/v1/feeds/35ac047a/get-feeds/podcast
+https://www.tsujileaks.com/?feed=podcast
+https://feeds.megaphone.fm/SBTI9826959868
+https://cast.image.club/feed.xml
+https://anchor.fm/s/dd122784/podcast/rss
+https://rss.art19.com/vancouverengineers
+https://anchor.fm/s/7369a14/podcast/rss
+https://anchor.fm/s/ffb18c08/podcast/rss
+https://anchor.fm/s/70a2c40/podcast/rss
+https://anchor.fm/s/33afc1b0/podcast/rss
+https://rss.art19.com/fukabori
+https://backspace.fm/rss/
