@@ -22,6 +22,9 @@
   "initializeCommand": "echo $(powershell.exe -Command 'echo $env:UserName' | tr -d '\r')",
   "postCreateCommand": "bash ./.devcontainer/postCreateCommand.sh",
   "postStartCommand": "uname -a",
+  "containerEnv": {
+    "UV_LINK_MODE": "copy"
+  },
   "mounts": [
     // Share the "AWS" creadentials with Windows or WSL2.
     // "source=${localEnv:HOME}/.aws,target=/home/vscode/.aws,type=bind,consistency=cached",
