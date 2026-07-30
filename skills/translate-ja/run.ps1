@@ -2,6 +2,7 @@ param(
     [string]$InputPath = "./docs/source/source.pdf",
     [string]$OutputDir = "",
     [string]$Template = "",
+    [string]$DictionaryCsv = "",
     [switch]$Force
 )
 
@@ -64,6 +65,16 @@ function Add-ForceArg {
     return $Command
 }
 
+function Add-DictionaryArg {
+    param([string[]]$Command)
+
+    if (-not [string]::IsNullOrWhiteSpace($DictionaryCsv)) {
+        return @($Command + "--dictionary-csv" + $DictionaryCsv)
+    }
+
+    return $Command
+}
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Resolve-Path (Join-Path $ScriptDir "../..")
 
@@ -93,7 +104,14 @@ New-Item -ItemType Directory -Force -Path (Join-Path $OutputDir "logs") | Out-Nu
 
 Import-DotEnv -Path (Join-Path $RepoRoot ".env")
 
-$PythonBin = if ($env:PYTHON_BIN) { $env:PYTHON_BIN } else { "python" }
+$ProjectPython = Join-Path $RepoRoot ".venv/bin/python3"
+$PythonBin = if ($env:PYTHON_BIN) {
+    $env:PYTHON_BIN
+} elseif (Test-Path -LiteralPath $ProjectPython) {
+    $ProjectPython
+} else {
+    "python"
+}
 $ScriptsDir = Join-Path $ScriptDir "scripts"
 
 $BronzeJson = Join-Path $OutputDir "$Stem.bronze.json"
@@ -110,7 +128,8 @@ $PreprocessReport = Join-Path (Join-Path $OutputDir "reports") "preprocess_repor
 Invoke-Step "1 preprocess document with Docling" $BronzeJson (Add-ForceArg -Command @(
     $PythonBin, (Join-Path $ScriptsDir "preprocess_doc_with_docling.py"),
     "--input", $InputAbs,
-    "--output", $BronzeJson
+    "--output", $BronzeJson,
+    "--async"
 ))
 
 Invoke-Step "2 realign document structure with LLM" $SilverJson (Add-ForceArg -Command @(
@@ -132,11 +151,11 @@ Invoke-Step "4 chunk Docling schema JSON" $ChunksEnJsonl (Add-ForceArg -Command 
     "--output", $ChunksEnJsonl
 ))
 
-Invoke-Step "5 translate chunks" $ChunksJaJsonl (Add-ForceArg -Command @(
+Invoke-Step "5 translate chunks" $ChunksJaJsonl (Add-ForceArg -Command (Add-DictionaryArg -Command @(
     $PythonBin, (Join-Path $ScriptsDir "translate_chunks.py"),
     "--input", $ChunksEnDir,
     "--output", $ChunksJaDir
-))
+)))
 
 Invoke-Step "6 concatenate translated chunks" $JaMd (Add-ForceArg -Command @(
     $PythonBin, (Join-Path $ScriptsDir "concat_chunks.py"),

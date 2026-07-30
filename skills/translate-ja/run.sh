@@ -4,7 +4,7 @@ set -euo pipefail
 show_usage() {
   cat <<'USAGE'
 Usage:
-  ./skills/translate-ja/run.sh --input ./docs/source/source.pdf [--output-dir ./docs/source/output] [--template ./skills/translate-ja/template.dotx] [--force]
+  ./skills/translate-ja/run.sh --input ./docs/source/source.pdf [--output-dir ./docs/source/output] [--dictionary-csv ./terms.csv] [--template ./skills/translate-ja/template.dotx] [--force]
 
 Runs the translate-ja pipeline and skips each step when its expected output already exists.
 USAGE
@@ -45,6 +45,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 INPUT_PATH=""
 OUTPUT_DIR=""
 TEMPLATE_PATH="${SCRIPT_DIR}/template.dotx"
+DICTIONARY_CSV=""
 FORCE="0"
 
 while [[ $# -gt 0 ]]; do
@@ -59,6 +60,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --template|-t)
       TEMPLATE_PATH="$2"
+      shift 2
+      ;;
+    --dictionary-csv)
+      DICTIONARY_CSV="$2"
       shift 2
       ;;
     --force)
@@ -108,17 +113,26 @@ JA_MD="${OUTPUT_DIR}/${STEM}.ja.md"
 JA_DOCX="${OUTPUT_DIR}/${STEM}.ja.docx"
 PREPROCESS_REPORT="${OUTPUT_DIR}/reports/preprocess_report.json"
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [[ -z "${PYTHON_BIN:-}" && -x "${REPO_ROOT}/.venv/bin/python3" ]]; then
+  PYTHON_BIN="${REPO_ROOT}/.venv/bin/python3"
+else
+  PYTHON_BIN="${PYTHON_BIN:-python3}"
+fi
 SCRIPTS_DIR="${SCRIPT_DIR}/scripts"
 FORCE_ARGS=()
 if [[ "${FORCE}" == "1" ]]; then
   FORCE_ARGS=(--force)
+fi
+DICTIONARY_ARGS=()
+if [[ -n "${DICTIONARY_CSV}" ]]; then
+  DICTIONARY_ARGS=(--dictionary-csv "${DICTIONARY_CSV}")
 fi
 
 run_step "1 preprocess document with Docling" "${BRONZE_JSON}" \
   "${PYTHON_BIN}" "${SCRIPTS_DIR}/preprocess_doc_with_docling.py" \
   --input "${INPUT_ABS}" \
   --output "${BRONZE_JSON}" \
+  --async \
   "${FORCE_ARGS[@]}"
 
 run_step "2 realign document structure with LLM" "${SILVER_JSON}" \
@@ -144,6 +158,7 @@ run_step "5 translate chunks" "${CHUNKS_JA_JSONL}" \
   "${PYTHON_BIN}" "${SCRIPTS_DIR}/translate_chunks.py" \
   --input "${OUTPUT_DIR}/chunks-en" \
   --output "${OUTPUT_DIR}/chunks-ja" \
+  "${DICTIONARY_ARGS[@]}" \
   "${FORCE_ARGS[@]}"
 
 run_step "6 concatenate translated chunks" "${JA_MD}" \

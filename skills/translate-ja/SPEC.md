@@ -242,6 +242,7 @@ skills/translate-ja/
   scripts/
     config.py
     io_utils.py
+    translate_ja.py
     preprocess_doc_with_docling.py
     realign_doc_struct_with_llm.py
     clean_doc.py
@@ -290,6 +291,7 @@ python3 skills/translate-ja/scripts/preprocess_doc_with_docling.py \
 - `--max-chars`: 通常チャンクの上限。既定値 `2000`。
 - `--docling-timeout`: Docling 変換の最大待ち時間。既定値 `21600` 秒。
 - `--openai-timeout`: OpenAI Python クライアントの timeout 秒数。既定値は `OPENAI_TIMEOUT_SECONDS`、未設定時は `1800`。
+- `--dictionary-csv`: 翻訳時に使う用語辞書 CSV。省略時は `TRANSLATE_JA_DICTIONARY_CSV` を見る。
 - `--template`: `convert_md_to_docx_with_docling.py` で使う `template.dotx` のパス。
 - `--force`: 既存の中間成果物や manifest を再利用せず、対象工程を再実行する。
 
@@ -440,6 +442,21 @@ JSONL 形式:
 `chunks-en/chunks.source.jsonl` を読み、`chunks-ja/` と `chunks-ja/chunks.ja.jsonl` を生成する。
 `translate_chunks.py` は output ディレクトリ直下に `manifest.translate.json` を保存し、チャンク単位で進捗を管理する。
 
+`translate_ja.py` は翻訳用の共通モジュールとし、次の列を持つ UTF-8 CSV 用語辞書を読み込めるようにする。
+
+```csv
+"english", "japanese", "genre", "description"
+"DoD", "米国国防総省", "軍事用語", "米国の1省庁"
+```
+
+辞書 CSV の要件:
+
+- ヘッダー名は `english`、`japanese`、`genre`、`description` とする。ヘッダーや値の前後空白は読み込み時に除去する。
+- `english` と `japanese` は必須とし、空行は無視する。
+- 同じ `english` が複数回出現した場合は後勝ちとし、`translate_chunks.py` の manifest に辞書ファイルのパス、sha256、登録語数を保存する。
+- 翻訳プロンプトには、該当チャンクに出現する用語を優先し、必要に応じて辞書全体を上限件数内で渡す。
+- 辞書は訳語統一の指示であり、原文に存在しない語を追加する根拠として使わない。
+
 翻訳ルール:
 
 - 出力は日本語。
@@ -541,6 +558,14 @@ Python 実装では次を満たす。
 - JSON、JSONL、Markdown の読み書きを扱う。
 - ログ用の秘密情報マスクを提供する。
 - 作業ディレクトリと親ディレクトリを作成する。
+
+### `translate_ja.py`
+
+- UTF-8 CSV 用語辞書を読み込む。
+- `english`、`japanese`、`genre`、`description` の列を検証する。
+- チャンク本文に出現する用語を抽出し、翻訳プロンプトへ入れる用語リストを生成する。
+- CSV 辞書の sha256、登録語数、重複後の有効語数を返す。
+- 辞書値を manifest に保存する場合も API キーや秘密情報とは別扱いにし、入力文書と同様にユーザがアクセス制御すべきデータとして README に明記する。
 
 ### `preprocess_doc_with_docling.py`
 

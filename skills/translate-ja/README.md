@@ -22,6 +22,7 @@ PowerShell:
 ./skills/translate-ja/run.sh \
   --input ./docs/source/source.pdf \
   --output-dir ./docs/source/output \
+  --dictionary-csv ./docs/source/dictionary.csv \
   --template ./skills/translate-ja/template.dotx
 ```
 
@@ -69,12 +70,26 @@ output/
 - `OPENAI_TIMEOUT_SECONDS`: OpenAI Python クライアントの timeout 秒数。
 - `LOG_LEVEL`: `INFO` または `DEBUG`。
 - `LANGFUSE_TRACE_ID` など: 設定されている場合だけ、非秘密の Langfuse trace header を LLM リクエストに付与します。
+- `TRANSLATE_JA_DICTIONARY_CSV`: `--dictionary-csv` 未指定時に使う用語辞書 CSV。
+
+`DOCLING_SERVER_URL` / `DOCLING_API_KEY` も利用できます。README 旧版の `DOCLING_SERVE_URL` / `DOCLING_SERVE_API_KEY` と両方を吸収します。
+
+## 用語辞書 CSV
+
+`translate_chunks.py` は、次の形式の UTF-8 CSV を読み込めます。
+
+```csv
+"english", "japanese", "genre", "description"
+"DoD", "米国国防総省", "軍事用語", "米国の1省庁"
+```
+
+`english` と `japanese` は必須です。同じ `english` が複数回ある場合は後の行を使います。辞書 CSV のパス、sha256、登録語数は `chunks-ja/manifest.translate.json` に保存されます。
 
 ## 機密文書の注意
 
 機密文書を翻訳する場合は、外部 API 送信先、ログ保存先、生成物の保管先を必ず確認してください。`LOG_LEVEL=DEBUG` では stream 差分ログに原文や翻訳文が含まれうるため、機密文書では DEBUG ログを使わないでください。
 
-API キーや Authorization ヘッダーはログ、manifest、例外に出さない実装方針です。ただし、入力文書、翻訳結果、Docling JSON、チャンク JSONL、`artifacts/` の画像は機密情報そのものになりえます。
+API キーや Authorization ヘッダーはログ、manifest、例外に出さない実装方針です。ただし、入力文書、翻訳結果、Docling JSON、チャンク JSONL、辞書 CSV、`artifacts/` の画像は機密情報そのものになりえます。
 
 ## 必須パッケージ
 
