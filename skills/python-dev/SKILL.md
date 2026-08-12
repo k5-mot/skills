@@ -1,6 +1,6 @@
 ---
 name: python-dev
-description: Pythonバックエンド開発の標準手順。Use when Codex creates, changes, reviews, or sets up Python backend projects, including uv setup, FastAPI/SQLAlchemy-style services, lint/format/test configuration, pre-commit hooks, GitHub Actions CI, Playwright UI/E2E tests, and vulnerable package update workflows.
+description: Pythonバックエンド開発の標準手順。Use when Codex creates, changes, reviews, or sets up Python backend projects, CLI tools, or single-file scripts, including uv setup, FastAPI/SQLAlchemy-style services, script entrypoints with argparse/python-dotenv/time.perf_counter, lint/format/test configuration, pre-commit hooks, GitHub Actions CI, Playwright UI/E2E tests, and vulnerable package update workflows.
 ---
 
 # Python Dev
@@ -13,6 +13,7 @@ Pythonバックエンドを実装・修正・初期化するときは、このSk
 - 関数・メソッドには必ず標準形式のdocstringを書く。目的、引数、戻り値を説明し、例外や副作用がある場合も書く。
 - コメントを書く場合は日本語で、コードの逐語説明ではなく理由や注意点を書く。
 - public utilityの振る舞いを変えた場合は `docs/` に利用方法や変更点を残す。
+- Pythonをスクリプトとして実装する場合は、`main` 関数と `if __name__ == "__main__"` の責務を分ける。
 - UI/E2Eテストが必要な場合は Playwright を使う。
 - Git hookは `pre-commit` を使い、huskyは使わない。
 
@@ -28,6 +29,66 @@ uv add -D pytest ruff ty pip-audit pre-commit
 ```
 
 FastAPI、SQLAlchemy、Alembic、Pydanticなどは、実際に使うアーキテクチャが決まってから追加する。不要なフレームワークを先に入れない。
+
+## スクリプト入口
+
+Pythonを1ファイルのスクリプトとして実装する場合は、`main` 関数に引数解析、環境変数読み込み、主要ロジック呼び出し、簡単な例外処理を置く。`if __name__ == "__main__"` には `time.perf_counter` によるad-hocな実行時間計測、`main` 呼び出し、`raise SystemExit(...)` による終了処理を置く。
+
+```python
+import argparse
+import time
+
+from dotenv import load_dotenv
+
+
+def run(verbose: bool) -> None:
+    """主要ロジックを実行する。
+
+    Args:
+        verbose: 詳細ログを出力するかどうか。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        必要に応じて標準出力へ処理結果を出力する。
+    """
+    if verbose:
+        print("running")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """スクリプトを実行する。
+
+    Args:
+        argv: コマンドライン引数。Noneの場合はsys.argv由来の引数を使う。
+
+    Returns:
+        プロセス終了コード。成功時は0、失敗時は非0を返す。
+
+    Side Effects:
+        環境変数を読み込み、標準出力または標準エラーへ結果を出力する。
+    """
+    load_dotenv()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args(argv)
+
+    try:
+        run(args.verbose)
+    except Exception as exc:
+        print(f"error: {exc}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    started_at = time.perf_counter()
+    exit_code = main()
+    elapsed = time.perf_counter() - started_at
+    print(f"elapsed: {elapsed:.3f}s")
+    raise SystemExit(exit_code)
+```
 
 ## 品質チェック
 
