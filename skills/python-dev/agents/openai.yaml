@@ -1,0 +1,4 @@
+interface:
+  display_name: "Python Dev"
+  short_description: "Pythonバックエンド標準開発手順とCI運用規約"
+  default_prompt: "Use $python-dev to implement a Python backend change with project-standard setup, tests, and checks."

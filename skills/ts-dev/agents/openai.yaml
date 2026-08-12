@@ -1,0 +1,4 @@
+interface:
+  display_name: "TS Dev"
+  short_description: "TypeScriptフロントエンド標準開発手順とCI規約"
+  default_prompt: "Use $ts-dev to implement a TypeScript frontend change with project-standard setup, tests, and checks."
