@@ -1,6 +1,4 @@
-# translate-ja SPEC v0
-
-この文書は `translate-ja` の v0 仕様である。旧Docling artifacts調査メモ、runnerメモ、Chunk JSONL採用ADRの内容を集約し、Docling artifacts、runner、一括実行、Chunk JSONL 採用理由を含める。
+# translate-ja SPEC
 
 ## 想定利用方法
 
@@ -100,46 +98,6 @@ Docling Serve は v1 API を前提にし、同期処理は `/v1/convert/file`、
 ```
 
 JSONL は 1 行 1 JSON とし、途中再開と差分確認をしやすくする。
-
-## v0集約メモ
-
-### Docling referenced image artifacts
-
-Docling Serve v1 / Docling Jobkit で `image_export_mode: "referenced"` かつ zip 返却を使う場合、エクスポート本文と同じ階層に `artifacts/` ディレクトリが作られ、その中に参照画像が PNG として保存される前提で扱う。
-
-想定される zip 内レイアウト:
-
-```text
-converted_docs.zip
-├── <source-stem>.json
-└── artifacts/
-    ├── image_000000_<hash>.png
-    ├── image_000001_<hash>.png
-    ├── page_000001_<hash>.png
-    └── ...
-```
-
-Markdown も同時に出す場合でも同じ `artifacts/` を参照する。ただし `translate-ja` v0 では後段の正本を Chunk JSONL とするため、初回変換では Markdown 全文生成を必須にしない。
-
-`preprocess_doc_with_docling.py` は Docling Serve zip 返却を前提にし、zip 内の `*.json` を `source.bronze.json` として保存し、zip 内の `artifacts/` を同じ出力ディレクトリへ展開する。
-
-```text
-output/
-├── source.bronze.json
-└── artifacts/
-    ├── image_000000_<hash>.png
-    ├── image_000001_<hash>.png
-    ├── page_000001_<hash>.png
-    └── ...
-```
-
-JSON 内の `image.uri` は `artifacts/...png` のような相対パスとして扱い、`source.bronze.json` の親ディレクトリを基準に解決する。`DOCLING_SERVE_ARTIFACTS_PATH` / `--artifacts-path` はモデル重みロード用であり、出力画像ディレクトリ指定ではない。
-
-### Chunk JSONL採用ADR
-
-Translate JA は、補正済み Docling schema JSON から英語全文 Markdown を一度出力せず、Gold JSON から直接 Chunk JSONL を生成する。これにより、補正済み Docling schema JSON を Docling Serve が Markdown 再エクスポートできるかに依存せず、chunking、resume behavior、structure-preserving translation が 1 つの安定した正本を共有できる。
-
-`chunks-en/chunks.source.jsonl` を翻訳前チャンクの正本、`chunks-ja/chunks.ja.jsonl` を翻訳後チャンクの正本として扱う。
 
 ## Manifest
 
@@ -323,22 +281,6 @@ python3 skills/translate-ja/scripts/preprocess_doc_with_docling.py \
 
 `run.sh` と `run.ps1` は、各工程の期待成果物が存在する場合、その工程をスキップする。再実行したい場合は `--force` または `-Force` を指定する。Docling の参照画像 zipball と整合させるため、一括実行時は `output/artifacts/`、`output/chunks-en/`、`output/chunks-ja/`、`output/reports/`、`output/logs/` を作成する。
 
-Python は `PYTHON_BIN` が指定されていればそれを使う。未指定でプロジェクトの `.venv/bin/python3` が存在する場合は `.venv/bin/python3` を優先し、最後に `python3` / `python` へフォールバックする。
-
-一括実行では Docling 前処理に async endpoint を使う。重い PDF でも task status を poll しながら待つため、同期 HTTP リクエストで長時間無音になることを避ける。
-
-翻訳用語辞書を使う場合は UTF-8 CSV を渡す。
-
-```bash
-./skills/translate-ja/run.sh --input ./docs/source/source.pdf --dictionary-csv ./docs/source/dictionary.csv
-```
-
-```powershell
-./skills/translate-ja/run.ps1 -InputPath ./docs/source/source.pdf -DictionaryCsv ./docs/source/dictionary.csv
-```
-
-CSV の列は `english`, `japanese`, `genre`, `description` である。`english` と `japanese` は必須で、同じ `english` が複数ある場合は後の行を採用する。
-
 主な CLI オプション:
 
 - `--input`: 各工程の入力ファイル。必須。
@@ -362,25 +304,6 @@ CSV の列は `english`, `japanese`, `genre`, `description` である。`english
 5. Chunk JSONL EN から Chunk JSONL JA: `translate_chunks.py`
 6. Chunk JSONL JA から Markdown Full-JA: `concat_chunks.py`
 7. Markdown Full-JA から Word docx: `convert_md_to_docx_with_docling.py`
-
-### ページ追跡ログ
-
-工程 2 以降は、可能な範囲で処理単位とページ番号をログへ出す。
-
-- 構造補正: `unit=page-0001 page=1 attempt=1` のように開始、失敗、リトライ、成功を出す。
-- テキスト成形: 変更した Docling node の `ref` と `pages` を出す。
-- チャンク生成: 生成した `chunk`、`kind`、`pages`、元 node refs、文字数を出す。
-- 翻訳: `chunk`、`pages`、`attempt` を開始、失敗、リトライ、成功、原文 fallback に出す。
-- Markdown 連結: 原文 fallback chunk と Markdown 警告を `chunk`、`pages` 付きで出す。
-- Word 変換: ページ単位の入力を持たないため、文書単位の開始と失敗情報を出す。
-
-連続ページは `pages=3-5,8` のように短縮し、ページ情報がない場合は `pages=unknown` とする。
-
-### LLM応答フォールバック
-
-構造補正工程は Chat Completions を `stream=True` で呼び出す。OpenAI 互換サーバーによって stream chunk の本文が空になる場合は、同じリクエストを非 stream で 1 回取り直す。
-
-LLM が補正 JSON を Markdown の `json` コードフェンスで包む、または短い前置きを付ける場合でも、`patches` object を抽出して処理する。本文が本当に空の場合は `LLM response was empty` として manifest に記録する。
 
 例:
 
