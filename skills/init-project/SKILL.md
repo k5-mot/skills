@@ -31,13 +31,13 @@ pnpm dlx skills@latest add mattpocock/skills code-review codebase-design diagnos
 3. graphifyをプロジェクトへインストールする。
 
 ```bash
-uv run -- graphify install --project --platform agents
+uvx --from graphifyy graphify install --project --platform agents
 ```
 
 4. OpenSpecを初期化する。
 
 ```bash
-pnpm exec openspec init --tools github-copilot --profile custom --force --no-animation
+pnpm dlx @fission-ai/openspec@latest openspec init --tools agents --profile core --force --no-animation
 ```
 
 ## 検証
