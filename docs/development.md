@@ -13,5 +13,5 @@ pnpm dlx skills@latest add mattpocock/skills code-review codebase-design diagnos
 uvx --from graphifyy graphify install --project --platform agents
 
 ### 4. OpenSpecを初期化する。
-pnpm dlx @fission-ai/openspec@latest openspec init --tools agents --profile core --force --no-animation
+pnpm dlx @fission-ai/openspec@latest init --tools agents --profile custom --force --no-animation
 ```
