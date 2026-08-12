@@ -48,6 +48,8 @@ uv run playwright install --with-deps
 
 CIでは `uv run pytest tests/e2e` のようにE2Eを明示的に分離する。pre-commitには含めない。
 
+PythonとTypeScriptが混在するrepoでは、TypeScript側のOxlint/Oxfmt/tsgo/Vitest検証は `ts-dev` の手順へ分離する。Python側のhookやCI jobへ無理に混ぜず、monorepo構成に合わせて別hookまたは別jobとして扱う。
+
 ## 脆弱性が見つかった依存の更新
 
 1. `uv run pip-audit` でCVE、影響パッケージ、修正バージョンを確認する。

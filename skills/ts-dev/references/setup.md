@@ -31,7 +31,7 @@ Serendie Design Systemを使う場合の基本依存は以下を起点にする�
 ```bash
 pnpm add react react-dom react-router-dom @serendie/design-token @serendie/symbols @serendie/ui
 pnpm add -D vite typescript @pandacss/dev @types/node @types/react @types/react-dom @vitejs/plugin-react
-pnpm add -D oxlint prettier vitest @testing-library/react @testing-library/user-event jsdom @playwright/test npm-check-updates
+pnpm add -D oxlint oxfmt tsgo vitest @testing-library/react @testing-library/user-event jsdom @playwright/test npm-check-updates
 ```
 
 Cloudflare Kumo、Park UI、shadcn/uiなどを使う場合は、選んだUI基盤に必要な依存だけを追加する。
@@ -43,9 +43,9 @@ Cloudflare Kumo、Park UI、shadcn/uiなどを使う場合は、選んだUI基�
 ```json
 {
   "scripts": {
-    "lint": "oxlint . && tsc --noEmit",
-    "format": "prettier --check .",
-    "format:fix": "prettier --write .",
+    "lint": "oxlint . && tsgo --noEmit",
+    "format": "oxfmt --check .",
+    "format:fix": "oxfmt --write .",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "audit": "pnpm audit",
@@ -56,4 +56,4 @@ Cloudflare Kumo、Park UI、shadcn/uiなどを使う場合は、選んだUI基�
 
 E2E、全ブラウザテスト、画像比較などの重いテストは `test:e2e` に分ける。通常の `test` はpre-commitで毎回実行できる軽さを保つ。
 
-Vite+ プロジェクトでは `vp dev`、`vp build`、`vp check`、`vp test` を優先し、詳細は [vite-plus.md](vite-plus.md) に従う。
+Vite+ プロジェクトでは `vp dev`、`vp build`、`vp check`、`vp test` を優先し、詳細は [vite-plus.md](vite-plus.md) に従う。`vp check` でOxfmt、Oxlint、tsgo相当の検証が提供される場合は、個別CLIより `vp` を正本にする。

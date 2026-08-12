@@ -45,6 +45,19 @@ pnpm exec playwright install --with-deps
 
 `playwright.config.ts` は対象ブラウザ、baseURL、webServerを明示する。E2Eは `pnpm test:e2e` で実行し、pre-commitには含めない。
 
+## CLI実行経路
+
+Vite+プロジェクトでは `vp check` と `vp test` を優先する。Vite+を使わない、または個別CLIの結果を明示する必要がある場合は次を使う。
+
+```bash
+pnpm exec oxlint .
+pnpm exec oxfmt --check .
+pnpm exec tsgo --noEmit
+pnpm exec vitest run
+```
+
+`package.json` scriptsでは `lint` に `oxlint . && tsgo --noEmit`、`format` に `oxfmt --check .`、`format:fix` に `oxfmt --write .` を置く。
+
 ## 脆弱性が見つかった依存の更新
 
 1. `pnpm audit` で脆弱性、影響パッケージ、修正バージョンを確認する。
@@ -79,6 +92,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm format
+      - run: pnpm exec tsgo --noEmit
       - run: pnpm test
       - run: pnpm audit
       - run: pnpm exec playwright install --with-deps

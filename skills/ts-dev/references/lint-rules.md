@@ -1,6 +1,6 @@
-# Oxlint推奨ルール
+# Oxlint/Oxfmt/tsgo推奨ルール
 
-Oxlint設定を作成・変更するときはこのreferenceを読む。既存設定がある場合は上書きせず、既存ルールの意図を確認してから差分を反映する。
+Oxlint、Oxfmt、tsgo設定を作成・変更するときはこのreferenceを読む。既存設定がある場合は上書きせず、既存ルールの意図を確認してから差分を反映する。
 
 ## 採用方針
 
@@ -57,6 +57,18 @@ Oxlint設定を作成・変更するときはこのreferenceを読む。既存�
 4. `style`、`pedantic`、`restriction` を有効化する場合は、既存コードへの影響を見て段階的に行う。
 5. JSDoc/TSDoc必須ルールを入れたら、既存の関数・コンポーネントに説明不足がないか確認する。
 6. 追加後に `pnpm lint` と `pnpm format` を実行する。
+
+## Oxfmt
+
+- formatterはOxfmtを優先する。既存プロジェクトでPrettierを使っている場合は、差し替える前に対象ファイルと差分量を確認する。
+- `package.json` では `format` を `oxfmt --check .`、`format:fix` を `oxfmt --write .` にする。
+- Vite+プロジェクトで `vp check` がOxfmtを含む場合は、個別CLIより `vp check` を正本にしてよい。
+
+## tsgo
+
+- type checkはtsgoを優先する。既存プロジェクトで `tsc --noEmit` を使っている場合は、tsgoへ置き換える前に互換性とCI時間を確認する。
+- `package.json` では `lint` に `oxlint . && tsgo --noEmit` を含める。
+- Vite+プロジェクトで `vp check` がtsgo相当の検証を含む場合は、個別CLIより `vp check` を正本にしてよい。
 
 ## 参考
 
