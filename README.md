@@ -1,6 +1,7 @@
 # Agent skills
 
-k5-mot が管理する agent skills コレクションです。Codex や互換エージェントへ、プロジェクト初期化、Python/TypeScript開発、翻訳、レポート生成、コントリビュート規約などの再利用可能な手順を追加します。
+This repository is the collections of Agent Skills provided by [k5-mot](https://github.com/k5-mot)
+Add the reusable development process - such as Python/Typescript development, translation and contributing.
 
 ## Quick Start
 
@@ -25,4 +26,4 @@ k5-mot
 
 ## License
 
-未指定です。
+MIT
