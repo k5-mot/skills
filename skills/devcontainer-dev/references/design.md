@@ -16,6 +16,7 @@
 - Git hooksは pre-commit を使い、Huskyは使わない。
 - pre-commitにはlint、format、testを含める。重いE2Eや長時間テストは含めなくてよい。
 - GitHub Actionsではlint、format、unit testに加え、E2Eなど重いテストも実行する。
+- `.gitignore` はdevcontainer設定自体ではなく、devcontainerが生成・mountするcache、local-only設定、秘密情報を除外する。
 
 ## Common Missing Items
 
@@ -25,6 +26,7 @@
 - Oxfmt CLIの導入と実行コマンドがない。
 - Ruff、pytest、VitestのVS Code settingsがない。
 - monorepo探索のprune条件が深い階層の `node_modules` や `.venv` に弱い。
+- devcontainerのcache mount先や `.env` が `.gitignore` に入っていない。
 
 ## Proposal Style
 

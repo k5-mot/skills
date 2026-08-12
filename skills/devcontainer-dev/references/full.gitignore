@@ -1,0 +1,72 @@
+# devcontainer-devスキル用のフル版テンプレート。
+# リポジトリ直下の.gitignoreへmergeして使う。
+
+### devcontainerの追跡対象 ###
+# .devcontainer/devcontainer.json とpost-create scriptはcommit対象として残す。
+
+### devcontainerが生成するcache ###
+.cache/
+.serena/cache/
+.pnpm-store/
+.uv-cache/
+
+### 依存関係と仮想環境 ###
+node_modules/
+.venv/
+.venv
+venv/
+env/
+ENV/
+
+### ビルド出力とテスト出力 ###
+dist/
+build/
+out/
+coverage/
+htmlcov/
+playwright-report/
+test-results/
+blob-report/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.vitest/
+.vite/
+.turbo/
+.next/
+
+### ローカルagentと認証情報mount ###
+.codex/
+.claude/
+.aws/
+.azure/
+.config/gh/
+
+### dotenv ###
+.env
+.env.*
+!.env.example
+!.env.sample
+
+### ログ ###
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+### OSとeditor ###
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.history/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+.idea/
+*.iml

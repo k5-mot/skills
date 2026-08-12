@@ -14,6 +14,7 @@
 - `vitest.config.*`
 - `playwright.config.*`
 - `.pre-commit-config.yaml`
+- `.gitignore`
 
 ## Python Stack Checklist
 
@@ -43,3 +44,13 @@
 - 探索時に `.git`、`node_modules`、`.venv`、`dist`、`build`、`.next`、`.turbo`、cacheディレクトリを除外する。
 - 除外パターンが1階層だけに限定されていないか確認する。
 - root以外のPython projectやNode projectも検出できるか確認する。
+
+## .gitignore Checklist
+
+`references/full.gitignore` のフル版テンプレートを基準に、既存 `.gitignore` へ不足分をmergeする。
+
+- `.devcontainer/` は通常commit対象なので除外しない。
+- devcontainer内で作るcacheやvolume mount先は除外する。
+- `.serena/cache/`、`.pnpm-store/`、`.cache/`、`.venv/`、`node_modules/` は除外する。
+- `.codex/`、`.claude/`、クラウド認証情報、`.env` など秘密情報やlocal-only設定を除外する。
+- 共有が必要な設定例は `.env.example` やtemplateとして別名でcommitする。

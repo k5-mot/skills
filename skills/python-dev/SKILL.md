@@ -1,6 +1,6 @@
 ---
 name: python-dev
-description: Pythonバックエンド開発の標準手順。Use when Codex creates, changes, reviews, or sets up Python backend projects, CLI tools, or single-file scripts, including uv setup, FastAPI/SQLAlchemy-style services, script entrypoints with argparse/python-dotenv/time.perf_counter/logger, Ruff rules, lint/format/test configuration, pre-commit hooks, GitHub Actions CI, Playwright UI/E2E tests, and vulnerable package update workflows.
+description: Pythonバックエンド開発の標準手順。Use when Codex creates, changes, reviews, or sets up Python backend projects, CLI tools, or single-file scripts, including uv setup, .gitignore creation, FastAPI/SQLAlchemy-style services, script entrypoints with argparse/python-dotenv/time.perf_counter/logger, Ruff rules, lint/format/test configuration, pre-commit hooks, GitHub Actions CI, Playwright UI/E2E tests, and vulnerable package update workflows.
 ---
 
 # Python Dev
@@ -12,6 +12,7 @@ Pythonバックエンドを実装・修正・初期化するときは、このSk
 作業内容に応じて、必要なreferenceを先に読む。
 
 - 新規作成、依存追加、開発環境整備: [setup.md](references/setup.md)
+- Python向けフル版 `.gitignore` テンプレート: [full.gitignore](references/full.gitignore)
 - 実装、スクリプト入口、docstring、logger: [implementation.md](references/implementation.md)
 - Ruff設定、推奨lintルール、既存設定への反映: [lint-rules.md](references/lint-rules.md)
 - pre-commit、テスト、Playwright、脆弱性更新、GitHub Actions: [verification.md](references/verification.md)

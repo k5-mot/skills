@@ -1,6 +1,6 @@
 ---
 name: devcontainer-dev
-description: devcontainer構成の設計、レビュー、改善提案、ひな型作成を支援する。Use when Codex needs to inspect or author .devcontainer/devcontainer.json, postCreateCommand scripts, VS Code devcontainer customizations, or monorepo-ready development containers for Python/uv/FastAPI/Ruff/ty/pytest and TypeScript/React/Zod/Vite+/Oxlint/Oxfmt/tsgo/Vitest stacks.
+description: devcontainer構成の設計、レビュー、改善提案、ひな型作成を支援する。Use when Codex needs to inspect or author .devcontainer/devcontainer.json, postCreateCommand scripts, .gitignore entries for devcontainer artifacts, VS Code devcontainer customizations, or monorepo-ready development containers for Python/uv/FastAPI/Ruff/ty/pytest and TypeScript/React/Zod/Vite+/Oxlint/Oxfmt/tsgo/Vitest stacks.
 ---
 
 # Devcontainer Dev
@@ -10,6 +10,7 @@ description: devcontainer構成の設計、レビュー、改善提案、ひな�
 1. 現状調査では `references/inspection.md` を読み、`.devcontainer/devcontainer.json`、post-create scripts、言語別manifest、lockfile、workspace設定を確認する。
 2. 設計または改善提案では `references/design.md` を読み、ランタイム、CLI、エディタ拡張、port、cache、monorepo検出、project dependenciesの責務を切り分ける。
 3. 変更後の検証では `references/validation.md` を読み、構文チェック、軽量セットアップ確認、重い処理を避けた検証方針を選ぶ。
+4. devcontainer由来の生成物やcacheを `.gitignore` に反映する場合は、`references/full.gitignore` をtemplateとして既存 `.gitignore` へmergeする。
 
 ## Operating Rules
 

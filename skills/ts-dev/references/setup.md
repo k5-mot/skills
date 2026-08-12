@@ -36,6 +36,12 @@ pnpm add -D oxlint oxfmt tsgo vitest @testing-library/react @testing-library/use
 
 Cloudflare Kumo、Park UI、shadcn/uiなどを使う場合は、選んだUI基盤に必要な依存だけを追加する。
 
+## .gitignore
+
+新規TypeScriptフロントエンドでは `references/full.gitignore` のフル版テンプレートを使って `.gitignore` を作成する。既存ファイルがある場合は上書きせず、Node.js、pnpm、Vite/Vite+、Vitest、Playwright、Oxlint/Oxfmt、OS/editor、dotenv、devcontainer cacheのセクションを不足分だけmergeする。
+
+secretやlocal-only設定は必ず除外し、共有が必要な環境変数は `.env.example` にキー名だけを書く。monorepoではrootの `.gitignore` に共通除外を書き、package固有の生成物だけ各package側へ置く。`package.json`、lockfile、workspace定義は再現性に関わるため、原則としてignoreしない。
+
 ## 開発コマンド
 
 `package.json` には少なくとも以下のscriptsを用意する。既存プロジェクトでは既存名に合わせてもよいが、lint/format/testの意味は保つ。

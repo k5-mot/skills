@@ -22,6 +22,12 @@ uv add -D pytest ruff ty pip-audit pre-commit taskipy
 
 FastAPI、SQLAlchemy、Alembic、Pydanticなどは、実際に使うアーキテクチャが決まってから追加する。不要なフレームワークを先に入れない。
 
+## .gitignore
+
+新規Pythonプロジェクトでは `references/full.gitignore` のフル版テンプレートを使って `.gitignore` を作成する。既存ファイルがある場合は上書きせず、Python、uv、pytest、Ruff、OS/editor、dotenv、devcontainer cacheのセクションを不足分だけmergeする。
+
+secretやlocal-only設定は必ず除外し、共有が必要な環境変数は `.env.example` にキー名だけを書く。`.python-version`、`uv.lock`、`pyproject.toml` は再現性に関わるため、原則としてignoreしない。
+
 ## 開発コマンド
 
 `pyproject.toml` には少なくとも以下の用途のコマンドを用意する。既存のタスクランナーがある場合はそれに合わせる。

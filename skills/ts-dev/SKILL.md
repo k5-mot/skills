@@ -1,6 +1,6 @@
 ---
 name: ts-dev
-description: TypeScriptフロントエンド開発の標準手順。Use when Codex creates, changes, reviews, or sets up TypeScript frontend projects, including Vite/Vite Plus, React UI choices, Oxlint/Oxfmt rules, tsgo type checking, lint/format/test configuration, pre-commit hooks, GitHub Actions CI, Playwright UI/E2E tests, and vulnerable package update workflows.
+description: TypeScriptフロントエンド開発の標準手順。Use when Codex creates, changes, reviews, or sets up TypeScript frontend projects, including Vite/Vite Plus, React UI choices, .gitignore creation, Oxlint/Oxfmt rules, tsgo type checking, lint/format/test configuration, pre-commit hooks, GitHub Actions CI, Playwright UI/E2E tests, and vulnerable package update workflows.
 ---
 
 # TS Dev
@@ -12,6 +12,7 @@ TypeScriptフロントエンドを実装・修正・初期化するときは、�
 作業内容に応じて、必要なreferenceを先に読む。
 
 - 新規作成、依存追加、UI基盤選定: [setup.md](references/setup.md)
+- TypeScript向けフル版 `.gitignore` テンプレート: [full.gitignore](references/full.gitignore)
 - Vite+ / `vp` の利用、検証、トラブルシュート: [vite-plus.md](references/vite-plus.md)
 - 実装、JSDoc/TSDoc、コメント、公開ユーティリティ: [implementation.md](references/implementation.md)
 - Oxlint/Oxfmt/tsgo設定、推奨lintルール、既存設定への反映: [lint-rules.md](references/lint-rules.md)
