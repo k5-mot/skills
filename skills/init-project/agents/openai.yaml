@@ -1,0 +1,4 @@
+interface:
+  display_name: "Init Project"
+  short_description: "Agent skillと補助ツールの標準初期導入手順"
+  default_prompt: "Use $init-project to initialize a repository with the standard agent skills and project tools."
