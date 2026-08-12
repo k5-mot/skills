@@ -1,0 +1,4 @@
+interface:
+  display_name: "Contributing"
+  short_description: "Git運用とコミット規約とリリースタグの標準貢献手順"
+  default_prompt: "Use $contributing to prepare branches, commits, pull requests, and release tags using the project contribution rules."

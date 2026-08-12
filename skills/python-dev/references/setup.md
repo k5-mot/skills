@@ -4,13 +4,20 @@ Pythonバックエンドの新規作成、依存追加、開発環境整備で�
 
 ## 基本ツール
 
-新規Pythonバックエンドでは、まず `uv` を用意してプロジェクトを作る。
+新規Pythonバックエンドでは Python 3.12 以上と `uv` を前提にする。まずバージョンを確認する。
+
+```bash
+python3 --version
+uv --version
+```
+
+`uv` を用意してプロジェクトを作る。
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv init
 uv add python-dotenv requests
-uv add -D pytest ruff ty pip-audit pre-commit
+uv add -D pytest ruff ty pip-audit pre-commit taskipy
 ```
 
 FastAPI、SQLAlchemy、Alembic、Pydanticなどは、実際に使うアーキテクチャが決まってから追加する。不要なフレームワークを先に入れない。

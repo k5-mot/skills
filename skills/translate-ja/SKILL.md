@@ -1,6 +1,13 @@
+---
+name: translate-ja
+description: PDF、Word、PowerPoint、HTML、画像などの入力文書をDocling schema JSONに正規化し、構造補正、清掃、チャンク化、日本語翻訳、Markdown連結、Word docx変換までを実行する。
+---
+
 # translate-ja
 
 PDF、Word、PowerPoint、HTML、画像などの入力文書を Docling schema JSON に正規化し、構造補正、清掃、チャンク化、日本語翻訳、Markdown 連結、Word docx 変換までを実行する。
+
+詳細仕様、Docling artifacts、runner挙動、Chunk JSONL採用理由は [SPEC_v0.md](SPEC_v0.md) を参照する。
 
 ## 使い方
 

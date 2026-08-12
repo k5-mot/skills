@@ -4,12 +4,20 @@ TypeScriptフロントエンドの新規作成、依存追加、UI基盤選定�
 
 ## 基本ツール
 
-新規フロントエンドでは、まずVite Plusとpnpmを用意する。
+新規フロントエンドでは Node.js 20 以上、npm 10 以上を前提にする。まずバージョンを確認する。
 
 ```bash
-npm i --global pnpm vite-plus
+node --version
+npm --version
+```
+
+Vite Plusとpnpmを用意する。
+
+```bash
+npm i --global pnpm vite-plus @voidzero-dev/vite-plus-core@latest
 curl -fsSL https://vite.plus | bash
 vp env off
+pnpm --version
 vp create
 vp install
 ```
@@ -47,3 +55,5 @@ Cloudflare Kumo、Park UI、shadcn/uiなどを使う場合は、選んだUI基�
 ```
 
 E2E、全ブラウザテスト、画像比較などの重いテストは `test:e2e` に分ける。通常の `test` はpre-commitで毎回実行できる軽さを保つ。
+
+Vite+ プロジェクトでは `vp dev`、`vp build`、`vp check`、`vp test` を優先し、詳細は [vite-plus.md](vite-plus.md) に従う。

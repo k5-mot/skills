@@ -12,6 +12,7 @@ TypeScriptフロントエンドを実装・修正・初期化するときは、�
 作業内容に応じて、必要なreferenceを先に読む。
 
 - 新規作成、依存追加、UI基盤選定: [setup.md](references/setup.md)
+- Vite+ / `vp` の利用、検証、トラブルシュート: [vite-plus.md](references/vite-plus.md)
 - 実装、JSDoc/TSDoc、コメント、公開ユーティリティ: [implementation.md](references/implementation.md)
 - Oxlint設定、推奨lintルール、既存設定への反映: [lint-rules.md](references/lint-rules.md)
 - pre-commit、テスト、Playwright、脆弱性更新、GitHub Actions: [verification.md](references/verification.md)
@@ -30,5 +31,6 @@ TypeScriptフロントエンドを実装・修正・初期化するときは、�
 
 1. 該当工程のreferenceを読む。
 2. 既存プロジェクトの設定と衝突する場合は、既存の意図を保ったうえで差分導入する。
-3. Oxlint設定を作成・変更する場合は、必ず [lint-rules.md](references/lint-rules.md) の推奨ルールを確認し、採用・見送りの理由が分かる形で設定へ反映する。
-4. 変更後は [verification.md](references/verification.md) の軽量チェックを実行し、実行できないものは理由を残す。
+3. Vite+ プロジェクトでは、必ず [vite-plus.md](references/vite-plus.md) の `vp` 前提を確認してからコマンドを選ぶ。
+4. Oxlint設定を作成・変更する場合は、必ず [lint-rules.md](references/lint-rules.md) の推奨ルールを確認し、採用・見送りの理由が分かる形で設定へ反映する。
+5. 変更後は [verification.md](references/verification.md) の軽量チェックを実行し、実行できないものは理由を残す。
