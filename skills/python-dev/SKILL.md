@@ -13,6 +13,7 @@ Pythonバックエンドを実装・修正・初期化するときは、このSk
 - 関数・メソッドには必ず標準形式のdocstringを書く。目的、引数、戻り値を説明し、例外や副作用がある場合も書く。
 - コメントを書く場合は日本語で、コードの逐語説明ではなく理由や注意点を書く。
 - public utilityの振る舞いを変えた場合は `docs/` に利用方法や変更点を残す。
+- ログ出力には必ず `logging` の `logger` を使い、`print` はCLIの最終結果など明確な標準出力仕様がある場合だけに限定する。
 - Pythonをスクリプトとして実装する場合は、`main` 関数と `if __name__ == "__main__"` の責務を分ける。
 - UI/E2Eテストが必要な場合は Playwright を使う。
 - Git hookは `pre-commit` を使い、huskyは使わない。
@@ -36,9 +37,12 @@ Pythonを1ファイルのスクリプトとして実装する場合は、`main` 
 
 ```python
 import argparse
+import logging
 import time
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 
 def run(verbose: bool) -> None:
@@ -51,10 +55,10 @@ def run(verbose: bool) -> None:
         なし。
 
     Side Effects:
-        必要に応じて標準出力へ処理結果を出力する。
+        必要に応じてログへ処理状況を出力する。
     """
     if verbose:
-        print("running")
+        logger.info("running")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -67,9 +71,10 @@ def main(argv: list[str] | None = None) -> int:
         プロセス終了コード。成功時は0、失敗時は非0を返す。
 
     Side Effects:
-        環境変数を読み込み、標準出力または標準エラーへ結果を出力する。
+        環境変数を読み込み、ログへ実行状況やエラーを出力する。
     """
     load_dotenv()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -77,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         run(args.verbose)
     except Exception as exc:
-        print(f"error: {exc}")
+        logger.exception("スクリプトの実行に失敗しました: %s", exc)
         return 1
     return 0
 
@@ -86,7 +91,7 @@ if __name__ == "__main__":
     started_at = time.perf_counter()
     exit_code = main()
     elapsed = time.perf_counter() - started_at
-    print(f"elapsed: {elapsed:.3f}s")
+    logger.info("elapsed: %.3fs", elapsed)
     raise SystemExit(exit_code)
 ```
 
