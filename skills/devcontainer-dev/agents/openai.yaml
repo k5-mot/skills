@@ -1,0 +1,4 @@
+interface:
+  display_name: "Devcontainer Dev"
+  short_description: "devcontainer開発環境の設計と検証と改善提案手順"
+  default_prompt: "Use $devcontainer-dev to review or design a devcontainer setup for Python and TypeScript projects."
