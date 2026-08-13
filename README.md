@@ -18,6 +18,7 @@ pnpm dlx skills@latest add k5-mot/skills --agent universal -y
 - `python-dev`
 - `tech-news-report-skill`
 - `translate-ja`
+- `translate-ja-v2`
 - `ts-dev`
 
 ## Author

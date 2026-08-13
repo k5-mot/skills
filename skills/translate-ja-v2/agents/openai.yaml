@@ -1,0 +1,4 @@
+interface:
+  display_name: "Translate JA v2"
+  short_description: "PDF解析から日本語Markdown翻訳までのv2設計手順"
+  default_prompt: "Use $translate-ja-v2 to build or revise the SPEC v2 PDF-to-Japanese Markdown translation pipeline."
