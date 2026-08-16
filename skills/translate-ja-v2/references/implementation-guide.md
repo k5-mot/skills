@@ -67,7 +67,7 @@ JSON と artifact は直接本ファイルへ書かない。必ず一時ファ�
 
 1. Docling Serve で JSON と PNG artifacts を作る。
 2. JSON 上で表セル、過剰記号、コードブロックを整形する。
-3. VLM/LLM に `set_label`、`set_level`、`reorder_texts` patch だけを返させ、見出しと本文の位置を補正する。
+3. VLM/LLM に Docling JSON の要約と `artifacts/` の page PNG を渡し、`set_label`、`set_level`、`reorder_texts` patch だけを返させて見出しと本文の位置を補正する。
 4. JSON 各要素へ `translate_ja_v2` フィールドを追加する。
 5. 見出し・表タイトルは英日併記、本文は和訳のみで Markdown を作る。
 6. pandoc で Markdown を Word docx へ変換する。
@@ -92,6 +92,7 @@ Integration test は、少なくとも次を確認する。
 
 - `.env` を python-dotenv で読み込める。
 - Docling Serve から JSON と PNG が保存される。
+- VLM 構造補正 prompt に page PNG を添付できる。
 - `.translated.json` に `translate_ja_v2` フィールドが残る。
 - Markdown は見出し・表タイトルを英日併記、本文を和訳のみにする。
 - pandoc で docx を作れる。

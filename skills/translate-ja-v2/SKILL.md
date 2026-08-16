@@ -49,7 +49,7 @@ output-v2/
 3. 見出しと表タイトルは `英語 / 日本語` で Markdown に出す。
 4. 本文は日本語訳のみ Markdown に出す。
 5. コード、URL、パス、コマンド、識別子は翻訳せず保護する。
-6. VLM には全文再生成をさせず、`set_label`、`set_level`、`reorder_texts` のような構造 patch だけを返させる。
+6. VLM には Docling JSON 要約と page PNG を渡し、全文再生成をさせず、`set_label`、`set_level`、`reorder_texts` のような構造 patch だけを返させる。
 7. ファイル保存は一時ファイル、flush、fsync、`os.replace()` で行う。
 8. 外部 API を使う単体テストは fake client で検証する。
 

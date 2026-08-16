@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import json
 import logging
@@ -24,8 +25,6 @@ LOGGER = logging.getLogger("translate-ja-v2")
 
 HEADING_LABELS = {"title", "section_header", "heading", "header"}
 CODE_LABELS = {"code", "program_listing"}
-BODY_LABELS = {"paragraph", "text", "list_item", "caption"}
-TABLE_LABELS = {"table"}
 URL_RE = re.compile(r"https?://[^\s)>\"]+")
 
 
@@ -882,7 +881,7 @@ def openai_client(settings: OpenAISettings) -> Any:
 
 
 def chat_text(
-    client: Any, settings: OpenAISettings, messages: list[dict[str, str]]
+    client: Any, settings: OpenAISettings, messages: list[dict[str, Any]]
 ) -> str:
     """Chat Completions を呼び出し、本文文字列を返す。
 
@@ -938,11 +937,14 @@ def parse_json_object(text: str) -> dict[str, Any]:
     raise ValueError(f"JSON object not found in response: {stripped[:120]}")
 
 
-def build_structure_messages(data: dict[str, Any]) -> list[dict[str, str]]:
+def build_structure_messages(
+    data: dict[str, Any], artifacts_dir: Path | None = None
+) -> list[dict[str, Any]]:
     """VLM/LLM 構造補正用 messages を作る。
 
     Args:
         data: 正規化済み Docling JSON。
+        artifacts_dir: Docling が出力した PNG artifacts のディレクトリ。
 
     Returns:
         Chat messages。
@@ -969,7 +971,64 @@ def build_structure_messages(data: dict[str, Any]) -> list[dict[str, str]]:
 
 補正不要なら {{"patches":[]}} を返してください。
 """
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    content = build_multimodal_content(user, artifacts_dir)
+    return [{"role": "system", "content": system}, {"role": "user", "content": content}]
+
+
+def build_multimodal_content(
+    prompt: str, artifacts_dir: Path | None
+) -> str | list[dict[str, Any]]:
+    """VLM へ渡す text とページ画像 content を作る。
+
+    Args:
+        prompt: 構造補正プロンプト本文。
+        artifacts_dir: Docling PNG artifacts のディレクトリ。None なら text のみ返す。
+
+    Returns:
+        OpenAI Chat Completions content。画像がなければ文字列、あれば multimodal content 配列。
+    """
+
+    image_paths = collect_page_image_paths(artifacts_dir)
+    if not image_paths:
+        return prompt
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for path in image_paths:
+        content.append(
+            {"type": "image_url", "image_url": {"url": image_data_url(path)}}
+        )
+    return content
+
+
+def collect_page_image_paths(artifacts_dir: Path | None) -> list[Path]:
+    """Docling artifacts から VLM に添付する PNG を選ぶ。
+
+    Args:
+        artifacts_dir: Docling PNG artifacts のディレクトリ。None または未存在なら空配列。
+
+    Returns:
+        ページ画像らしい PNG パスの昇順配列。
+    """
+
+    if artifacts_dir is None or not artifacts_dir.exists():
+        return []
+    max_images = int(os.environ.get("TRANSLATE_JA_V2_MAX_VLM_IMAGES", "12"))
+    pngs = sorted(path for path in artifacts_dir.glob("*.png") if path.is_file())
+    page_pngs = [path for path in pngs if "page" in path.name.lower()]
+    return (page_pngs or pngs)[:max_images]
+
+
+def image_data_url(path: Path) -> str:
+    """PNG ファイルを Chat Completions image_url 用 data URL にする。
+
+    Args:
+        path: PNG ファイル。
+
+    Returns:
+        data:image/png;base64,... 形式の URL。
+    """
+
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1131,13 +1190,14 @@ def apply_reorder_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str
 
 
 def structure_document(
-    data: dict[str, Any], *, skip_vlm: bool
+    data: dict[str, Any], *, skip_vlm: bool, artifacts_dir: Path | None = None
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """VLM/LLM で見出し・本文の構造を補正する。
 
     Args:
         data: 正規化済み Docling JSON。
         skip_vlm: VLM 呼び出しをスキップするかどうか。
+        artifacts_dir: Docling PNG artifacts のディレクトリ。
 
     Returns:
         補正後 JSON と patch 適用結果。
@@ -1147,7 +1207,9 @@ def structure_document(
         return copy.deepcopy(data), []
     settings = require_openai_settings()
     client = openai_client(settings)
-    response = chat_text(client, settings, build_structure_messages(data))
+    response = chat_text(
+        client, settings, build_structure_messages(data, artifacts_dir)
+    )
     payload = parse_json_object(response)
     patches = payload.get("patches")
     if not isinstance(patches, list):
@@ -1682,7 +1744,7 @@ def run_pipeline(args: argparse.Namespace) -> StagePaths:
         },
     )
     structured, structure_patches = structure_document(
-        normalized, skip_vlm=args.skip_vlm
+        normalized, skip_vlm=args.skip_vlm, artifacts_dir=artifacts_dir
     )
     write_json(paths.structured_json, structured)
     update_manifest(

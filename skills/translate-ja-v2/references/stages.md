@@ -36,7 +36,7 @@ Parse Stage は Docling の文書モデルを可能な限りそのまま保存�
 
 ## 03 Structure
 
-構造と reading order を補正する。現行実装では `collect_structure_units` が text 要素だけを要約し、VLM/LLM に構造 patch を返させる。
+構造と reading order を補正する。現行実装では `collect_structure_units` が text 要素を要約し、`build_multimodal_content` が `artifacts/` 内の page PNG を添付して、VLM/LLM に構造 patch を返させる。
 
 VLM に許可する操作:
 
@@ -53,7 +53,7 @@ VLM に禁止する操作:
 - 翻訳
 - validation 不能な任意 JSON の返却
 
-VLM 応答は JSON object として受け取り、`apply_structure_patches` で `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用する。
+VLM 応答は JSON object として受け取り、`apply_structure_patches` で `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用する。添付画像数は `TRANSLATE_JA_V2_MAX_VLM_IMAGES` で抑制できる。
 
 ## 04 Translate
 
