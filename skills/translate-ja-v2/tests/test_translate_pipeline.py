@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import os
+import zipfile
 from argparse import Namespace
 from pathlib import Path
 
@@ -18,6 +19,9 @@ from translate import (  # noqa: E402
     build_structure_messages,
     collect_page_image_paths,
     clean_text,
+    convert_markdown_to_docx,
+    docling_form_payload,
+    env_bool,
     load_dotenv_file,
     normalize_document,
     read_json,
@@ -278,6 +282,68 @@ def test_load_dotenv_file_uses_python_dotenv(
 
     assert os.environ["DOCLING_SERVER_URL"] == "http://docling.test"
     assert os.environ["OPENAI_MODEL"] == "test-model"
+
+
+def test_docling_payload_disables_ocr_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Docling payload は OCR を既定で無効にし、必要時だけ言語を送る。"""
+
+    monkeypatch.delenv("DOCLING_DO_OCR", raising=False)
+    monkeypatch.delenv("DOCLING_FORCE_OCR", raising=False)
+
+    payload = docling_form_payload(120)
+
+    assert ("do_ocr", "false") in payload
+    assert ("force_ocr", "false") in payload
+    assert not any(key == "ocr_lang" for key, _value in payload)
+
+
+def test_docling_payload_adds_ocr_languages_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OCR 有効時は DOCLING_OCR_LANGS の言語を Docling payload に入れる。"""
+
+    monkeypatch.setenv("DOCLING_DO_OCR", "true")
+    monkeypatch.setenv("DOCLING_OCR_LANGS", "eng,jpn")
+
+    payload = docling_form_payload(120)
+
+    assert ("do_ocr", "true") in payload
+    assert ("ocr_preset", "tesseract") in payload
+    assert ("ocr_lang", "eng") in payload
+    assert ("ocr_lang", "jpn") in payload
+
+
+def test_env_bool_parses_common_truthy_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    """env_bool は一般的な truthy 文字列を True として解釈する。"""
+
+    monkeypatch.setenv("TRANSLATE_TEST_BOOL", "yes")
+
+    assert env_bool("TRANSLATE_TEST_BOOL", default=False) is True
+    assert env_bool("TRANSLATE_TEST_MISSING", default=True) is True
+
+
+def test_convert_markdown_to_docx_falls_back_without_pandoc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pandoc がない環境では標準ライブラリ fallback で docx を生成する。"""
+
+    markdown_path = tmp_path / "source.md"
+    docx_path = tmp_path / "source.docx"
+    markdown_path.write_text("# Title\n\nBody & details\n", encoding="utf-8")
+    monkeypatch.setattr("translate.shutil.which", lambda _name: None)
+
+    convert_markdown_to_docx(markdown_path, docx_path, None)
+
+    with zipfile.ZipFile(docx_path, "r") as archive:
+        names = set(archive.namelist())
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert "[Content_Types].xml" in names
+    assert "_rels/.rels" in names
+    assert "word/styles.xml" in names
+    assert "Heading1" in document
+    assert "Body &amp; details" in document
 
 
 def test_run_pipeline_writes_json_markdown_and_docx(
