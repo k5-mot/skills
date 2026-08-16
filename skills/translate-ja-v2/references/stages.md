@@ -1,33 +1,32 @@
 # Stage 詳細
 
-この文書は Stage 実装時に読む。全体方針は `implementation-guide.md`、完全仕様は `spec-v2.md` を参照する。
+この文書は `scripts/translate.py` の stage 相当処理を修正するときに読む。全体方針は `implementation-guide.md`、完全仕様は `spec-v2.md` を参照する。
 
 ## 01 Parse
 
-入力 PDF を Docling で解析し、DoclingDocument、ページ PNG、figure/image artifact を保存する。
+入力 PDF/Word を Docling Serve で解析し、Docling JSON、ページ PNG、figure/image artifact を保存する。接続設定は `python-dotenv` で読み込んだ `.env` の `DOCLING_SERVER_URL` / `DOCLING_API_KEY` 系を使う。
 
 出力:
 
-- `stages/01_parse/document.json`
-- `stages/01_parse/pages/000001.json`
-- `assets/pages/page_000001.png`
-- `assets/figures/*`
+- `<stem>.docling.json`
+- `artifacts/*.png`
 
 Parse Stage は Docling の文書モデルを可能な限りそのまま保存する。独自 Pydantic モデルへ全文コピーしない。
 
 ## 02 Normalize
 
-決定論的ルールで PDF 解析結果のノイズを補正する。Rule はファイル I/O を持たず、入力 page/document と context から patch と更新後 artifact を返す。
+決定論的ルールで PDF 解析結果のノイズを補正する。現行実装では `normalize_document`、`normalize_text_item`、`normalize_table_item` を中心に、入力 JSON copy と patch 配列を返す。
 
-MVP で実装する rule:
+実装済みの主な処理:
 
-- Ellipsis Rule
-- Table Artifact Rule
+- URL 保護付きの過剰記号・空白縮約
+- table cell の空白・改行整形
+- code/program_listing の翻訳対象外 metadata 付与
+
+追加候補:
+
 - Fragment Merge Rule
 - Log Block Rule
-
-MVP 後に扱う rule:
-
 - Hyphenation 高度化
 - Stack Trace Detector 高度化
 - Report Detector
@@ -37,7 +36,7 @@ MVP 後に扱う rule:
 
 ## 03 Structure
 
-構造と reading order を補正する。heuristic で十分なページは VLM を呼ばず、必要なページだけ VLM に送る。
+構造と reading order を補正する。現行実装では `collect_structure_units` が text 要素だけを要約し、VLM/LLM に構造 patch を返させる。
 
 VLM に許可する操作:
 
@@ -54,11 +53,11 @@ VLM に禁止する操作:
 - 翻訳
 - validation 不能な任意 JSON の返却
 
-VLM 応答は structured output として受け取り、参照先の存在、page 範囲、重複、欠落、循環、型変更の妥当性を検証してから適用する。
+VLM 応答は JSON object として受け取り、`apply_structure_patches` で `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用する。
 
 ## 04 Translate
 
-翻訳対象を分類し、chunk を作成し、OpenAI API で日本語訳を追加する。原文は保持し、翻訳で上書きしない。
+翻訳対象を分類し、OpenAI 互換 API で日本語訳を追加する。原文は保持し、翻訳結果は各要素の `translate_ja_v2` metadata に追加する。
 
 翻訳対象:
 
@@ -78,11 +77,11 @@ VLM 応答は structured output として受け取り、参照先の存在、pag
 - identifier
 - 数式
 
-Structured translation output は、chunk id、source hash、translated text、protected spans を含む。source hash が一致しない翻訳結果は破棄する。
+見出しと表タイトルは `英語 / 日本語` の render text を作る。本文は和訳のみを render text にする。コード、URL、path、identifier、command は原則として翻訳しない。
 
 ## 05 Render
 
-翻訳済み Document Artifact から Markdown を生成する。Markdown は inspection しやすい最終出力として優先する。
+翻訳済み JSON から Markdown を生成する。Markdown は inspection しやすい最終出力として優先する。
 
 出力優先順位:
 
@@ -95,6 +94,6 @@ Structured translation output は、chunk id、source hash、translated text、p
 
 ## OpenAI 境界
 
-API 呼び出しは `openai/` 配下に閉じ込める。Structure や Translation のドメインロジックへ SDK 呼び出しを直書きしない。
+現行実装は単一スクリプトを優先するため、API 呼び出しは `openai_client` と `chat_text` に集約する。過度な wrapper module は作らない。
 
 エラー処理では timeout、rate limit、invalid structured output、validation failed を区別する。retry 方針は StageRunner または API client 境界で一元管理する。

@@ -1,6 +1,6 @@
 # translate-ja-v2 実装ガイド
 
-この文書は通常の実装・レビューで最初に読む要約である。詳細が必要な場合は `spec-v2.md` を正とする。
+この文書は通常の実装・レビューで最初に読む要約である。現在の正本実装は `scripts/translate.py` である。詳細が必要な場合は `spec-v2.md` を参照するが、エージェントスキルとしては単一スクリプトを優先し、無駄な wrapper や package 階層を増やさない。
 
 ## アーキテクチャ
 
@@ -10,29 +10,18 @@
 - `State`: job、stage、page の進捗、retry、artifact hash、error を持つ。文書本文を入れない。
 - `Patch`: normalizer や VLM が文書へ加えた差分と理由を持つ。
 
-Pipeline は `Artifact -> Stage -> Artifact` の連鎖として扱う。Stage は文書処理だけを担当し、resume、state 更新、retry、atomic write、hash validation は共通 `StageRunner` へ集約する。
+Pipeline は `Artifact -> Stage -> Artifact` の連鎖として扱う。ただし現行 v2 skill では `StageRunner` の抽象化を作らず、`scripts/translate.py` 内の小さな関数で stage を順に実行する。
 
 ## プロジェクト構成
 
-新規実装では `pdf2md` パッケージ構成を採用する。
+新規実装では、まず skill 内の単一スクリプト構成を採用する。
 
 ```text
-pdf2md/
-├── config/
-│   ├── default.yaml
-│   ├── normalization.yaml
-│   └── prompts/
-├── src/pdf2md/
-│   ├── cli.py
-│   ├── pipeline.py
-│   ├── core/
-│   ├── parsing/
-│   ├── normalization/
-│   ├── structure/
-│   ├── translation/
-│   ├── rendering/
-│   ├── openai/
-│   └── storage/
+skills/translate-ja-v2/
+├── SKILL.md
+├── scripts/
+│   └── translate.py
+├── references/
 └── tests/
 ```
 
@@ -40,41 +29,35 @@ pdf2md/
 
 ## Workspace
 
-PDF ごとに ULID または UUID の Job ID を発行し、次のように保存する。
+PDF/Word ごとに出力ディレクトリを作り、次のように保存する。
 
 ```text
-workspace/<job-id>/
-├── job.json
-├── source/input.pdf
-├── assets/pages/
-├── assets/figures/
-├── stages/
-│   ├── 01_parse/
-│   ├── 02_normalize/
-│   ├── 03_structure/
-│   ├── 04_translate/
-│   └── 05_render/
-├── logs/
-└── output/
+output-v2/
+├── <stem>.docling.json
+├── <stem>.normalized.json
+├── <stem>.structured.json
+├── <stem>.translated.json
+├── <stem>.ja.md
+├── <stem>.ja.docx
+├── artifacts/
+└── manifest.json
 ```
 
-各 stage には `state.json` を置き、ページ単位の artifact は `pages/000001.json` のように分ける。Markdown の最終成果物は `output/document.md` に置く。
+`.docling.json` は Docling Serve 直後、`.normalized.json` は表・コード整形後、`.structured.json` は VLM patch 後、`.translated.json` は `translate_ja_v2` 翻訳フィールド付与後の JSON とする。
 
 ## State と Resume
 
-Status は `pending`、`running`、`completed`、`failed`、`skipped` を使う。resume 時に `running` のまま残っている state は stale とみなし、原則 `pending` へ戻す。
+## .env
 
-完了済み page artifact として再利用できる条件は次のすべてである。
+`.env` は `python-dotenv` で読み込む。主な環境変数は次の通り。
 
-```text
-state.status == completed
-artifact file exists
-artifact sha256 == state.sha256
-stage config_hash is valid
-input_hash is valid
-```
-
-Stage 設定が変わった場合は、その stage 以降だけを invalidate する。たとえば normalize 設定変更時は parse を reuse し、normalize 以降を再処理する。
+- `DOCLING_SERVER_URL` または `DOCLING_SERVE_URL`
+- `DOCLING_API_KEY` または `DOCLING_SERVE_API_KEY`
+- `DOCLING_TIMEOUT_SECONDS`
+- `OPENAI_BASE_URL`
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `OPENAI_TIMEOUT_SECONDS`
 
 ## Atomic Write
 
@@ -82,41 +65,33 @@ JSON と artifact は直接本ファイルへ書かない。必ず一時ファ�
 
 ## 実装順序
 
-1. core、storage、CLI、State、Resume
-2. Parse Stage と Docling integration
-3. Normalization framework、基本 rules、Patch
-4. Structure Stage と VLM integration
-5. Translation Stage と OpenAI integration
-6. Markdown rendering
-7. Integration、resume、failure recovery tests
-
-各 Phase の終わりに pytest を通し、壊れた中間状態を残さない。
+1. Docling Serve で JSON と PNG artifacts を作る。
+2. JSON 上で表セル、過剰記号、コードブロックを整形する。
+3. VLM/LLM に `set_label`、`set_level`、`reorder_texts` patch だけを返させ、見出しと本文の位置を補正する。
+4. JSON 各要素へ `translate_ja_v2` フィールドを追加する。
+5. 見出し・表タイトルは英日併記、本文は和訳のみで Markdown を作る。
+6. pandoc で Markdown を Word docx へ変換する。
 
 ## CLI
 
-最低限の CLI は次の通り。
-
 ```bash
-pdf2md run input.pdf --target-language ja --output output.md
-pdf2md resume <job-id>
-pdf2md status <job-id>
-pdf2md resume <job-id> --invalidate-from normalize
+python skills/translate-ja-v2/scripts/translate.py \
+  --input ./docs/source/source.pdf \
+  --output-dir ./docs/source/output-v2 \
+  --template ./skills/translate-ja/template.dotx \
+  --async-docling
 ```
 
-可能なら次も実装する。
-
-```bash
-pdf2md resume <job-id> --stage structure --pages 10,11,12
-```
+`--skip-docx` は pandoc がない環境で JSON/Markdown まで検証したい場合に使う。`--skip-vlm` は VLM 構造補正を止めた deterministic test に使う。
 
 ## テスト
 
-Unit test は外部 API を mock し、normalization rule、hash validation、state transition、resume 判定、renderer を重点的に検証する。
+Unit test は外部 API を fake client で mock し、normalization、structure patch、translation metadata、renderer を重点的に検証する。
 
 Integration test は、少なくとも次を確認する。
 
-- 強制終了後に resume できる。
-- completed page を不要に再処理しない。
-- artifact 破損を hash 検証で検出する。
-- config 変更で必要な stage 以降だけ invalidate される。
-- 最終 Markdown まで原文が保持される。
+- `.env` を python-dotenv で読み込める。
+- Docling Serve から JSON と PNG が保存される。
+- `.translated.json` に `translate_ja_v2` フィールドが残る。
+- Markdown は見出し・表タイトルを英日併記、本文を和訳のみにする。
+- pandoc で docx を作れる。

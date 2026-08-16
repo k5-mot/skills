@@ -1,63 +1,58 @@
 ---
 name: translate-ja-v2
-description: PDF文書をDoclingで解析し、ページ単位State、Patch、resume、VLM構造補正、OpenAI翻訳、Markdownレンダリングを備えたSPEC v2準拠の日本語翻訳パイプラインを設計・実装・レビューする。Use when Codex builds or revises a Python pdf2md/translate-ja-v2 pipeline, migrates the legacy translate-ja runner to the SPEC v2 architecture, adds stage/state/resume/hash validation, or reviews whether an implementation follows SPEC v2.
+description: PDF/Word文書をpython-dotenvで読み込んだ.env設定、Docling Serve、OpenAI互換API、pandocでJSON/PNG、構造補正、要素単位日本語翻訳、Markdown、Word docxへ変換するtranslate-ja-v2パイプラインを実行・修正・レビューする。Use when Codex translates documents with the bundled Python script, revises scripts/translate.py, adjusts Docling/OpenAI/pandoc handling, or reviews whether heading/table bilingual output, body Japanese-only output, table/code cleanup, and VLM structure correction work.
 ---
 
 # translate-ja-v2
 
-SPEC v2 準拠の PDF 解析・整合・日本語翻訳・Markdown 生成パイプラインを作るためのスキル。既存 `translate-ja` の runner 型実装を直接拡張するのではなく、`pdf2md` パッケージ、Workspace、Job/Stage State、Page Artifact、Patch を分離した v2 アーキテクチャとして扱う。
+PDF/Word から Docling Serve で JSON/PNG を作り、JSON 上で表・コードブロック整形、VLM 構造補正、要素単位翻訳、Markdown 生成、Word docx 変換まで行うスキル。エージェントスキルの一部として使いやすいよう、正本の Python 実装は [scripts/translate.py](scripts/translate.py) に集約する。
 
 ## 最初に読むもの
 
-- 変更やレビューを始める前に [implementation-guide.md](references/implementation-guide.md) を読む。
-- Stage 詳細、Normalizer rule、VLM、翻訳、Markdown renderer を実装するときは [stages.md](references/stages.md) を読む。
+- 実行・修正を始める前に [implementation-guide.md](references/implementation-guide.md) を読む。
+- Stage 詳細、Normalizer rule、VLM、翻訳、Markdown renderer を修正するときは [stages.md](references/stages.md) を読む。
 - 細かな仕様判断や受け入れ条件の確認が必要なときだけ [spec-v2.md](references/spec-v2.md) を読む。
-- Python コードを書く、CLI を作る、テスト・lint を整える場合は、利用可能なら `python-dev` も併用し、docstring、logger、pytest、Ruff の方針を合わせる。
+- Python コードを書く、CLI を直す、テストを追加する場合は、利用可能なら `python-dev` も併用し、docstring、logger、pytest、Ruff の方針を合わせる。
+
+## 実行
+
+`.env` に Docling Serve と OpenAI 互換 API の環境変数を用意してから実行する。`.env` は `python-dotenv` 経由で読み込む。
+
+```bash
+python skills/translate-ja-v2/scripts/translate.py \
+  --input ./docs/source/source.pdf \
+  --output-dir ./docs/source/output-v2 \
+  --template ./skills/translate-ja/template.dotx \
+  --async-docling
+```
+
+Word 変換を後回しにする場合だけ `--skip-docx` を使う。構造補正を明示的に止める検証では `--skip-vlm` を使う。
+
+## 出力
+
+```text
+output-v2/
+├── <stem>.docling.json
+├── <stem>.normalized.json
+├── <stem>.structured.json
+├── <stem>.translated.json
+├── <stem>.ja.md
+├── <stem>.ja.docx
+├── artifacts/
+└── manifest.json
+```
 
 ## 実装方針
 
-1. `Document`、`State`、`Patch` を混ぜない。
-2. Stage 内に resume 判定を分散させず、`StageRunner` が state、retry、atomic write、hash validation を横断的に担当する。
-3. Artifact は直接上書きせず、一時ファイル、flush、fsync、`os.replace()` で保存する。
-4. `completed` state だけを信用せず、artifact の存在、SHA-256、input hash、config hash を必ず検証する。
-5. 原文を翻訳結果で上書きせず、翻訳結果は annotation または別フィールドとして追加する。
-6. VLM には全文再生成をさせず、順序、結合、分類、grouping などの構造操作だけを返させる。
-7. 外部 API を使う単体テストは mock できる境界に分離する。
-8. 各 Phase 終了時点で pytest が通る状態を維持する。
-
-## 推奨ワークフロー
-
-新規実装では次の順に進める。
-
-```text
-Phase 1: core / storage / CLI / State / Resume
-Phase 2: Parse Stage / Docling integration
-Phase 3: Normalization framework / basic rules / Patch
-Phase 4: Structure Stage / VLM integration
-Phase 5: Translation Stage / OpenAI integration
-Phase 6: Markdown rendering
-Phase 7: Integration, resume, failure recovery tests
-```
-
-途中でユーザーが大きな範囲を依頼した場合も、Phase 単位に区切って実装し、各 Phase の終わりに検証する。
-
-## CLI の外部仕様
-
-最低限、次を提供する。
-
-```bash
-pdf2md run input.pdf --target-language ja --output output.md
-pdf2md resume <job-id>
-pdf2md status <job-id>
-pdf2md resume <job-id> --invalidate-from normalize
-```
-
-可能であれば、特定ページ再処理も提供する。
-
-```bash
-pdf2md resume <job-id> --stage structure --pages 10,11,12
-```
+1. 無駄な wrapper や package 階層を増やさず、まず [scripts/translate.py](scripts/translate.py) を修正する。
+2. JSON 原文は上書きせず、翻訳情報は `translate_ja_v2` フィールドへ追加する。
+3. 見出しと表タイトルは `英語 / 日本語` で Markdown に出す。
+4. 本文は日本語訳のみ Markdown に出す。
+5. コード、URL、パス、コマンド、識別子は翻訳せず保護する。
+6. VLM には全文再生成をさせず、`set_label`、`set_level`、`reorder_texts` のような構造 patch だけを返させる。
+7. ファイル保存は一時ファイル、flush、fsync、`os.replace()` で行う。
+8. 外部 API を使う単体テストは fake client で検証する。
 
 ## 完了判断
 
-MVP は、任意 PDF の投入、Docling JSON と Page PNG の保存、ページ単位 normalization、Patch 追跡、VLM reading order 補正、OpenAI 翻訳、Markdown 生成、resume、hash 破損検出、config 変更時の downstream invalidate、Unit/Integration test 成功を満たした時点で完了とする。
+MVP は、PDF/Word の投入、Docling JSON/PNG 保存、表・コード整形、VLM による見出し/本文の位置補正、JSON 要素への翻訳フィールド追加、見出し/表タイトルの英日併記、本文の和訳のみ Markdown、pandoc による docx 生成、単体テスト成功を満たした時点で完了とする。
