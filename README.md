@@ -1,19 +1,19 @@
-# Agent skills
+# 🧩 Agent Skills
 
-This repository is the collections of Agent Skills provided by [k5-mot](https://github.com/k5-mot)
-Add the reusable development process - such as Python/Typescript development, translation and contributing.
+Reusable Agent Skills by [k5-mot](https://github.com/k5-mot) for development workflows, translation pipelines, documentation, and contribution hygiene.
 
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
 pnpm dlx skills@latest add k5-mot/skills --agent universal -y
 ```
 
-## Skill list
+## 📚 Skill List
 
 - `contributing`
 - `init-project`
 - `llm-activity-report-skill`
+- `md-dev`
 - `open-webui-skill`
 - `python-dev`
 - `tech-news-report-skill`
@@ -21,10 +21,23 @@ pnpm dlx skills@latest add k5-mot/skills --agent universal -y
 - `translate-ja-v2`
 - `ts-dev`
 
-## Author
+## 🧰 Tech Stack
+
+- [Agent Skills](https://agentskills.io/specification)
+- [Markdown](https://commonmark.org/)
+- [Python](https://docs.python.org/3/)
+- [TypeScript](https://www.typescriptlang.org/docs/)
+- [uv](https://docs.astral.sh/uv/)
+- [pnpm](https://pnpm.io/)
+- [pytest](https://docs.pytest.org/)
+- [Ruff](https://docs.astral.sh/ruff/)
+- [ty](https://docs.astral.sh/ty/)
+- [Vite](https://vite.dev/guide/)
+
+## 👤 Author
 
 k5-mot
 
-## License
+## 📜 License
 
 MIT

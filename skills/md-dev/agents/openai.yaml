@@ -1,0 +1,4 @@
+interface:
+  display_name: "Markdown Dev"
+  short_description: "READMEとMarkdown文書の構成・表記標準"
+  default_prompt: "Use $md-dev to write or review Markdown documentation with project-standard headings, Quick Start, tech stack, author, and license sections."
