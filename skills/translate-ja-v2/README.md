@@ -87,6 +87,7 @@ output-v2/sample/
 ```
 
 `--skip-docx` を指定した場合、`sample.ja.docx` は生成されません。
+Markdown 内の `artifacts/...` 画像は、docx 変換時に出力ディレクトリ基準で解決されます。
 
 ## 🧪 Verification
 

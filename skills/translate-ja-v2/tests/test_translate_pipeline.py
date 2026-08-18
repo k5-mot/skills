@@ -527,6 +527,49 @@ def test_convert_markdown_to_docx_falls_back_without_pandoc(
     assert "Body &amp; details" in document
 
 
+def test_convert_markdown_to_docx_runs_pandoc_from_markdown_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pandoc は Markdown 相対の artifacts 画像を解決できる cwd で実行する。"""
+
+    markdown_path = tmp_path / "out" / "source.md"
+    docx_path = tmp_path / "out" / "source.docx"
+    template_path = tmp_path / "template.dotx"
+    markdown_path.parent.mkdir()
+    markdown_path.write_text("![image](artifacts/image.png)\n", encoding="utf-8")
+    template_path.write_bytes(b"template")
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr("translate.shutil.which", lambda _name: "/usr/bin/pandoc")
+
+    def fake_run(command: list[str], *, check: bool, cwd: Path) -> None:
+        """subprocess.run の呼び出し内容を記録する。"""
+
+        calls.append({"command": command, "check": check, "cwd": cwd})
+
+    monkeypatch.setattr("translate.subprocess.run", fake_run)
+
+    convert_markdown_to_docx(markdown_path, docx_path, template_path)
+
+    assert calls == [
+        {
+            "command": [
+                "pandoc",
+                str(markdown_path.resolve()),
+                "--from",
+                "markdown",
+                "--to",
+                "docx",
+                "--output",
+                str(docx_path.resolve()),
+                "--reference-doc",
+                str(template_path.resolve()),
+            ],
+            "check": True,
+            "cwd": markdown_path.resolve().parent,
+        }
+    ]
+
+
 def test_run_pipeline_writes_json_markdown_and_docx(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1765,6 +1765,9 @@ def convert_markdown_to_docx(
         pandoc または組み込み fallback で docx を作成する。
     """
 
+    markdown_path = markdown_path.resolve()
+    docx_path = docx_path.resolve()
+    template_path = template_path.resolve() if template_path else None
     if shutil.which("pandoc") is None:
         if template_path:
             LOGGER.warning(
@@ -1788,7 +1791,7 @@ def convert_markdown_to_docx(
             raise FileNotFoundError(f"template not found: {template_path}")
         command.extend(["--reference-doc", str(template_path)])
     docx_path.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(command, check=True)
+    subprocess.run(command, check=True, cwd=markdown_path.parent)
 
 
 def write_minimal_docx(markdown_path: Path, docx_path: Path) -> None:
