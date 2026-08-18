@@ -114,7 +114,7 @@ class PipelineOptions(FrozenModel):
         output_dir: 中間成果物の出力ディレクトリ。
         output: 最終 docx の出力パス。
         template: pandoc reference docx/dotx。
-        async_docling: Docling async endpoint を使うかどうか。
+        async_docling: 互換用オプション。Docling conversion は常に async endpoint を使う。
         skip_vlm: VLM による構造補正を省略するかどうか。
         skip_docx: docx 生成を省略するかどうか。
         force: 既存 Docling JSON があっても変換を再実行するかどうか。
@@ -128,7 +128,7 @@ class PipelineOptions(FrozenModel):
     output_dir: Path | None = None
     output: Path | None = None
     template: Path | None = None
-    async_docling: bool = False
+    async_docling: bool = True
     skip_vlm: bool = False
     skip_docx: bool = False
     force: bool = False
@@ -510,7 +510,9 @@ def poll_docling_task(
     import httpx
 
     deadline = time.monotonic() + settings.timeout_seconds
+    poll_count = 0
     while time.monotonic() < deadline:
+        poll_count += 1
         response = httpx.get(
             f"{settings.server_url}/v1/status/poll/{task_id}",
             headers={"X-Api-Key": settings.api_key},
@@ -522,6 +524,13 @@ def poll_docling_task(
             )
         payload = response.json()
         status = str(payload.get("status") or payload.get("task_status") or "").lower()
+        LOGGER.info(
+            "Polled Docling conversion task_id=%s poll_count=%s status=%s http_status=%s",
+            task_id,
+            poll_count,
+            status or "unknown",
+            response.status_code,
+        )
         if status in {"success", "succeeded", "completed"}:
             result = httpx.get(
                 f"{settings.server_url}/v1/result/{task_id}",
@@ -534,11 +543,6 @@ def poll_docling_task(
             return
         if status in {"failure", "failed", "error"}:
             raise RuntimeError(f"Docling async task failed task_id={task_id}")
-        LOGGER.info(
-            "Waiting for Docling conversion task_id=%s status=%s",
-            task_id,
-            status or "unknown",
-        )
         time.sleep(10)
     raise TimeoutError(f"Docling async task timed out task_id={task_id}")
 
@@ -552,7 +556,7 @@ def convert_with_docling(
         input_path: PDF/Word などの入力文書。
         output_json: Docling JSON の保存先。
         artifacts_dir: PNG などの artifact 保存先。
-        force_async: async endpoint を強制するかどうか。
+        force_async: 互換用引数。Docling conversion は常に async endpoint を使う。
 
     Returns:
         なし。
@@ -566,30 +570,20 @@ def convert_with_docling(
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     temp_zip = output_json.with_suffix(output_json.suffix + ".docling.zip")
     try:
-        if force_async:
-            endpoint = f"{settings.server_url}/v1/convert/file/async"
-            response = request_docling_convert(
-                endpoint, input_path, settings, request_timeout=120
+        endpoint = f"{settings.server_url}/v1/convert/file/async"
+        response = request_docling_convert(
+            endpoint, input_path, settings, request_timeout=120
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Docling async convert failed status={response.status_code} body={response.text[:500]}"
             )
-            if response.status_code >= 400:
-                raise RuntimeError(
-                    f"Docling async convert failed status={response.status_code} body={response.text[:500]}"
-                )
-            payload = response.json()
-            task_id = payload.get("task_id") or payload.get("id")
-            if not task_id:
-                raise RuntimeError("Docling async response has no task_id")
-            poll_docling_task(str(task_id), temp_zip, settings)
-        else:
-            endpoint = f"{settings.server_url}/v1/convert/file"
-            response = request_docling_convert(
-                endpoint, input_path, settings, request_timeout=settings.timeout_seconds
-            )
-            if response.status_code >= 400:
-                raise RuntimeError(
-                    f"Docling convert failed status={response.status_code} body={response.text[:500]}"
-                )
-            atomic_write_bytes(temp_zip, response.content)
+        payload = response.json()
+        task_id = payload.get("task_id") or payload.get("id")
+        if not task_id:
+            raise RuntimeError("Docling async response has no task_id")
+        LOGGER.info("Started Docling async conversion task_id=%s", task_id)
+        poll_docling_task(str(task_id), temp_zip, settings)
         extract_docling_zip(temp_zip, output_json, artifacts_dir)
     finally:
         temp_zip.unlink(missing_ok=True)
@@ -2046,7 +2040,7 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
             input_path,
             paths.docling_json,
             artifacts_dir,
-            force_async=args.async_docling,
+            force_async=True,
         )
         update_manifest(
             paths.manifest,
@@ -2162,8 +2156,8 @@ def cli(
         Path | None, typer.Option(help="pandoc reference docx/dotx")
     ] = None,
     async_docling: Annotated[
-        bool, typer.Option(help="use Docling async endpoint")
-    ] = False,
+        bool, typer.Option(help="deprecated; Docling conversion is always async")
+    ] = True,
     skip_vlm: Annotated[
         bool, typer.Option(help="skip VLM structure correction")
     ] = False,
@@ -2181,7 +2175,7 @@ def cli(
         output_dir: 中間成果物の出力ディレクトリ。
         output: 最終 docx の出力パス。
         template: pandoc reference docx/dotx。
-        async_docling: Docling async endpoint を使うかどうか。
+        async_docling: 互換用オプション。Docling conversion は常に async endpoint を使う。
         skip_vlm: VLM による構造補正を省略するかどうか。
         skip_docx: docx 生成を省略するかどうか。
         force: 既存 Docling JSON があっても変換を再実行するかどうか。

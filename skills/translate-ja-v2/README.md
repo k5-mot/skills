@@ -68,6 +68,8 @@ CLI オプションを確認する場合は `--help` を使います。
 uv run python skills/translate-ja-v2/scripts/translate.py --help
 ```
 
+Docling Serve への PDF/Word 変換は常に `/v1/convert/file/async` を使います。変換完了待ちでは polling ごとに `poll_count` と status をログへ出力します。
+
 ## 📦 Outputs
 
 出力先には次のファイルが作られます。
