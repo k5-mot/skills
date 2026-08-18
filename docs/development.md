@@ -15,3 +15,11 @@ uvx --from graphifyy graphify install --project --platform agents
 ### 4. OpenSpecを初期化する。
 pnpm dlx @fission-ai/openspec@latest init --tools agents --profile custom --force --no-animation
 ```
+
+## Python Dev Conventions
+
+- Prefer Typer over argparse for CLI parsing.
+- Prefer pydantic.BaseModel over dataclass for structured data and settings.
+- Prefer Playwright over Selenium, Polars over pandas, HTTPX over requests, and marimo over Jupyter Notebook.
+- Logger messages must be written in English.
+- Logging formats must include the source file, function, and line, for example `%(pathname)s`, `%(funcName)s`, and `%(lineno)d`.

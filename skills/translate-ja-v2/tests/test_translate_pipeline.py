@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 import os
 import zipfile
-from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -24,6 +23,7 @@ from translate import (  # noqa: E402
     env_bool,
     load_dotenv_file,
     normalize_document,
+    PipelineOptions,
     read_json,
     render_markdown,
     run_pipeline,
@@ -294,9 +294,9 @@ def test_docling_payload_disables_ocr_by_default(
 
     payload = docling_form_payload(120)
 
-    assert ("do_ocr", "false") in payload
-    assert ("force_ocr", "false") in payload
-    assert not any(key == "ocr_lang" for key, _value in payload)
+    assert payload["do_ocr"] == "false"
+    assert payload["force_ocr"] == "false"
+    assert "ocr_lang" not in payload
 
 
 def test_docling_payload_adds_ocr_languages_when_enabled(
@@ -309,10 +309,9 @@ def test_docling_payload_adds_ocr_languages_when_enabled(
 
     payload = docling_form_payload(120)
 
-    assert ("do_ocr", "true") in payload
-    assert ("ocr_preset", "tesseract") in payload
-    assert ("ocr_lang", "eng") in payload
-    assert ("ocr_lang", "jpn") in payload
+    assert payload["do_ocr"] == "true"
+    assert payload["ocr_preset"] == "tesseract"
+    assert payload["ocr_lang"] == ["eng", "jpn"]
 
 
 def test_env_bool_parses_common_truthy_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -434,9 +433,9 @@ def test_run_pipeline_writes_json_markdown_and_docx(
     monkeypatch.setattr("translate.convert_markdown_to_docx", fake_docx)
 
     paths = run_pipeline(
-        Namespace(
-            input=str(input_path),
-            output_dir=str(output_dir),
+        PipelineOptions(
+            input=input_path,
+            output_dir=output_dir,
             output=None,
             template=None,
             async_docling=False,

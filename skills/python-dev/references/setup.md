@@ -16,7 +16,7 @@ uv --version
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv init
-uv add python-dotenv requests
+uv add python-dotenv typer pydantic httpx
 uv add -D pytest ruff ty pip-audit pre-commit taskipy
 ```
 

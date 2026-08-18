@@ -1,6 +1,6 @@
 ---
 name: python-dev
-description: Pythonバックエンド開発の標準手順。Use when Codex creates, changes, reviews, or sets up Python backend projects, CLI tools, or single-file scripts, including uv setup, .gitignore creation, FastAPI/SQLAlchemy-style services, script entrypoints with argparse/python-dotenv/time.perf_counter/logger, Ruff rules, lint/format/test configuration, pre-commit hooks, GitHub Actions CI, Playwright UI/E2E tests, and vulnerable package update workflows.
+description: Pythonバックエンド開発の標準手順。Use when Codex creates, changes, reviews, or sets up Python backend projects, CLI tools, or single-file scripts, including uv setup, .gitignore creation, FastAPI/SQLAlchemy-style services, script entrypoints with Typer/python-dotenv/time.perf_counter/logger, Ruff rules, lint/format/test configuration, pre-commit hooks, GitHub Actions CI, Playwright UI/E2E tests, and vulnerable package update workflows.
 ---
 
 # Python Dev
@@ -24,7 +24,14 @@ Pythonバックエンドを実装・修正・初期化するときは、このSk
 - 関数・メソッドには必ず標準形式のdocstringを書く。目的、引数、戻り値を説明し、例外や副作用がある場合も書く。
 - コメントを書く場合は日本語で、コードの逐語説明ではなく理由や注意点を書く。
 - ログ出力には必ず `logging` の `logger` を使い、`print` はCLIの最終結果など明確な標準出力仕様がある場合だけに限定する。
+- loggerで出力するログメッセージは必ず英語にし、ログformatには対象ファイル、対象関数、対象行を含める。
 - public utilityの振る舞いを変えた場合は `docs/` に利用方法や変更点を残す。
+- CLI引数解析は `argparse` より `typer` を優先する。
+- 構造化データや設定値は `dataclass` より `pydantic.BaseModel` を優先する。
+- ブラウザ自動化は Selenium より Playwright を優先する。
+- DataFrame処理は pandas より Polars を優先する。
+- HTTP client は requests より HTTPX を優先する。
+- notebook形式の実験・共有は Jupyter Notebook より marimo を優先する。
 - UI/E2Eテストが必要な場合は Playwright を使う。
 - Git hookは `pre-commit` を使い、huskyは使わない。
 

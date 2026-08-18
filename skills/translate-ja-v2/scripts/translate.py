@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import base64
 import copy
 import json
@@ -15,11 +14,13 @@ import tempfile
 import time
 import uuid
 import zipfile
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Annotated, Any
+
+import typer
+from pydantic import BaseModel, ConfigDict
 
 LOGGER = logging.getLogger("translate-ja-v2")
 
@@ -28,8 +29,20 @@ CODE_LABELS = {"code", "program_listing"}
 URL_RE = re.compile(r"https?://[^\s)>\"]+")
 
 
-@dataclass(frozen=True)
-class DoclingSettings:
+class FrozenModel(BaseModel):
+    """変更不可の Pydantic モデル基底を定義する。
+
+    Args:
+        なし。
+
+    Returns:
+        凍結された Pydantic モデル。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+
+class DoclingSettings(FrozenModel):
     """Docling Serve の接続設定を保持する。
 
     Args:
@@ -46,8 +59,7 @@ class DoclingSettings:
     timeout_seconds: int
 
 
-@dataclass(frozen=True)
-class OpenAISettings:
+class OpenAISettings(FrozenModel):
     """OpenAI 互換 Chat Completions API の接続設定を保持する。
 
     Args:
@@ -66,8 +78,7 @@ class OpenAISettings:
     timeout_seconds: int
 
 
-@dataclass(frozen=True)
-class StagePaths:
+class StagePaths(FrozenModel):
     """translate-ja-v2 の主要出力パスを保持する。
 
     Args:
@@ -94,6 +105,35 @@ class StagePaths:
     manifest: Path
 
 
+class PipelineOptions(FrozenModel):
+    """translate-ja-v2 CLI オプションを保持する。
+
+    Args:
+        input: PDF/Word 入力ファイル。
+        output_dir: 中間成果物の出力ディレクトリ。
+        output: 最終 docx の出力パス。
+        template: pandoc reference docx/dotx。
+        async_docling: Docling async endpoint を使うかどうか。
+        skip_vlm: VLM による構造補正を省略するかどうか。
+        skip_docx: docx 生成を省略するかどうか。
+        force: 既存 Docling JSON があっても変換を再実行するかどうか。
+        env: dotenv ファイルのパス。
+
+    Returns:
+        パイプライン実行に必要な CLI オプション。
+    """
+
+    input: Path
+    output_dir: Path | None = None
+    output: Path | None = None
+    template: Path | None = None
+    async_docling: bool = False
+    skip_vlm: bool = False
+    skip_docx: bool = False
+    force: bool = False
+    env: Path = Path(".env")
+
+
 def configure_logging(level_name: str | None = None) -> None:
     """標準 logging を translate-ja-v2 用に設定する。
 
@@ -113,7 +153,11 @@ def configure_logging(level_name: str | None = None) -> None:
         logging.INFO,
     )
     logging.basicConfig(
-        level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+        level=level,
+        format=(
+            "%(asctime)s %(levelname)s %(name)s "
+            "file=%(pathname)s function=%(funcName)s line=%(lineno)d %(message)s"
+        ),
     )
 
 
@@ -378,35 +422,34 @@ def build_stage_paths(
     )
 
 
-def docling_form_payload(document_timeout: int) -> list[tuple[str, str]]:
+def docling_form_payload(document_timeout: int) -> dict[str, str | list[str]]:
     """Docling Serve v1 multipart form payload を作る。
 
     Args:
         document_timeout: Docling 側の文書処理 timeout 秒数。
 
     Returns:
-        requests に渡す form field のリスト。
+        httpx に渡す form field。
     """
 
     do_ocr = env_bool("DOCLING_DO_OCR", default=False)
     force_ocr = env_bool("DOCLING_FORCE_OCR", default=False)
-    payload = [
-        ("to_formats", "json"),
-        ("do_ocr", str(do_ocr).lower()),
-        ("force_ocr", str(force_ocr).lower()),
-        ("document_timeout", str(document_timeout)),
-        ("include_images", "true"),
-        ("include_page_images", "true"),
-        ("image_export_mode", "referenced"),
-        ("target_type", "zip"),
-    ]
+    payload: dict[str, str | list[str]] = {
+        "to_formats": "json",
+        "do_ocr": str(do_ocr).lower(),
+        "force_ocr": str(force_ocr).lower(),
+        "document_timeout": str(document_timeout),
+        "include_images": "true",
+        "include_page_images": "true",
+        "image_export_mode": "referenced",
+        "target_type": "zip",
+    }
     if do_ocr or force_ocr:
-        payload.append(
-            ("ocr_preset", os.environ.get("DOCLING_OCR_PRESET", "tesseract"))
-        )
+        payload["ocr_preset"] = os.environ.get("DOCLING_OCR_PRESET", "tesseract")
         languages = os.environ.get("DOCLING_OCR_LANGS", "jpn,jpn_vert,eng")
-        for language in [part.strip() for part in languages.split(",") if part.strip()]:
-            payload.append(("ocr_lang", language))
+        payload["ocr_lang"] = [
+            part.strip() for part in languages.split(",") if part.strip()
+        ]
     return payload
 
 
@@ -422,18 +465,18 @@ def request_docling_convert(
         request_timeout: HTTP request の timeout 秒数。
 
     Returns:
-        requests.Response。
+        httpx.Response。
 
     Raises:
         RuntimeError: HTTP request に失敗した場合。
     """
 
-    import requests
+    import httpx
 
     for file_field in ("files", "file"):
         with input_path.open("rb") as file:
             files = {file_field: (input_path.name, file)}
-            response = requests.post(
+            response = httpx.post(
                 endpoint,
                 headers={"X-Api-Key": settings.api_key},
                 files=files,
@@ -463,11 +506,11 @@ def poll_docling_task(
         TimeoutError: timeout までに完了しない場合。
     """
 
-    import requests
+    import httpx
 
     deadline = time.monotonic() + settings.timeout_seconds
     while time.monotonic() < deadline:
-        response = requests.get(
+        response = httpx.get(
             f"{settings.server_url}/v1/status/poll/{task_id}",
             headers={"X-Api-Key": settings.api_key},
             timeout=60,
@@ -479,7 +522,7 @@ def poll_docling_task(
         payload = response.json()
         status = str(payload.get("status") or payload.get("task_status") or "").lower()
         if status in {"success", "succeeded", "completed"}:
-            result = requests.get(
+            result = httpx.get(
                 f"{settings.server_url}/v1/result/{task_id}",
                 headers={"X-Api-Key": settings.api_key},
                 timeout=settings.timeout_seconds,
@@ -491,7 +534,9 @@ def poll_docling_task(
         if status in {"failure", "failed", "error"}:
             raise RuntimeError(f"Docling async task failed task_id={task_id}")
         LOGGER.info(
-            "Docling 変換待機中 task_id=%s status=%s", task_id, status or "unknown"
+            "Waiting for Docling conversion task_id=%s status=%s",
+            task_id,
+            status or "unknown",
         )
         time.sleep(10)
     raise TimeoutError(f"Docling async task timed out task_id={task_id}")
@@ -1667,7 +1712,7 @@ def convert_markdown_to_docx(
     if shutil.which("pandoc") is None:
         if template_path:
             LOGGER.warning(
-                "pandoc がないため reference doc を使わず最小 docx を生成します template=%s",
+                "pandoc is unavailable; writing minimal docx without reference doc template=%s",
                 template_path,
             )
         write_minimal_docx(markdown_path, docx_path)
@@ -1904,11 +1949,11 @@ def update_manifest(path: Path, event: dict[str, Any]) -> None:
     write_json(path, manifest)
 
 
-def run_pipeline(args: argparse.Namespace) -> StagePaths:
+def run_pipeline(args: PipelineOptions) -> StagePaths:
     """CLI 引数に従って translate-ja-v2 パイプラインを実行する。
 
     Args:
-        args: argparse が返した引数 namespace。
+        args: Typer から組み立てた CLI オプション。
 
     Returns:
         StagePaths。
@@ -1917,11 +1962,11 @@ def run_pipeline(args: argparse.Namespace) -> StagePaths:
         Docling/OpenAI/pandoc を呼び出し、成果物を出力する。
     """
 
-    input_path = Path(args.input).resolve()
+    input_path = args.input.resolve()
     paths = build_stage_paths(
         input_path,
-        Path(args.output_dir).resolve() if args.output_dir else None,
-        Path(args.output).resolve() if args.output else None,
+        args.output_dir.resolve() if args.output_dir else None,
+        args.output.resolve() if args.output else None,
     )
     paths.output_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir = paths.output_dir / "artifacts"
@@ -1934,7 +1979,7 @@ def run_pipeline(args: argparse.Namespace) -> StagePaths:
         },
     )
     if args.force or not paths.docling_json.exists():
-        LOGGER.info("Docling 変換を開始します input=%s", input_path)
+        LOGGER.info("Starting Docling conversion input=%s", input_path)
         convert_with_docling(
             input_path,
             paths.docling_json,
@@ -1996,7 +2041,7 @@ def run_pipeline(args: argparse.Namespace) -> StagePaths:
         convert_markdown_to_docx(
             paths.markdown,
             paths.docx,
-            Path(args.template).resolve() if args.template else None,
+            args.template.resolve() if args.template else None,
         )
         update_manifest(
             paths.manifest,
@@ -2009,36 +2054,98 @@ def run_pipeline(args: argparse.Namespace) -> StagePaths:
     return paths
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """translate-ja-v2 CLI parser を作る。
+app = typer.Typer(
+    add_completion=False,
+    help="translate-ja-v2 document translation pipeline",
+)
+
+
+def execute_pipeline(options: PipelineOptions) -> int:
+    """translate-ja-v2 パイプラインを実行して終了コードを返す。
+
+    Args:
+        options: CLI オプション。
 
     Returns:
-        argparse.ArgumentParser。
+        プロセス終了コード。
+
+    Side Effects:
+        環境変数、ログ、Docling/OpenAI/pandoc、成果物ファイルを扱う。
     """
 
-    parser = argparse.ArgumentParser(
-        description="translate-ja-v2 document translation pipeline"
+    load_dotenv_file(options.env)
+    configure_logging()
+    try:
+        paths = run_pipeline(options)
+    except KeyboardInterrupt:
+        LOGGER.error("translate-ja-v2 was interrupted")
+        return 130
+    except Exception as exc:
+        LOGGER.exception("translate-ja-v2 failed: %s", exc)
+        return 1
+    LOGGER.info(
+        "translate-ja-v2 completed markdown=%s docx=%s", paths.markdown, paths.docx
     )
-    parser.add_argument("--input", required=True, help="PDF/Word input path")
-    parser.add_argument("--output-dir", help="artifact output directory")
-    parser.add_argument("--output", help="final docx output path")
-    parser.add_argument("--template", help="pandoc reference docx/dotx")
-    parser.add_argument(
-        "--async-docling", action="store_true", help="use Docling async endpoint"
+    return 0
+
+
+@app.command()
+def cli(
+    input: Annotated[Path, typer.Option(help="PDF/Word input path")],
+    output_dir: Annotated[
+        Path | None, typer.Option(help="artifact output directory")
+    ] = None,
+    output: Annotated[Path | None, typer.Option(help="final docx output path")] = None,
+    template: Annotated[
+        Path | None, typer.Option(help="pandoc reference docx/dotx")
+    ] = None,
+    async_docling: Annotated[
+        bool, typer.Option(help="use Docling async endpoint")
+    ] = False,
+    skip_vlm: Annotated[
+        bool, typer.Option(help="skip VLM structure correction")
+    ] = False,
+    skip_docx: Annotated[bool, typer.Option(help="write Markdown/JSON only")] = False,
+    force: Annotated[
+        bool,
+        typer.Option(help="rerun Docling conversion even if JSON exists"),
+    ] = False,
+    env: Annotated[Path, typer.Option(help="dotenv path")] = Path(".env"),
+) -> None:
+    """CLI から translate-ja-v2 パイプラインを実行する。
+
+    Args:
+        input: PDF/Word 入力ファイル。
+        output_dir: 中間成果物の出力ディレクトリ。
+        output: 最終 docx の出力パス。
+        template: pandoc reference docx/dotx。
+        async_docling: Docling async endpoint を使うかどうか。
+        skip_vlm: VLM による構造補正を省略するかどうか。
+        skip_docx: docx 生成を省略するかどうか。
+        force: 既存 Docling JSON があっても変換を再実行するかどうか。
+        env: dotenv ファイルのパス。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        パイプラインを実行し、終了コードを Typer へ渡す。
+    """
+
+    exit_code = execute_pipeline(
+        PipelineOptions(
+            input=input,
+            output_dir=output_dir,
+            output=output,
+            template=template,
+            async_docling=async_docling,
+            skip_vlm=skip_vlm,
+            skip_docx=skip_docx,
+            force=force,
+            env=env,
+        )
     )
-    parser.add_argument(
-        "--skip-vlm", action="store_true", help="skip VLM structure correction"
-    )
-    parser.add_argument(
-        "--skip-docx", action="store_true", help="write Markdown/JSON only"
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="rerun Docling conversion even if JSON exists",
-    )
-    parser.add_argument("--env", default=".env", help="dotenv path")
-    return parser
+    raise typer.Exit(exit_code)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2054,26 +2161,15 @@ def main(argv: list[str] | None = None) -> int:
         環境変数、ログ、Docling/OpenAI/pandoc、成果物ファイルを扱う。
     """
 
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    load_dotenv_file(args.env)
-    configure_logging()
     try:
-        paths = run_pipeline(args)
-    except KeyboardInterrupt:
-        LOGGER.error("translate-ja-v2 を中断しました")
-        return 130
-    except Exception as exc:
-        LOGGER.exception("translate-ja-v2 が失敗しました: %s", exc)
-        return 1
-    LOGGER.info(
-        "translate-ja-v2 が完了しました markdown=%s docx=%s", paths.markdown, paths.docx
-    )
+        app(args=argv, standalone_mode=False)
+    except typer.Exit as exc:
+        return int(exc.exit_code or 0)
     return 0
 
 
 if __name__ == "__main__":
     started_at = perf_counter()
     exit_code = main()
-    LOGGER.info("処理時間 %.3f 秒", perf_counter() - started_at)
+    LOGGER.info("Elapsed time %.3f seconds", perf_counter() - started_at)
     raise SystemExit(exit_code)
