@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import os
 import zipfile
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,8 @@ from translate import (  # noqa: E402
     collect_page_image_paths,
     clean_text,
     convert_markdown_to_docx,
+    convert_with_docling,
+    DoclingSettings,
     docling_form_payload,
     env_bool,
     load_dotenv_file,
@@ -28,6 +31,7 @@ from translate import (  # noqa: E402
     normalize_document,
     OpenAISettings,
     PipelineOptions,
+    poll_docling_task,
     read_json,
     render_markdown,
     run_pipeline,
@@ -119,6 +123,28 @@ class FlakyClient:
         completions = FlakyCompletions()
         self.completions = completions
         self.chat = type("Chat", (), {"completions": completions})()
+
+
+class FakeHttpResponse:
+    """httpx.Response の最小 fake。"""
+
+    def __init__(
+        self,
+        status_code: int,
+        payload: dict[str, Any] | None = None,
+        content: bytes = b"",
+    ) -> None:
+        """fake response を初期化する。"""
+
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.content = content
+        self.text = str(self._payload)
+
+    def json(self) -> dict[str, Any]:
+        """JSON payload を返す。"""
+
+        return self._payload
 
 
 def _completion(text: str):
@@ -363,6 +389,100 @@ def test_docling_payload_adds_ocr_languages_when_enabled(
     assert payload["ocr_lang"] == ["eng", "jpn"]
 
 
+def test_convert_with_docling_always_uses_async_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Docling 変換は force_async に関係なく async endpoint を使う。"""
+
+    input_path = tmp_path / "source.pdf"
+    output_json = tmp_path / "source.docling.json"
+    artifacts_dir = tmp_path / "artifacts"
+    input_path.write_bytes(b"%PDF-1.4")
+    endpoints: list[str] = []
+
+    monkeypatch.setattr(
+        "translate.require_docling_settings",
+        lambda: DoclingSettings(
+            server_url="http://docling.test",
+            api_key="test",
+            timeout_seconds=120,
+        ),
+    )
+
+    def fake_request(
+        endpoint: str,
+        _input_path: Path,
+        _settings: DoclingSettings,
+        request_timeout: int,
+    ) -> FakeHttpResponse:
+        """Docling async convert request を記録する。"""
+
+        endpoints.append(endpoint)
+        assert request_timeout == 120
+        return FakeHttpResponse(200, {"task_id": "task-1"})
+
+    def fake_poll(task_id: str, output_zip: Path, _settings: DoclingSettings) -> None:
+        """async poll の代わりに zip placeholder を保存する。"""
+
+        assert task_id == "task-1"
+        output_zip.write_bytes(b"zip")
+
+    def fake_extract(
+        zip_path: Path, target_json: Path, target_artifacts_dir: Path
+    ) -> None:
+        """Docling zip 展開の代わりに JSON を保存する。"""
+
+        assert zip_path.read_bytes() == b"zip"
+        target_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        write_json(target_json, {"texts": []})
+
+    monkeypatch.setattr("translate.request_docling_convert", fake_request)
+    monkeypatch.setattr("translate.poll_docling_task", fake_poll)
+    monkeypatch.setattr("translate.extract_docling_zip", fake_extract)
+
+    convert_with_docling(input_path, output_json, artifacts_dir, force_async=False)
+
+    assert endpoints == ["http://docling.test/v1/convert/file/async"]
+    assert output_json.exists()
+
+
+def test_poll_docling_task_logs_poll_count_each_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Docling async poll は poll ごとに回数と status を logging する。"""
+
+    output_zip = tmp_path / "docling.zip"
+    settings = DoclingSettings(
+        server_url="http://docling.test",
+        api_key="test",
+        timeout_seconds=120,
+    )
+    status_payloads = [{"status": "processing"}, {"status": "success"}]
+
+    class FakeHttpx:
+        """poll と result download を返す httpx fake。"""
+
+        @staticmethod
+        def get(url: str, **_kwargs: Any) -> FakeHttpResponse:
+            """URL に応じて status または result を返す。"""
+
+            if "/v1/status/poll/" in url:
+                return FakeHttpResponse(200, status_payloads.pop(0))
+            if "/v1/result/" in url:
+                return FakeHttpResponse(200, content=b"zip-bytes")
+            raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setitem(sys.modules, "httpx", FakeHttpx)
+    monkeypatch.setattr("translate.time.sleep", lambda _seconds: None)
+    caplog.set_level(logging.INFO, logger="translate-ja-v2")
+
+    poll_docling_task("task-1", output_zip, settings)
+
+    assert output_zip.read_bytes() == b"zip-bytes"
+    assert "poll_count=1 status=processing" in caplog.text
+    assert "poll_count=2 status=success" in caplog.text
+
+
 def test_env_bool_parses_common_truthy_values(monkeypatch: pytest.MonkeyPatch) -> None:
     """env_bool は一般的な truthy 文字列を True として解釈する。"""
 
@@ -435,7 +555,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             なし。
         """
 
-        assert force_async is False
+        assert force_async is True
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         (artifacts_dir / "page_000001.png").write_bytes(b"png")
         write_json(

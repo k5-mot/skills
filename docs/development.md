@@ -27,6 +27,8 @@ pnpm dlx @fission-ai/openspec@latest init --tools agents --profile custom --forc
 
 ## translate-ja-v2 Runtime Settings
 
+- Docling PDF/Word conversion must use `/v1/convert/file/async`; do not call `/v1/convert/file` for PDF-to-JSON conversion.
+- Docling async polling logs must include the poll count and status on every poll.
 - `TRANSLATE_JA_V2_OPENAI_MAX_ATTEMPTS` controls Chat Completions retry attempts for retryable 408/409/429/5xx/API timeout/API connection failures. Default: `6`.
 - `TRANSLATE_JA_V2_OPENAI_RETRY_INITIAL_SECONDS` controls the first retry delay. Default: `5`.
 - `TRANSLATE_JA_V2_OPENAI_RETRY_MAX_SECONDS` caps exponential backoff delay. Default: `60`.
