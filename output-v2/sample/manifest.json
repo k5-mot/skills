@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "run_id": "b447afdc-de23-4bc4-bbdb-52716e23b037",
+  "events": [
+    {
+      "stage": "start",
+      "input": "/workspaces/skills/sample2.pdf",
+      "input_sha256": "aba412718a9fa5a957b037981c5b3461b051f1ac6916041e9c52d37ae97d762e",
+      "timestamp": "2026-08-18T16:17:40Z"
+    },
+    {
+      "stage": "docling",
+      "output": "/workspaces/skills/output-v2/sample/sample2.docling.json",
+      "sha256": "d4b9f0a355207c11d8065d18812f7d4ad1c53827cc1c0c0674c0a87e910d11bb",
+      "timestamp": "2026-08-18T16:18:16Z"
+    },
+    {
+      "stage": "normalize",
+      "output": "/workspaces/skills/output-v2/sample/sample2.normalized.json",
+      "patches": 80,
+      "timestamp": "2026-08-18T16:18:16Z"
+    },
+    {
+      "stage": "structure",
+      "output": "/workspaces/skills/output-v2/sample/sample2.structured.json",
+      "patches": 13,
+      "timestamp": "2026-08-18T16:22:44Z"
+    },
+    {
+      "stage": "start",
+      "input": "/workspaces/skills/sample2.pdf",
+      "input_sha256": "aba412718a9fa5a957b037981c5b3461b051f1ac6916041e9c52d37ae97d762e",
+      "timestamp": "2026-08-18T16:32:14Z"
+    },
+    {
+      "stage": "normalize",
+      "output": "/workspaces/skills/output-v2/sample/sample2.normalized.json",
+      "patches": 80,
+      "timestamp": "2026-08-18T16:32:14Z"
+    },
+    {
+      "stage": "start",
+      "input": "/workspaces/skills/sample2.pdf",
+      "input_sha256": "aba412718a9fa5a957b037981c5b3461b051f1ac6916041e9c52d37ae97d762e",
+      "timestamp": "2026-08-18T16:33:34Z"
+    },
+    {
+      "stage": "normalize",
+      "output": "/workspaces/skills/output-v2/sample/sample2.normalized.json",
+      "patches": 80,
+      "timestamp": "2026-08-18T16:33:34Z"
+    },
+    {
+      "stage": "structure",
+      "output": "/workspaces/skills/output-v2/sample/sample2.structured.json",
+      "patches": 1,
+      "timestamp": "2026-08-18T16:33:54Z"
+    },
+    {
+      "stage": "start",
+      "input": "/workspaces/skills/sample2.pdf",
+      "input_sha256": "aba412718a9fa5a957b037981c5b3461b051f1ac6916041e9c52d37ae97d762e",
+      "timestamp": "2026-08-18T16:34:04Z"
+    },
+    {
+      "stage": "normalize",
+      "output": "/workspaces/skills/output-v2/sample/sample2.normalized.json",
+      "patches": 80,
+      "timestamp": "2026-08-18T16:34:04Z"
+    },
+    {
+      "stage": "structure",
+      "output": "/workspaces/skills/output-v2/sample/sample2.structured.json",
+      "patches": 1,
+      "timestamp": "2026-08-18T16:34:26Z"
+    },
+    {
+      "stage": "translate",
+      "output": "/workspaces/skills/output-v2/sample/sample2.translated.json",
+      "sha256": "b6557b6965b2c9efbdd7599f1dad1c6db2b5116e31bc8b06c4a0e19062c7db3b",
+      "timestamp": "2026-08-18T17:36:11Z"
+    },
+    {
+      "stage": "markdown",
+      "output": "/workspaces/skills/output-v2/sample/sample2.ja.md",
+      "sha256": "7a451256fdb152e43ec059e0b1e784121b8e3b1e4a0c8f9a59e92c8c9e53ca15",
+      "timestamp": "2026-08-18T17:36:11Z"
+    },
+    {
+      "stage": "docx",
+      "output": "/workspaces/skills/output-v2/sample/sample2.ja.docx",
+      "sha256": "bd1aec2b2cf5ddca7e8404f12e160eb55e7d4d524b619e584c43ac22b9fa6e21",
+      "timestamp": "2026-08-18T17:36:11Z"
+    },
+    {
+      "stage": "start",
+      "input": "/workspaces/skills/sample2.pdf",
+      "input_sha256": "aba412718a9fa5a957b037981c5b3461b051f1ac6916041e9c52d37ae97d762e",
+      "timestamp": "2026-08-18T23:27:41Z"
+    },
+    {
+      "stage": "normalize",
+      "output": "/workspaces/skills/output-v2/sample/sample2.normalized.json",
+      "patches": 80,
+      "timestamp": "2026-08-18T23:27:41Z"
+    },
+    {
+      "stage": "structure",
+      "output": "/workspaces/skills/output-v2/sample/sample2.structured.json",
+      "patches": 1,
+      "timestamp": "2026-08-18T23:27:58Z"
+    }
+  ],
+  "updated_at": "2026-08-18T23:27:58Z"
+}
