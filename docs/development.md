@@ -23,3 +23,4 @@ pnpm dlx @fission-ai/openspec@latest init --tools agents --profile custom --forc
 - Prefer Playwright over Selenium, Polars over pandas, HTTPX over requests, and marimo over Jupyter Notebook.
 - Logger messages must be written in English.
 - Logging formats must include the source file, function, and line, for example `%(pathname)s`, `%(funcName)s`, and `%(lineno)d`.
+- Use `sys.exit(...)` for CLI termination instead of directly raising `SystemExit`; avoid `os._exit` for normal CLI shutdown.

@@ -7,13 +7,21 @@ import copy
 import json
 import logging
 import os
+import sys
 import uuid
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 
 from config import build_langfuse_headers, load_dotenv, require_openai_settings
-from io_utils import configure_logging, load_existing_json, read_json, sha256_file, utc_now_iso, write_json
+from io_utils import (
+    configure_logging,
+    load_existing_json,
+    read_json,
+    sha256_file,
+    utc_now_iso,
+    write_json,
+)
 
 LOGGER = logging.getLogger("translate-ja.realign_doc_struct_with_llm")
 APP_MAX_RETRIES = 10
@@ -25,7 +33,9 @@ def _load_openai_client(settings: Any) -> Any:
     try:
         from openai import OpenAI
     except ImportError as exc:
-        raise RuntimeError("openai package is required for realign_doc_struct_with_llm.py") from exc
+        raise RuntimeError(
+            "openai package is required for realign_doc_struct_with_llm.py"
+        ) from exc
     return OpenAI(
         base_url=settings.base_url,
         api_key=settings.api_key,
@@ -44,10 +54,17 @@ def _texts_by_page(data: dict[str, Any]) -> list[dict[str, Any]]:
     for index, item in enumerate(texts):
         if not isinstance(item, dict):
             continue
+        item = cast(dict[str, Any], item)
         page_no = 0
         prov = item.get("prov")
-        if isinstance(prov, list) and prov and isinstance(prov[0], dict) and isinstance(prov[0].get("page_no"), int):
-            page_no = prov[0]["page_no"]
+        if (
+            isinstance(prov, list)
+            and prov
+            and isinstance(prov[0], dict)
+            and isinstance(prov[0].get("page_no"), int)
+        ):
+            prov0 = cast(dict[str, Any], prov[0])
+            page_no = cast(int, prov0["page_no"])
         pages.setdefault(page_no, []).append(
             {
                 "ref": item.get("self_ref") or f"#/texts/{index}",
@@ -55,7 +72,10 @@ def _texts_by_page(data: dict[str, Any]) -> list[dict[str, Any]]:
                 "text": item.get("text"),
             }
         )
-    return [{"unit_id": f"page-{page_no:04d}", "page_no": page_no, "items": items} for page_no, items in sorted(pages.items())]
+    return [
+        {"unit_id": f"page-{page_no:04d}", "page_no": page_no, "items": items}
+        for page_no, items in sorted(pages.items())
+    ]
 
 
 def _format_page(page_no: Any) -> str:
@@ -64,7 +84,9 @@ def _format_page(page_no: Any) -> str:
     return str(page_no) if isinstance(page_no, int) else "unknown"
 
 
-def _manifest_skeleton(input_path: Path, output_path: Path, settings: Any, units: list[dict[str, Any]]) -> dict[str, Any]:
+def _manifest_skeleton(
+    input_path: Path, output_path: Path, settings: Any, units: list[dict[str, Any]]
+) -> dict[str, Any]:
     """構造補正 manifest の初期構造を作る。"""
 
     now = utc_now_iso()
@@ -121,7 +143,9 @@ def _pointer_target(data: dict[str, Any], pointer: str) -> tuple[dict[str, Any],
     return current, key
 
 
-def apply_patches(data: dict[str, Any], patches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def apply_patches(
+    data: dict[str, Any], patches: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """補正パッチを Docling JSON へ適用し、適用結果を返す。"""
 
     results: list[dict[str, Any]] = []
@@ -143,9 +167,19 @@ def apply_patches(data: dict[str, Any], patches: list[dict[str, Any]]) -> list[d
                 parent[key] = patch["level"]
             else:
                 raise ValueError(f"unsupported patch op: {op}")
-            results.append({"ref": ref, "op": op, "status": "success", "before": before, "after": patch.get("text", patch.get("label", patch.get("level")))})
+            results.append(
+                {
+                    "ref": ref,
+                    "op": op,
+                    "status": "success",
+                    "before": before,
+                    "after": patch.get("text", patch.get("label", patch.get("level"))),
+                }
+            )
         except Exception as exc:
-            results.append({"ref": ref, "op": op, "status": "failed", "error": str(exc)})
+            results.append(
+                {"ref": ref, "op": op, "status": "failed", "error": str(exc)}
+            )
     return results
 
 
@@ -181,7 +215,14 @@ def _build_messages(unit: dict[str, Any]) -> list[dict[str, str]]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _stream_chat(client: Any, *, settings: Any, messages: list[dict[str, str]], headers: dict[str, str], unit_id: str) -> str:
+def _stream_chat(
+    client: Any,
+    *,
+    settings: Any,
+    messages: list[dict[str, str]],
+    headers: dict[str, str],
+    unit_id: str,
+) -> str:
     """Chat Completions stream を読み切って本文を返す。"""
 
     request = {
@@ -203,7 +244,9 @@ def _stream_chat(client: Any, *, settings: Any, messages: list[dict[str, str]], 
     text = "".join(parts).strip()
     if text:
         return text
-    LOGGER.warning("stream 応答本文が空でした。非 stream で再取得します unit=%s", unit_id)
+    LOGGER.warning(
+        "stream 応答本文が空でした。非 stream で再取得します unit=%s", unit_id
+    )
     completion = client.chat.completions.create(
         **request,
         stream=False,
@@ -245,7 +288,11 @@ def _parse_patch_response(text: str) -> list[dict[str, Any]]:
         raise ValueError("LLM response must be an object with patches array")
     patches = payload["patches"]
     for patch in patches:
-        if not isinstance(patch, dict) or patch.get("op") not in {"set_text", "set_label", "set_level"} or not patch.get("ref"):
+        if (
+            not isinstance(patch, dict)
+            or patch.get("op") not in {"set_text", "set_label", "set_level"}
+            or not patch.get("ref")
+        ):
             raise ValueError("invalid patch object")
     return patches
 
@@ -289,10 +336,16 @@ def realign(input_path: Path, output_path: Path, *, force: bool) -> None:
     if force:
         output_path.unlink(missing_ok=True)
         manifest_path.unlink(missing_ok=True)
-    manifest = load_existing_json(manifest_path) or _manifest_skeleton(input_path, output_path, settings, units)
+    manifest = load_existing_json(manifest_path) or _manifest_skeleton(
+        input_path, output_path, settings, units
+    )
     if manifest.get("input_sha256") != sha256_file(input_path):
         raise RuntimeError("manifest input_sha256 does not match; rerun with --force")
-    unit_states = {str(unit["unit_id"]): unit for unit in manifest.get("units", []) if isinstance(unit, dict)}
+    unit_states = {
+        str(unit["unit_id"]): unit
+        for unit in manifest.get("units", [])
+        if isinstance(unit, dict)
+    }
     working = copy.deepcopy(data)
     for state in manifest.get("units", []):
         if state.get("status") == "success":
@@ -301,7 +354,11 @@ def realign(input_path: Path, output_path: Path, *, force: bool) -> None:
     for unit_id, unit in source_units.items():
         state = unit_states[unit_id]
         if state.get("status") == "success":
-            LOGGER.info("構造補正をスキップします unit=%s page=%s status=success", unit_id, _format_page(unit.get("page_no")))
+            LOGGER.info(
+                "構造補正をスキップします unit=%s page=%s status=success",
+                unit_id,
+                _format_page(unit.get("page_no")),
+            )
             continue
         state["status"] = "running"
         state["updated_at"] = utc_now_iso()
@@ -311,7 +368,12 @@ def realign(input_path: Path, output_path: Path, *, force: bool) -> None:
         for attempt in range(int(state.get("attempts", 0)) + 1, APP_MAX_RETRIES + 1):
             state["attempts"] = attempt
             write_json(manifest_path, manifest)
-            LOGGER.info("構造補正を開始します unit=%s page=%s attempt=%s", unit_id, _format_page(unit.get("page_no")), attempt)
+            LOGGER.info(
+                "構造補正を開始します unit=%s page=%s attempt=%s",
+                unit_id,
+                _format_page(unit.get("page_no")),
+                attempt,
+            )
             try:
                 headers = build_langfuse_headers(
                     script_name="realign_doc_struct_with_llm.py",
@@ -321,22 +383,54 @@ def realign(input_path: Path, output_path: Path, *, force: bool) -> None:
                     input_stem=input_path.stem,
                     input_identity=str(input_path),
                 )
-                response = _stream_chat(client, settings=settings, messages=_build_messages(unit), headers=headers, unit_id=unit_id)
+                response = _stream_chat(
+                    client,
+                    settings=settings,
+                    messages=_build_messages(unit),
+                    headers=headers,
+                    unit_id=unit_id,
+                )
                 patches = _parse_patch_response(response)
                 last_error = ""
-                LOGGER.info("構造補正に成功しました unit=%s page=%s attempt=%s patches=%s", unit_id, _format_page(unit.get("page_no")), attempt, len(patches))
+                LOGGER.info(
+                    "構造補正に成功しました unit=%s page=%s attempt=%s patches=%s",
+                    unit_id,
+                    _format_page(unit.get("page_no")),
+                    attempt,
+                    len(patches),
+                )
                 break
             except Exception as exc:
                 last_error = str(exc)[:500]
-                LOGGER.warning("構造補正に失敗しました unit=%s page=%s attempt=%s error=%s", unit_id, _format_page(unit.get("page_no")), attempt, last_error)
+                LOGGER.warning(
+                    "構造補正に失敗しました unit=%s page=%s attempt=%s error=%s",
+                    unit_id,
+                    _format_page(unit.get("page_no")),
+                    attempt,
+                    last_error,
+                )
                 if attempt < APP_MAX_RETRIES:
-                    LOGGER.info("構造補正をリトライします unit=%s page=%s next_attempt=%s", unit_id, _format_page(unit.get("page_no")), attempt + 1)
+                    LOGGER.info(
+                        "構造補正をリトライします unit=%s page=%s next_attempt=%s",
+                        unit_id,
+                        _format_page(unit.get("page_no")),
+                        attempt + 1,
+                    )
         if last_error:
-            state.update({"status": "failed", "error": last_error, "updated_at": utc_now_iso()})
+            state.update(
+                {"status": "failed", "error": last_error, "updated_at": utc_now_iso()}
+            )
             write_json(manifest_path, manifest)
             raise RuntimeError(f"realign failed unit={unit_id}: {last_error}")
         results = apply_patches(working, patches)
-        state.update({"status": "success", "patches": patches, "changes": results, "updated_at": utc_now_iso()})
+        state.update(
+            {
+                "status": "success",
+                "patches": patches,
+                "changes": results,
+                "updated_at": utc_now_iso(),
+            }
+        )
         manifest["updated_at"] = utc_now_iso()
         write_json(manifest_path, manifest)
     write_json(output_path, working)
@@ -347,7 +441,9 @@ def main() -> int:
 
     configure_logging()
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Realign Docling schema JSON with LLM patches")
+    parser = argparse.ArgumentParser(
+        description="Realign Docling schema JSON with LLM patches"
+    )
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--openai-timeout", type=int)
@@ -370,4 +466,4 @@ if __name__ == "__main__":
         exit_code = main()
     finally:
         LOGGER.info("処理時間 %.3f 秒", perf_counter() - started_at)
-    raise SystemExit(exit_code)
+    sys.exit(exit_code)

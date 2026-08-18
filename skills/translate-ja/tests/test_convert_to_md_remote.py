@@ -13,7 +13,7 @@ import convert_to_md_remote as remote  # noqa: E402
 
 
 class FakeResponse:
-    """requests.Response の最小 fake を表す。
+    """httpx.Response の最小 fake を表す。
 
     Args:
         status_code: HTTP status code。
@@ -84,10 +84,10 @@ def test_docling_markdown_payload_disables_ocr_by_default(monkeypatch) -> None: 
 
     payload = remote.docling_markdown_payload(120)
 
-    assert ("to_formats", "md") in payload
-    assert ("do_ocr", "false") in payload
-    assert ("force_ocr", "false") in payload
-    assert not any(key == "ocr_lang" for key, _value in payload)
+    assert payload["to_formats"] == "md"
+    assert payload["do_ocr"] == "false"
+    assert payload["force_ocr"] == "false"
+    assert "ocr_lang" not in payload
 
 
 def test_docling_markdown_payload_adds_ocr_languages(monkeypatch) -> None:  # noqa: ANN001
@@ -105,10 +105,9 @@ def test_docling_markdown_payload_adds_ocr_languages(monkeypatch) -> None:  # no
 
     payload = remote.docling_markdown_payload(120)
 
-    assert ("do_ocr", "true") in payload
-    assert ("ocr_preset", "tesseract") in payload
-    assert ("ocr_lang", "eng") in payload
-    assert ("ocr_lang", "jpn") in payload
+    assert payload["do_ocr"] == "true"
+    assert payload["ocr_preset"] == "tesseract"
+    assert payload["ocr_lang"] == ["eng", "jpn"]
 
 
 def test_extract_zip_result_writes_markdown_and_artifacts(tmp_path: Path) -> None:
@@ -149,11 +148,11 @@ def test_request_convert_falls_back_to_file_field(tmp_path: Path, monkeypatch) -
     calls: list[str] = []
 
     def fake_post(_endpoint, **kwargs):  # noqa: ANN001, ANN003, ANN202
-        """requests.post の fake を返す。
+        """httpx.post の fake を返す。
 
         Args:
             _endpoint: 呼び出し先 endpoint。
-            **kwargs: requests.post に渡された引数。
+            **kwargs: httpx.post に渡された引数。
 
         Returns:
             FakeResponse。
@@ -178,7 +177,7 @@ def test_request_convert_falls_back_to_file_field(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr(
         remote, "require_docling_settings", lambda **_kwargs: FakeSettings()
     )
-    monkeypatch.setattr(remote.requests, "post", fake_post)
+    monkeypatch.setattr(remote.httpx, "post", fake_post)
 
     response = remote.request_convert(
         "http://docling.test/v1/convert/file",

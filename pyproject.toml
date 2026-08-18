@@ -14,3 +14,6 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=9.1.1", "ruff>=0.15.22", "ty>=0.0.61"]
+
+[tool.ty.environment]
+extra-paths = ["skills/translate-ja/scripts", "skills/translate-ja-v2/scripts"]

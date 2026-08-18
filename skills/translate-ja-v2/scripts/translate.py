@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -17,7 +18,7 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import typer
 from pydantic import BaseModel, ConfigDict
@@ -804,6 +805,7 @@ def normalize_document(
         for index, item in enumerate(values):
             if not isinstance(item, dict):
                 continue
+            item = cast(dict[str, Any], item)
             ref = self_ref(item, group, index)
             if group == "texts":
                 normalize_text_item(item, ref, patches)
@@ -902,11 +904,16 @@ def iter_table_cells(
         return []
     cells = data.get("table_cells") or data.get("cells")
     if isinstance(cells, list):
-        return [
-            (f"{ref}/data/table_cells/{index}", cell)
-            for index, cell in enumerate(cells)
-            if isinstance(cell, dict)
-        ]
+        result: list[tuple[str, dict[str, Any]]] = []
+        for index, cell in enumerate(cells):
+            if isinstance(cell, dict):
+                result.append(
+                    (
+                        f"{ref}/data/table_cells/{index}",
+                        cast(dict[str, Any], cell),
+                    )
+                )
+        return result
     grid = data.get("grid")
     if not isinstance(grid, list):
         return []
@@ -914,9 +921,15 @@ def iter_table_cells(
     for row_index, row in enumerate(grid):
         if not isinstance(row, list):
             continue
+        row = cast(list[Any], row)
         for col_index, cell in enumerate(row):
             if isinstance(cell, dict):
-                result.append((f"{ref}/data/grid/{row_index}/{col_index}", cell))
+                result.append(
+                    (
+                        f"{ref}/data/grid/{row_index}/{col_index}",
+                        cast(dict[str, Any], cell),
+                    )
+                )
             elif isinstance(cell, str):
                 wrapped = {"text": cell}
                 row[col_index] = wrapped
@@ -1117,6 +1130,7 @@ def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
     for index, item in enumerate(values):
         if not isinstance(item, dict):
             continue
+        item = cast(dict[str, Any], item)
         text = text_of(item).replace("\n", " ")
         units.append(
             {
@@ -1235,20 +1249,22 @@ def apply_reorder_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str
             "error": "texts or refs is not list",
         }
     wanted = [str(ref) for ref in refs]
-    by_ref = {
-        self_ref(item, "texts", index): item
-        for index, item in enumerate(texts)
-        if isinstance(item, dict)
-    }
+    by_ref: dict[str, dict[str, Any]] = {}
+    for index, item in enumerate(texts):
+        if isinstance(item, dict):
+            item_dict = cast(dict[str, Any], item)
+            by_ref[self_ref(item_dict, "texts", index)] = item_dict
     if any(ref not in by_ref for ref in wanted):
         return {"op": "reorder_texts", "status": "failed", "error": "unknown ref"}
     wanted_set = set(wanted)
-    reordered = [by_ref[ref] for ref in wanted]
-    reordered.extend(
-        item
-        for index, item in enumerate(texts)
-        if self_ref(item, "texts", index) not in wanted_set
-    )
+    reordered: list[Any] = [by_ref[ref] for ref in wanted]
+    for index, item in enumerate(texts):
+        if not isinstance(item, dict):
+            reordered.append(item)
+            continue
+        item_dict = cast(dict[str, Any], item)
+        if self_ref(item_dict, "texts", index) not in wanted_set:
+            reordered.append(item_dict)
     data["texts"] = reordered
     return {
         "op": "reorder_texts",
@@ -1345,6 +1361,7 @@ def translate_document(data: dict[str, Any]) -> dict[str, Any]:
         for index, item in enumerate(values):
             if not isinstance(item, dict):
                 continue
+            item = cast(dict[str, Any], item)
             if group == "texts":
                 translate_text_item(item, client, settings)
             if group == "tables":
@@ -1491,7 +1508,7 @@ def collect_render_items(data: dict[str, Any]) -> list[tuple[str, int, dict[str,
             continue
         for index, item in enumerate(values):
             if isinstance(item, dict):
-                items.append((group, index, item))
+                items.append((group, index, cast(dict[str, Any], item)))
     return sorted(
         items, key=lambda entry: ((page_numbers(entry[2]) or [10**9])[0], entry[1])
     )
@@ -1530,11 +1547,8 @@ def render_text_item(item: dict[str, Any]) -> str:
         Markdown 断片。
     """
 
-    meta = (
-        item.get("translate_ja_v2")
-        if isinstance(item.get("translate_ja_v2"), dict)
-        else {}
-    )
+    raw_meta = item.get("translate_ja_v2")
+    meta = cast(dict[str, Any], raw_meta) if isinstance(raw_meta, dict) else {}
     text = str(meta.get("render_text") or text_of(item)).strip()
     if not text:
         return ""
@@ -1564,11 +1578,8 @@ def render_table_item(item: dict[str, Any], ref: str) -> str:
     header = normalized[0]
     body = normalized[1:]
     lines: list[str] = []
-    meta = (
-        item.get("translate_ja_v2")
-        if isinstance(item.get("translate_ja_v2"), dict)
-        else {}
-    )
+    raw_meta = item.get("translate_ja_v2")
+    meta = cast(dict[str, Any], raw_meta) if isinstance(raw_meta, dict) else {}
     caption = str(
         meta.get("caption_render") or item.get("caption") or item.get("title") or ""
     ).strip()
@@ -1652,11 +1663,8 @@ def cell_render_text(cell: dict[str, Any]) -> str:
         Markdown table cell 用文字列。
     """
 
-    meta = (
-        cell.get("translate_ja_v2")
-        if isinstance(cell.get("translate_ja_v2"), dict)
-        else {}
-    )
+    raw_meta = cell.get("translate_ja_v2")
+    meta = cast(dict[str, Any], raw_meta) if isinstance(raw_meta, dict) else {}
     text = str(meta.get("render_text") or cell.get("text") or cell.get("content") or "")
     return text.replace("\n", " ").strip()
 
@@ -2172,4 +2180,4 @@ if __name__ == "__main__":
     started_at = perf_counter()
     exit_code = main()
     LOGGER.info("Elapsed time %.3f seconds", perf_counter() - started_at)
-    raise SystemExit(exit_code)
+    sys.exit(exit_code)

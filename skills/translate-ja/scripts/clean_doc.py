@@ -6,6 +6,7 @@ import argparse
 import copy
 import logging
 import re
+import sys
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -87,7 +88,9 @@ def clean_text(value: str) -> str:
     return text
 
 
-def clean_docling_json(data: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def clean_docling_json(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Docling JSON を再帰的に走査し、text フィールドを成形する。"""
 
     result = copy.deepcopy(data)
@@ -97,7 +100,11 @@ def clean_docling_json(data: dict[str, Any]) -> tuple[dict[str, Any], list[dict[
         """JSON ツリーを再帰的に訪問する。"""
 
         if isinstance(value, dict):
-            if "text" in value and isinstance(value["text"], str) and should_clean_node(value):
+            if (
+                "text" in value
+                and isinstance(value["text"], str)
+                and should_clean_node(value)
+            ):
                 before = value["text"]
                 after = clean_text(before)
                 if before != after:
@@ -173,4 +180,4 @@ if __name__ == "__main__":
         exit_code = main()
     finally:
         LOGGER.info("処理時間 %.3f 秒", perf_counter() - started_at)
-    raise SystemExit(exit_code)
+    sys.exit(exit_code)

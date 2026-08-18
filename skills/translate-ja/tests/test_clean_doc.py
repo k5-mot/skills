@@ -35,7 +35,11 @@ def test_clean_doc_reduces_excess_symbols_but_keeps_urls() -> None:
 def test_clean_doc_does_not_touch_code_nodes() -> None:
     """code label の text は成形対象から除外する。"""
 
-    data = {"texts": [{"self_ref": "#/texts/0", "label": "code", "text": "x    =    '......'"}]}
+    data = {
+        "texts": [
+            {"self_ref": "#/texts/0", "label": "code", "text": "x    =    '......'"}
+        ]
+    }
     cleaned, changes = clean_docling_json(data)
     assert cleaned["texts"][0]["text"] == "x    =    '......'"
     assert changes == []

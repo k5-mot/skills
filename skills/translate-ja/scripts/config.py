@@ -69,7 +69,8 @@ def require_docling_settings(*, timeout_seconds: int | None = None) -> DoclingSe
     return DoclingSettings(
         server_url=server_url.rstrip("/"),
         api_key=api_key,
-        timeout_seconds=timeout_seconds or int(os.environ.get("DOCLING_TIMEOUT_SECONDS", "21600")),
+        timeout_seconds=timeout_seconds
+        or int(os.environ.get("DOCLING_TIMEOUT_SECONDS", "21600")),
     )
 
 
@@ -89,7 +90,8 @@ def require_openai_settings(*, timeout_seconds: int | None = None) -> OpenAISett
         base_url=base_url.rstrip("/"),
         api_key=api_key,
         model=model,
-        timeout_seconds=timeout_seconds or int(os.environ.get("OPENAI_TIMEOUT_SECONDS", "1800")),
+        timeout_seconds=timeout_seconds
+        or int(os.environ.get("OPENAI_TIMEOUT_SECONDS", "1800")),
         max_retries=0,
     )
 
@@ -97,7 +99,10 @@ def require_openai_settings(*, timeout_seconds: int | None = None) -> OpenAISett
 def langfuse_enabled() -> bool:
     """Langfuse 関連環境変数が設定されているかを返す。"""
 
-    return any(os.environ.get(name) for name in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_OTEL_HOST"))
+    return any(
+        os.environ.get(name)
+        for name in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_OTEL_HOST")
+    )
 
 
 def build_langfuse_headers(
@@ -113,7 +118,11 @@ def build_langfuse_headers(
 
     if not langfuse_enabled():
         return {}
-    trace_user_id = os.environ.get("LANGFUSE_TRACE_USER_ID") or os.environ.get("USER") or "translate-ja"
+    trace_user_id = (
+        os.environ.get("LANGFUSE_TRACE_USER_ID")
+        or os.environ.get("USER")
+        or "translate-ja"
+    )
     session_id = sha256_text(input_identity)[:16]
     return {
         "langfuse_trace_id": run_id or str(uuid.uuid4()),

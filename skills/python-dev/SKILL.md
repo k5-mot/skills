@@ -26,6 +26,7 @@ Pythonバックエンドを実装・修正・初期化するときは、このSk
 - ログ出力には必ず `logging` の `logger` を使い、`print` はCLIの最終結果など明確な標準出力仕様がある場合だけに限定する。
 - loggerで出力するログメッセージは必ず英語にし、ログformatには対象ファイル、対象関数、対象行を含める。
 - public utilityの振る舞いを変えた場合は `docs/` に利用方法や変更点を残す。
+- CLI の終了処理は `raise SystemExit(...)` を直接書かず、`sys.exit(...)` を使う。`os._exit` は通常のCLI終了には使わない。
 - CLI引数解析は `argparse` より `typer` を優先する。
 - 構造化データや設定値は `dataclass` より `pydantic.BaseModel` を優先する。
 - ブラウザ自動化は Selenium より Playwright を優先する。

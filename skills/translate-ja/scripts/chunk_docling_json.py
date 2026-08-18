@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import sys
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -104,7 +105,13 @@ def _table_matrix_from_item(item: dict[str, Any]) -> list[list[str]]:
         return []
     grid = data.get("grid")
     if isinstance(grid, list) and all(isinstance(row, list) for row in grid):
-        return [[str(cell.get("text") if isinstance(cell, dict) else cell or "").strip() for cell in row] for row in grid]
+        return [
+            [
+                str(cell.get("text") if isinstance(cell, dict) else cell or "").strip()
+                for cell in row
+            ]
+            for row in grid
+        ]
     cells = data.get("table_cells") or data.get("cells")
     if not isinstance(cells, list):
         return []
@@ -174,7 +181,9 @@ def iter_doc_items(data: dict[str, Any]) -> list[dict[str, Any]]:
                 copied["_group"] = group
                 copied["_index"] = index
                 items.append(copied)
-    items.sort(key=lambda item: (_page_numbers(item) or [10**9])[0],)
+    items.sort(
+        key=lambda item: (_page_numbers(item) or [10**9])[0],
+    )
     return items
 
 
@@ -203,7 +212,10 @@ def _validate_chunks(chunks: list[dict[str, Any]]) -> None:
         if chunk_id in seen:
             raise ValueError(f"duplicate chunk_id: {chunk_id}")
         seen.add(chunk_id)
-        if chunk.get("translatable") and not str(chunk.get("source_text") or "").strip():
+        if (
+            chunk.get("translatable")
+            and not str(chunk.get("source_text") or "").strip()
+        ):
             raise ValueError(f"empty translatable chunk: {chunk_id}")
         if not chunk.get("source_node_refs"):
             raise ValueError(f"empty source_node_refs: {chunk_id}")
@@ -212,7 +224,9 @@ def _validate_chunks(chunks: list[dict[str, Any]]) -> None:
             raise ValueError(f"unclosed code fence: {chunk_id}")
 
 
-def build_chunks(data: dict[str, Any], *, min_chars: int = 1000, max_chars: int = 2000) -> list[dict[str, Any]]:
+def build_chunks(
+    data: dict[str, Any], *, min_chars: int = 1000, max_chars: int = 2000
+) -> list[dict[str, Any]]:
     """Docling JSON から見出しパス付き chunk 配列を作る。"""
 
     chunks: list[dict[str, Any]] = []
@@ -228,7 +242,9 @@ def build_chunks(data: dict[str, Any], *, min_chars: int = 1000, max_chars: int 
         nonlocal pending_blocks, pending_refs, pending_pages, pending_assets
         if not pending_blocks:
             return
-        source_text = "\n\n".join(block for block in pending_blocks if block.strip()).strip()
+        source_text = "\n\n".join(
+            block for block in pending_blocks if block.strip()
+        ).strip()
         if not source_text:
             pending_blocks = []
             pending_refs = []
@@ -260,7 +276,9 @@ def build_chunks(data: dict[str, Any], *, min_chars: int = 1000, max_chars: int 
         ref = _self_ref(item, group, index)
         pages = _page_numbers(item)
         assets = _assets(item)
-        rendered = render_table_item(item) if kind == "table" else _render_text_item(item)
+        rendered = (
+            render_table_item(item) if kind == "table" else _render_text_item(item)
+        )
         if not rendered:
             continue
         if kind in {"table", "code", "html", "image"}:
@@ -283,7 +301,10 @@ def build_chunks(data: dict[str, Any], *, min_chars: int = 1000, max_chars: int 
             level = min(_heading_level(item), 6)
             header_path = header_path[: level - 1]
             header_path.append(rendered)
-            if pending_blocks and sum(len(block) for block in pending_blocks) >= min_chars:
+            if (
+                pending_blocks
+                and sum(len(block) for block in pending_blocks) >= min_chars
+            ):
                 flush()
         pending_blocks.append(rendered)
         pending_refs.append(ref)
@@ -301,7 +322,9 @@ def main() -> int:
     """CLI 引数を読み、Chunk JSONL を生成する。"""
 
     configure_logging()
-    parser = argparse.ArgumentParser(description="Build Chunk JSONL from Docling schema JSON")
+    parser = argparse.ArgumentParser(
+        description="Build Chunk JSONL from Docling schema JSON"
+    )
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--min-chars", type=int, default=1000)
@@ -337,4 +360,4 @@ if __name__ == "__main__":
         exit_code = main()
     finally:
         LOGGER.info("処理時間 %.3f 秒", perf_counter() - started_at)
-    raise SystemExit(exit_code)
+    sys.exit(exit_code)

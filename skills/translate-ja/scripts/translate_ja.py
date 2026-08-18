@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -42,7 +43,9 @@ def load_dictionary_csv(path: str | Path | None) -> Glossary:
     """UTF-8 CSV の用語辞書を読み込み、同一 english は後勝ちで正規化する。"""
 
     if not path:
-        return Glossary(path=None, sha256=None, raw_count=0, effective_count=0, entries=())
+        return Glossary(
+            path=None, sha256=None, raw_count=0, effective_count=0, entries=()
+        )
     csv_path = Path(path)
     if not csv_path.exists():
         raise FileNotFoundError(f"dictionary CSV not found: {csv_path}")
@@ -54,18 +57,26 @@ def load_dictionary_csv(path: str | Path | None) -> Glossary:
         if reader.fieldnames is None:
             raise ValueError(f"dictionary CSV has no header: {csv_path}")
         normalized_fields = [field.strip().strip('"') for field in reader.fieldnames]
-        missing = [column for column in REQUIRED_COLUMNS if column not in normalized_fields]
+        missing = [
+            column for column in REQUIRED_COLUMNS if column not in normalized_fields
+        ]
         if missing:
             raise ValueError(f"dictionary CSV missing columns {missing}: {csv_path}")
         reader.fieldnames = normalized_fields
         for row in reader:
-            normalized = {key.strip(): (value or "").strip() for key, value in row.items() if key is not None}
+            normalized = {
+                key.strip(): (value or "").strip()
+                for key, value in row.items()
+                if key is not None
+            }
             if not any(normalized.values()):
                 continue
             english = normalized.get("english", "")
             japanese = normalized.get("japanese", "")
             if not english or not japanese:
-                raise ValueError(f"dictionary CSV requires english and japanese: {csv_path}")
+                raise ValueError(
+                    f"dictionary CSV requires english and japanese: {csv_path}"
+                )
             raw_count += 1
             by_english[english] = GlossaryEntry(
                 english=english,
@@ -84,7 +95,9 @@ def load_dictionary_csv(path: str | Path | None) -> Glossary:
     )
 
 
-def select_glossary_entries(source_text: str, glossary: Glossary, *, limit: int = 80) -> list[GlossaryEntry]:
+def select_glossary_entries(
+    source_text: str, glossary: Glossary, *, limit: int = 80
+) -> list[GlossaryEntry]:
     """チャンク本文に現れる辞書項目を優先して返す。"""
 
     if not glossary.entries:
@@ -111,7 +124,9 @@ def format_glossary_for_prompt(entries: list[GlossaryEntry]) -> str:
     return "\n".join(lines)
 
 
-def build_translation_messages(source_text: str, *, glossary_entries: list[GlossaryEntry]) -> list[dict[str, str]]:
+def build_translation_messages(
+    source_text: str, *, glossary_entries: list[GlossaryEntry]
+) -> list[dict[str, str]]:
     """構造維持翻訳用の Chat Completions messages を作る。"""
 
     glossary_text = format_glossary_for_prompt(glossary_entries)
@@ -146,7 +161,12 @@ def main() -> int:
     parser.add_argument("--dictionary-csv", required=True)
     args = parser.parse_args()
     glossary = load_dictionary_csv(args.dictionary_csv)
-    LOGGER.info("辞書を読み込みました path=%s raw=%s effective=%s", glossary.path, glossary.raw_count, glossary.effective_count)
+    LOGGER.info(
+        "辞書を読み込みました path=%s raw=%s effective=%s",
+        glossary.path,
+        glossary.raw_count,
+        glossary.effective_count,
+    )
     return 0
 
 
@@ -156,4 +176,4 @@ if __name__ == "__main__":
         exit_code = main()
     finally:
         LOGGER.info("処理時間 %.3f 秒", perf_counter() - started_at)
-    raise SystemExit(exit_code)
+    sys.exit(exit_code)

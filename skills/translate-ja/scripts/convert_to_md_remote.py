@@ -7,13 +7,14 @@ import logging
 import os
 import shutil
 import socket
+import sys
 import time
 import zipfile
 from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-import requests
+import httpx
 from dotenv import load_dotenv as python_dotenv_load_dotenv
 
 from config import require_docling_settings
@@ -73,36 +74,35 @@ def format_connection_error(endpoint: str, exc: Exception) -> str:
     )
 
 
-def docling_markdown_payload(document_timeout: int) -> list[tuple[str, str]]:
+def docling_markdown_payload(document_timeout: int) -> dict[str, str | list[str]]:
     """Docling Serve v1 に渡す Markdown 変換用 multipart form field を作る。
 
     Args:
         document_timeout: Docling 側の文書処理 timeout 秒数。
 
     Returns:
-        requests に渡す form field のリスト。
+        httpx に渡す form field。
     """
 
     do_ocr = env_bool("DOCLING_DO_OCR", default=False)
     force_ocr = env_bool("DOCLING_FORCE_OCR", default=False)
-    payload = [
-        ("to_formats", os.environ.get("DOCLING_MARKDOWN_FORMAT", "md")),
-        ("do_ocr", str(do_ocr).lower()),
-        ("force_ocr", str(force_ocr).lower()),
-        ("document_timeout", str(document_timeout)),
-        ("do_picture_description", "false"),
-        ("include_images", "true"),
-        ("include_page_images", "true"),
-        ("image_export_mode", "referenced"),
-        ("target_type", "zip"),
-    ]
+    payload: dict[str, str | list[str]] = {
+        "to_formats": os.environ.get("DOCLING_MARKDOWN_FORMAT", "md"),
+        "do_ocr": str(do_ocr).lower(),
+        "force_ocr": str(force_ocr).lower(),
+        "document_timeout": str(document_timeout),
+        "do_picture_description": "false",
+        "include_images": "true",
+        "include_page_images": "true",
+        "image_export_mode": "referenced",
+        "target_type": "zip",
+    }
     if do_ocr or force_ocr:
-        payload.append(
-            ("ocr_preset", os.environ.get("DOCLING_OCR_PRESET", "tesseract"))
-        )
+        payload["ocr_preset"] = os.environ.get("DOCLING_OCR_PRESET", "tesseract")
         languages = os.environ.get("DOCLING_OCR_LANGS", "jpn,jpn_vert,eng")
-        for language in [part.strip() for part in languages.split(",") if part.strip()]:
-            payload.append(("ocr_lang", language))
+        payload["ocr_lang"] = [
+            part.strip() for part in languages.split(",") if part.strip()
+        ]
     return payload
 
 
@@ -110,7 +110,7 @@ def response_mentions_missing_files(response: Any) -> bool:
     """422 応答が files field 不足を示しているかを判定する。
 
     Args:
-        response: requests.Response 互換 object。
+        response: httpx.Response 互換 object。
 
     Returns:
         files field 不足を示す場合は True。
@@ -144,7 +144,7 @@ def request_convert(
         request_timeout: HTTP request の timeout 秒数。
 
     Returns:
-        requests.Response。
+        httpx.Response。
 
     Raises:
         RuntimeError: 接続に失敗した場合。
@@ -156,14 +156,14 @@ def request_convert(
         with input_path.open("rb") as file:
             files = {file_field: (input_path.name, file)}
             try:
-                response = requests.post(
+                response = httpx.post(
                     endpoint,
                     headers={"X-Api-Key": settings.api_key},
                     files=files,
                     data=docling_markdown_payload(docling_timeout),
                     timeout=request_timeout,
                 )
-            except requests.exceptions.RequestException as exc:
+            except httpx.RequestError as exc:
                 raise RuntimeError(format_connection_error(endpoint, exc)) from exc
             except socket.gaierror as exc:
                 raise RuntimeError(format_connection_error(endpoint, exc)) from exc
@@ -226,7 +226,7 @@ def poll_async(task_id: str, output_zip: Path, *, docling_timeout: int) -> None:
     settings = require_docling_settings(timeout_seconds=docling_timeout)
     deadline = time.monotonic() + settings.timeout_seconds
     while time.monotonic() < deadline:
-        status_response = requests.get(
+        status_response = httpx.get(
             f"{settings.server_url}/v1/status/poll/{task_id}",
             headers={"X-Api-Key": settings.api_key},
             timeout=60,
@@ -240,7 +240,7 @@ def poll_async(task_id: str, output_zip: Path, *, docling_timeout: int) -> None:
             status_data.get("status") or status_data.get("task_status") or ""
         ).lower()
         if status in {"success", "succeeded", "completed"}:
-            result_response = requests.get(
+            result_response = httpx.get(
                 f"{settings.server_url}/v1/result/{task_id}",
                 headers={"X-Api-Key": settings.api_key},
                 timeout=settings.timeout_seconds,
@@ -451,4 +451,4 @@ if __name__ == "__main__":
         exit_code = main()
     finally:
         LOGGER.info("処理時間 %.3f 秒", perf_counter() - started_at)
-    raise SystemExit(exit_code)
+    sys.exit(exit_code)

@@ -7,18 +7,26 @@ import base64
 import importlib.util
 import json
 import os
+import sys
 import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 def _load_open_webui_client() -> Any:
     """Load the sibling open-webui-skill client module."""
-    client_path = Path(__file__).resolve().parents[2] / "open-webui-skill" / "scripts" / "client.py"
-    spec = importlib.util.spec_from_file_location("openwebui_client_for_activity_report", client_path)
+    client_path = (
+        Path(__file__).resolve().parents[2]
+        / "open-webui-skill"
+        / "scripts"
+        / "client.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "openwebui_client_for_activity_report", client_path
+    )
     if spec is None or spec.loader is None:
         raise ImportError(f"Unable to load open-webui-skill client from {client_path}")
     module = importlib.util.module_from_spec(spec)
@@ -119,7 +127,15 @@ def _frontend_url(path: str) -> str:
 
 def _item_time(item: dict[str, Any]) -> datetime | None:
     """Find the first parseable timestamp on an Open WebUI item."""
-    for key in ("created_at", "createdAt", "created", "timestamp", "time", "updated_at", "updatedAt"):
+    for key in (
+        "created_at",
+        "createdAt",
+        "created",
+        "timestamp",
+        "time",
+        "updated_at",
+        "updatedAt",
+    ):
         parsed = _parse_openwebui_time(item.get(key))
         if parsed is not None:
             return parsed
@@ -140,7 +156,13 @@ def _user_label(message: dict[str, Any]) -> str:
     """Return a display label for a channel message user."""
     user = message.get("user")
     if isinstance(user, dict):
-        return str(user.get("name") or user.get("email") or user.get("id") or message.get("user_id") or "unknown")
+        return str(
+            user.get("name")
+            or user.get("email")
+            or user.get("id")
+            or message.get("user_id")
+            or "unknown"
+        )
     return str(message.get("user_id") or "unknown")
 
 
@@ -157,21 +179,44 @@ def _extract_file_ids(message: dict[str, Any]) -> list[str]:
 
 def _message_text(message: dict[str, Any]) -> str:
     """Return single-line text content for a message."""
-    return str(message.get("content") or message.get("text") or "").strip().replace("\n", " ")
+    return (
+        str(message.get("content") or message.get("text") or "")
+        .strip()
+        .replace("\n", " ")
+    )
 
 
 def _chat_owner(chat: dict[str, Any]) -> str:
     """Return a display label for a chat owner."""
     user = chat.get("user")
     if isinstance(user, dict):
-        return str(user.get("name") or user.get("email") or user.get("id") or chat.get("user_id") or "unknown")
-    return str(chat.get("user_name") or chat.get("user_email") or chat.get("user_id") or chat.get("owner") or "unknown")
+        return str(
+            user.get("name")
+            or user.get("email")
+            or user.get("id")
+            or chat.get("user_id")
+            or "unknown"
+        )
+    return str(
+        chat.get("user_name")
+        or chat.get("user_email")
+        or chat.get("user_id")
+        or chat.get("owner")
+        or "unknown"
+    )
 
 
 def _chat_title(chat: dict[str, Any]) -> str:
     """Return a display title for a chat."""
-    data = chat.get("chat") if isinstance(chat.get("chat"), dict) else chat
-    return str(data.get("title") or chat.get("title") or chat.get("name") or chat.get("id") or "タイトル未設定")
+    chat_data = chat.get("chat")
+    data = cast(dict[str, Any], chat_data) if isinstance(chat_data, dict) else chat
+    return str(
+        data.get("title")
+        or chat.get("title")
+        or chat.get("name")
+        or chat.get("id")
+        or "タイトル未設定"
+    )
 
 
 def _chat_messages(chat: dict[str, Any]) -> list[dict[str, Any]]:
@@ -186,7 +231,11 @@ def _chat_messages(chat: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(history, list):
         return [message for message in history if isinstance(message, dict)]
     if isinstance(history, dict) and isinstance(history.get("messages"), dict):
-        return [message for message in history["messages"].values() if isinstance(message, dict)]
+        return [
+            message
+            for message in history["messages"].values()
+            if isinstance(message, dict)
+        ]
     if isinstance(history, dict) and isinstance(history.get("messages"), list):
         return [message for message in history["messages"] if isinstance(message, dict)]
     return []
@@ -236,7 +285,10 @@ def _channel_links(messages: list[dict[str, Any]], limit: int = 5) -> str:
         channel_id = message.get("_channel_id")
         if channel_id:
             channel_id_text = str(channel_id)
-            links_by_url.setdefault(_channel_url(channel_id_text), _channel_markdown_link(message, channel_id_text))
+            links_by_url.setdefault(
+                _channel_url(channel_id_text),
+                _channel_markdown_link(message, channel_id_text),
+            )
     return ", ".join(list(links_by_url.values())[:limit]) or "なし"
 
 
@@ -259,11 +311,17 @@ def _summary_input(
         created = message.get("_created_dt")
         channel_items.append(
             {
-                "channel": message.get("_channel_name") or message.get("_channel_id") or "unknown",
+                "channel": message.get("_channel_name")
+                or message.get("_channel_id")
+                or "unknown",
                 "channel_id": message.get("_channel_id"),
-                "channel_url": _channel_url(str(message.get("_channel_id"))) if message.get("_channel_id") else None,
+                "channel_url": _channel_url(str(message.get("_channel_id")))
+                if message.get("_channel_id")
+                else None,
                 "user": _user_label(message),
-                "created_at": created.isoformat() if isinstance(created, datetime) else None,
+                "created_at": created.isoformat()
+                if isinstance(created, datetime)
+                else None,
                 "content": _truncate_text(_message_text(message), 4000),
             }
         )
@@ -273,7 +331,9 @@ def _summary_input(
         chat_items.append(
             {
                 "user": message.get("_chat_owner") or "unknown",
-                "created_at": created.isoformat() if isinstance(created, datetime) else None,
+                "created_at": created.isoformat()
+                if isinstance(created, datetime)
+                else None,
                 "content": _truncate_text(_message_text(message), 4000),
             }
         )
@@ -283,7 +343,9 @@ def _summary_input(
         knowledge.append(
             {
                 "name": _knowledge_name(item),
-                "created_at": created.isoformat() if isinstance(created, datetime) else None,
+                "created_at": created.isoformat()
+                if isinstance(created, datetime)
+                else None,
                 "id": item.get("id"),
             }
         )
@@ -310,7 +372,11 @@ def _collect_openwebui_activity(
     channel_messages: list[dict[str, Any]] = []
     channels_result = list_channels()
     if channels_result.get("ok"):
-        channels = [item for item in channels_result.get("channels", []) if isinstance(item, dict)]
+        channels = [
+            item
+            for item in channels_result.get("channels", [])
+            if isinstance(item, dict)
+        ]
         for channel in channels:
             channel_id = str(channel.get("id") or "")
             if not channel_id:
@@ -322,7 +388,9 @@ def _collect_openwebui_activity(
                 include_threads=include_threads,
             )
             if not messages_result.get("ok"):
-                errors.append(f"channel:{channel.get('name') or channel_id}: {messages_result.get('error', '取得失敗')}")
+                errors.append(
+                    f"channel:{channel.get('name') or channel_id}: {messages_result.get('error', '取得失敗')}"
+                )
                 continue
             for message in messages_result.get("messages", []):
                 if not isinstance(message, dict):
@@ -348,15 +416,31 @@ def _collect_openwebui_activity(
     if not using_db_chats:
         errors.append(
             "chats/all/db: "
-            + str(chats_result.get("error") or "管理者向け全チャット取得に失敗したため、APIキーから見えるチャット一覧にフォールバックしました。")
+            + str(
+                chats_result.get("error")
+                or "管理者向け全チャット取得に失敗したため、APIキーから見えるチャット一覧にフォールバックしました。"
+            )
         )
-        chats_result = list_all_chats(page_size=page_size, max_pages=max_pages, include_archived=include_archived_chats)
+        chats_result = list_all_chats(
+            page_size=page_size,
+            max_pages=max_pages,
+            include_archived=include_archived_chats,
+        )
     if chats_result.get("ok"):
-        for chat_summary in chats_result.get("chats", []):
+        chat_summaries = chats_result.get("chats", [])
+        if not isinstance(chat_summaries, list):
+            chat_summaries = []
+        for chat_summary in chat_summaries:
             if not isinstance(chat_summary, dict):
                 continue
             chat_id = str(chat_summary.get("id") or chat_summary.get("chat_id") or "")
-            detail = {"ok": True, "chat": chat_summary} if using_db_chats else get_chat(chat_id) if chat_id else {"ok": True, "chat": chat_summary}
+            detail = (
+                {"ok": True, "chat": chat_summary}
+                if using_db_chats
+                else get_chat(chat_id)
+                if chat_id
+                else {"ok": True, "chat": chat_summary}
+            )
             if not detail.get("ok"):
                 errors.append(f"chat:{chat_id}: {detail.get('error', '取得失敗')}")
                 continue
@@ -406,13 +490,18 @@ def _collect_openwebui_activity(
     }
 
 
-def _fetch_langfuse_traces(since_dt: datetime, until_dt: datetime, limit: int = 50) -> dict[str, Any]:
+def _fetch_langfuse_traces(
+    since_dt: datetime, until_dt: datetime, limit: int = 50
+) -> dict[str, Any]:
     """Fetch Langfuse traces for the report window when credentials are configured."""
     host = os.getenv("LANGFUSE_HOST", "").rstrip("/")
     public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "")
     secret_key = os.getenv("LANGFUSE_SECRET_KEY", "")
     if not (host and public_key and secret_key):
-        return {"ok": False, "error": "この実行ではLangfuse認証情報が設定されていません。"}
+        return {
+            "ok": False,
+            "error": "この実行ではLangfuse認証情報が設定されていません。",
+        }
 
     query = urllib.parse.urlencode(
         {
@@ -421,7 +510,9 @@ def _fetch_langfuse_traces(since_dt: datetime, until_dt: datetime, limit: int = 
             "limit": min(max(limit, 1), 100),
         }
     )
-    token = base64.b64encode(f"{public_key}:{secret_key}".encode("utf-8")).decode("ascii")
+    token = base64.b64encode(f"{public_key}:{secret_key}".encode("utf-8")).decode(
+        "ascii"
+    )
     request = urllib.request.Request(
         f"{host}/api/public/traces?{query}",
         headers={"Authorization": f"Basic {token}", "Accept": "application/json"},
@@ -441,16 +532,32 @@ def _langfuse_lines(since_dt: datetime, until_dt: datetime) -> list[str]:
     """Format Langfuse trace counts as Markdown lines."""
     traces_result = _fetch_langfuse_traces(since_dt, until_dt)
     if not traces_result.get("ok"):
-        return [f"- {traces_result.get('error', 'Langfuseデータを取得できませんでした。')}"]
+        return [
+            f"- {traces_result.get('error', 'Langfuseデータを取得できませんでした。')}"
+        ]
 
     traces = traces_result.get("traces", [])
-    names = Counter(str(trace.get("name") or "unnamed") for trace in traces if isinstance(trace, dict))
-    users = Counter(str(trace.get("userId") or "unknown") for trace in traces if isinstance(trace, dict))
+    names = Counter(
+        str(trace.get("name") or "unnamed")
+        for trace in traces
+        if isinstance(trace, dict)
+    )
+    users = Counter(
+        str(trace.get("userId") or "unknown")
+        for trace in traces
+        if isinstance(trace, dict)
+    )
     lines = [f"- 確認したトレース数: {len(traces)}"]
     if names:
-        lines.append("- 主なトレース名: " + ", ".join(f"{name} ({count})" for name, count in names.most_common(5)))
+        lines.append(
+            "- 主なトレース名: "
+            + ", ".join(f"{name} ({count})" for name, count in names.most_common(5))
+        )
     if users:
-        lines.append("- 主なLangfuseユーザー: " + ", ".join(f"{user} ({count})" for user, count in users.most_common(5)))
+        lines.append(
+            "- 主なLangfuseユーザー: "
+            + ", ".join(f"{user} ({count})" for user, count in users.most_common(5))
+        )
     if not traces:
         lines.append("- 指定期間のLangfuseトレースは返されませんでした。")
     return lines
@@ -488,12 +595,21 @@ def generate_activity_report(
             knowledge_items = activity["knowledge"]
             errors = activity["errors"]
             channel_id = "all"
-            channel_label = "all channels"
         else:
-            target_channel = channel or os.getenv("OPEN_WEBUI_DEFAULT_CHANNEL", "report")
-            messages_result = list_channel_messages(target_channel, limit=limit, include_threads=include_threads)
+            target_channel = channel or os.getenv(
+                "OPEN_WEBUI_DEFAULT_CHANNEL", "report"
+            )
+            messages_result = list_channel_messages(
+                target_channel, limit=limit, include_threads=include_threads
+            )
             if not messages_result.get("ok"):
-                return {"ok": False, "error": messages_result.get("error", "チャンネル投稿の取得に失敗しました"), "details": messages_result}
+                return {
+                    "ok": False,
+                    "error": messages_result.get(
+                        "error", "チャンネル投稿の取得に失敗しました"
+                    ),
+                    "details": messages_result,
+                }
 
             messages = []
             for message in messages_result.get("messages", []):
@@ -502,23 +618,31 @@ def generate_activity_report(
                 created = _message_time_ns(message) or _item_time(message)
                 if _in_range(created, since_dt, until_dt):
                     enriched = dict(message)
-                    enriched["_channel_id"] = messages_result.get("channel_id", target_channel)
+                    enriched["_channel_id"] = messages_result.get(
+                        "channel_id", target_channel
+                    )
                     enriched["_channel_name"] = target_channel
                     enriched["_created_dt"] = created
                     messages.append(enriched)
-            channels = [{"id": messages_result.get("channel_id", target_channel), "name": target_channel}]
+            channels = [
+                {
+                    "id": messages_result.get("channel_id", target_channel),
+                    "name": target_channel,
+                }
+            ]
             chats = []
             chat_messages = []
             knowledge_items = []
             errors = []
             channel_id = messages_result.get("channel_id", target_channel)
-            channel_label = f"`{target_channel}` (`{channel_id}`)"
 
         by_user: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for message in messages:
             by_user[_user_label(message)].append(message)
 
-        chat_by_user = Counter(str(message.get("_chat_owner") or "unknown") for message in chat_messages)
+        chat_by_user = Counter(
+            str(message.get("_chat_owner") or "unknown") for message in chat_messages
+        )
         chat_message_count = len(chat_messages)
         chat_count = len(chats)
         knowledge_count = len(knowledge_items)
@@ -537,11 +661,22 @@ def generate_activity_report(
             "### 🔥 本日の主要イベント",
         ]
 
-        sorted_users = sorted(by_user.items(), key=lambda item: (-len(item[1]), item[0]))
+        sorted_users = sorted(
+            by_user.items(), key=lambda item: (-len(item[1]), item[0])
+        )
         event_index = 1
         if messages:
-            channel_counts = Counter(str(message.get("_channel_name") or message.get("_channel_id") or "unknown") for message in messages)
-            top_channels = ", ".join(f"{name} ({count})" for name, count in channel_counts.most_common(5))
+            channel_counts = Counter(
+                str(
+                    message.get("_channel_name")
+                    or message.get("_channel_id")
+                    or "unknown"
+                )
+                for message in messages
+            )
+            top_channels = ", ".join(
+                f"{name} ({count})" for name, count in channel_counts.most_common(5)
+            )
             lines.extend(
                 [
                     f"{event_index}. チャネル横断の活動",
@@ -552,7 +687,9 @@ def generate_activity_report(
             )
             event_index += 1
         if chat_messages:
-            top_chat_users = ", ".join(f"{user} ({count})" for user, count in chat_by_user.most_common(5))
+            top_chat_users = ", ".join(
+                f"{user} ({count})" for user, count in chat_by_user.most_common(5)
+            )
             lines.extend(
                 [
                     f"{event_index}. ユーザーチャットの活動",
@@ -584,8 +721,14 @@ def generate_activity_report(
             )
         elif len(lines) < 14 and sorted_users:
             for index, (user, user_messages) in enumerate(sorted_users[:3], start=1):
-                snippets = [str(msg.get("content") or "").strip().replace("\n", " ")[:100] for msg in user_messages[:2]]
-                summary = " / ".join([text for text in snippets if text]) or "投稿内容の要約を生成できませんでした。"
+                snippets = [
+                    str(msg.get("content") or "").strip().replace("\n", " ")[:100]
+                    for msg in user_messages[:2]
+                ]
+                summary = (
+                    " / ".join([text for text in snippets if text])
+                    or "投稿内容の要約を生成できませんでした。"
+                )
                 related_posts = _channel_links(user_messages[:3])
                 lines.extend(
                     [
@@ -598,7 +741,22 @@ def generate_activity_report(
         action_words = Counter()
         for message in [*messages, *chat_messages]:
             text = _message_text(message).lower()
-            for word in ("deploy", "fix", "review", "investigate", "release", "error", "incident", "cost", "model", "障害", "費用", "調査", "修正", "リリース"):
+            for word in (
+                "deploy",
+                "fix",
+                "review",
+                "investigate",
+                "release",
+                "error",
+                "incident",
+                "cost",
+                "model",
+                "障害",
+                "費用",
+                "調査",
+                "修正",
+                "リリース",
+            ):
                 if word in text:
                     action_words[word] += 1
 
@@ -624,7 +782,11 @@ def generate_activity_report(
             )
 
         lines.extend(["", "### ⚠️ 潜在的なリスク"])
-        risk_words = [(word, count) for word, count in action_words.items() if word in {"error", "incident", "障害"}]
+        risk_words = [
+            (word, count)
+            for word, count in action_words.items()
+            if word in {"error", "incident", "障害"}
+        ]
         if risk_words:
             for index, (word, count) in enumerate(risk_words[:3], start=1):
                 lines.extend(
@@ -650,7 +812,9 @@ def generate_activity_report(
         if combined_users:
             for user in combined_users:
                 user_messages = by_user.get(user, [])
-                lines.append(f"- {user}：🗨️ {len(user_messages)}件のチャンネル投稿、🤖 {chat_by_user.get(user, 0)}件のチャット利用")
+                lines.append(
+                    f"- {user}：🗨️ {len(user_messages)}件のチャンネル投稿、🤖 {chat_by_user.get(user, 0)}件のチャット利用"
+                )
         else:
             lines.append("- 対象ユーザーの投稿はありませんでした。")
 
@@ -658,7 +822,9 @@ def generate_activity_report(
         if knowledge_items:
             for item in knowledge_items[:10]:
                 created = item.get("_created_dt")
-                created_text = created.isoformat() if isinstance(created, datetime) else "日時不明"
+                created_text = (
+                    created.isoformat() if isinstance(created, datetime) else "日時不明"
+                )
                 lines.append(f"- {_knowledge_name(item)}：{created_text}")
         else:
             lines.append("- 指定期間内に追加されたナレッジはありませんでした。")
@@ -688,13 +854,21 @@ def generate_activity_report(
             "summary_input": _summary_input(messages, chat_messages, knowledge_items),
         }
     except Exception as exc:
-        return {"ok": False, "error": str(exc), "exception_type": exc.__class__.__name__}
+        return {
+            "ok": False,
+            "error": str(exc),
+            "exception_type": exc.__class__.__name__,
+        }
 
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build the activity report helper CLI parser."""
-    parser = argparse.ArgumentParser(description="Open WebUI全体から活動レポート用の投稿本文と機械的な下書きを収集します。")
-    parser.add_argument("--channel", default=os.getenv("OPEN_WEBUI_DEFAULT_CHANNEL", "report"))
+    parser = argparse.ArgumentParser(
+        description="Open WebUI全体から活動レポート用の投稿本文と機械的な下書きを収集します。"
+    )
+    parser.add_argument(
+        "--channel", default=os.getenv("OPEN_WEBUI_DEFAULT_CHANNEL", "report")
+    )
     parser.add_argument("--since")
     parser.add_argument("--until")
     parser.add_argument("--limit", type=int, default=100)
@@ -702,7 +876,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-pages", type=int, default=100)
     parser.add_argument("--no-threads", action="store_true")
     parser.add_argument("--no-langfuse", action="store_true")
-    parser.add_argument("--single-channel", action="store_true", help="旧形式の単一チャネル集計に限定します。")
+    parser.add_argument(
+        "--single-channel",
+        action="store_true",
+        help="旧形式の単一チャネル集計に限定します。",
+    )
     parser.add_argument("--exclude-archived-chats", action="store_true")
     return parser
 
@@ -727,4 +905,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

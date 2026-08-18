@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import sys
 from pathlib import Path
 from time import perf_counter
 
@@ -83,7 +84,9 @@ def main() -> int:
     """CLI 引数を読み、翻訳済み chunks を Markdown へ連結する。"""
 
     configure_logging()
-    parser = argparse.ArgumentParser(description="Concatenate translated chunks into Markdown")
+    parser = argparse.ArgumentParser(
+        description="Concatenate translated chunks into Markdown"
+    )
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--force", action="store_true")
@@ -99,15 +102,29 @@ def main() -> int:
         pages = _format_pages(row.get("page_numbers"))
         text = str(row.get("translated_text") or row.get("source_text") or "")
         if row.get("status") == "fallback_source":
-            LOGGER.warning("原文 fallback chunk を連結します chunk=%s pages=%s error=%s", chunk_id, pages, row.get("error"))
+            LOGGER.warning(
+                "原文 fallback chunk を連結します chunk=%s pages=%s error=%s",
+                chunk_id,
+                pages,
+                row.get("error"),
+            )
         for warning in validate_markdown(text):
-            LOGGER.warning("Markdown chunk 検証警告 chunk=%s pages=%s warning=%s", chunk_id, pages, warning)
+            LOGGER.warning(
+                "Markdown chunk 検証警告 chunk=%s pages=%s warning=%s",
+                chunk_id,
+                pages,
+                warning,
+            )
     markdown = concat_chunks(rows)
     warnings = validate_markdown(markdown)
     for warning in warnings:
         LOGGER.warning("Markdown 全体検証警告: %s", warning)
     fallback_count = sum(1 for row in rows if row.get("status") == "fallback_source")
-    LOGGER.info("Markdown 連結が完了しました chunks=%s fallback_source=%s", len(rows), fallback_count)
+    LOGGER.info(
+        "Markdown 連結が完了しました chunks=%s fallback_source=%s",
+        len(rows),
+        fallback_count,
+    )
     atomic_write_text(output, markdown)
     return 0
 
@@ -118,4 +135,4 @@ if __name__ == "__main__":
         exit_code = main()
     finally:
         LOGGER.info("処理時間 %.3f 秒", perf_counter() - started_at)
-    raise SystemExit(exit_code)
+    sys.exit(exit_code)

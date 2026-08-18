@@ -11,7 +11,11 @@ import pytest
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from realign_doc_struct_with_llm import _parse_patch_response, _stream_chat, apply_patches  # noqa: E402
+from realign_doc_struct_with_llm import (  # noqa: E402
+    _parse_patch_response,
+    _stream_chat,
+    apply_patches,
+)
 
 
 def test_apply_patches_sets_label_text_and_level() -> None:
@@ -27,7 +31,12 @@ def test_apply_patches_sets_label_text_and_level() -> None:
         ],
     )
     assert all(result["status"] == "success" for result in results)
-    assert data["texts"][0] == {"self_ref": "#/texts/0", "label": "section_header", "text": "Strategy", "level": 2}
+    assert data["texts"][0] == {
+        "self_ref": "#/texts/0",
+        "label": "section_header",
+        "text": "Strategy",
+        "level": 2,
+    }
 
 
 def test_parse_patch_response_accepts_fenced_json() -> None:
@@ -39,7 +48,9 @@ def test_parse_patch_response_accepts_fenced_json() -> None:
 ```"""
     )
 
-    assert patches == [{"op": "set_label", "ref": "#/texts/0", "label": "section_header"}]
+    assert patches == [
+        {"op": "set_label", "ref": "#/texts/0", "label": "section_header"}
+    ]
 
 
 def test_parse_patch_response_accepts_preamble_before_json() -> None:
@@ -72,13 +83,19 @@ def test_stream_chat_falls_back_to_non_stream_when_stream_has_no_content() -> No
             self.calls.append(bool(kwargs["stream"]))
             if kwargs["stream"]:
                 return []
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"patches":[]}'))])
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(message=SimpleNamespace(content='{"patches":[]}'))
+                ]
+            )
 
     completions = FakeCompletions()
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     settings = SimpleNamespace(model="test-model")
 
-    response = _stream_chat(client, settings=settings, messages=[], headers={}, unit_id="page-0001")
+    response = _stream_chat(
+        client, settings=settings, messages=[], headers={}, unit_id="page-0001"
+    )
 
     assert response == '{"patches":[]}'
     assert completions.calls == [True, False]

@@ -16,8 +16,19 @@ def test_build_chunks_keeps_heading_with_following_body() -> None:
 
     data = {
         "texts": [
-            {"self_ref": "#/texts/0", "label": "section_header", "level": 2, "text": "Strategy", "prov": [{"page_no": 1}]},
-            {"self_ref": "#/texts/1", "label": "paragraph", "text": "The department will act.", "prov": [{"page_no": 1}]},
+            {
+                "self_ref": "#/texts/0",
+                "label": "section_header",
+                "level": 2,
+                "text": "Strategy",
+                "prov": [{"page_no": 1}],
+            },
+            {
+                "self_ref": "#/texts/1",
+                "label": "paragraph",
+                "text": "The department will act.",
+                "prov": [{"page_no": 1}],
+            },
         ]
     }
     chunks = build_chunks(data, min_chars=10, max_chars=30)

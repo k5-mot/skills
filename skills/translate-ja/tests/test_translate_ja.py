@@ -8,10 +8,16 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from translate_ja import build_translation_messages, load_dictionary_csv, select_glossary_entries  # noqa: E402
+from translate_ja import (  # noqa: E402
+    build_translation_messages,
+    load_dictionary_csv,
+    select_glossary_entries,
+)
 
 
-def test_load_dictionary_csv_trims_headers_and_uses_last_duplicate(tmp_path: Path) -> None:
+def test_load_dictionary_csv_trims_headers_and_uses_last_duplicate(
+    tmp_path: Path,
+) -> None:
     """辞書 CSV は空白を除去し、同一 english は後勝ちにする。"""
 
     csv_path = tmp_path / "dictionary.csv"
@@ -39,5 +45,7 @@ def test_build_translation_messages_includes_matching_glossary(tmp_path: Path) -
     )
     glossary = load_dictionary_csv(csv_path)
     entries = select_glossary_entries("The DoD will publish guidance.", glossary)
-    messages = build_translation_messages("The DoD will publish guidance.", glossary_entries=entries)
+    messages = build_translation_messages(
+        "The DoD will publish guidance.", glossary_entries=entries
+    )
     assert "DoD => 米国国防総省" in messages[1]["content"]

@@ -6,6 +6,7 @@ import sys
 import os
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -23,6 +24,7 @@ from translate import (  # noqa: E402
     env_bool,
     load_dotenv_file,
     normalize_document,
+    OpenAISettings,
     PipelineOptions,
     read_json,
     render_markdown,
@@ -30,22 +32,6 @@ from translate import (  # noqa: E402
     translate_text_item,
     write_json,
 )
-
-
-class FakeSettings:
-    """テスト用 OpenAI 設定を表す。
-
-    Args:
-        なし。
-
-    Returns:
-        chat_text に渡せる最小属性を持つ設定。
-    """
-
-    model = "fake"
-    base_url = "http://example.test"
-    api_key = "test"
-    timeout_seconds = 1
 
 
 class FakeCompletions:
@@ -158,12 +144,17 @@ def test_translate_text_item_renders_heading_bilingual_and_body_ja_only() -> Non
     """見出しは英日併記、本文は和訳のみを render_text に入れる。"""
 
     client = FakeClient()
-    settings = FakeSettings()
-    heading = {"label": "section_header", "text": "Strategy"}
-    body = {"label": "paragraph", "text": "The force moves."}
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+    heading: dict[str, Any] = {"label": "section_header", "text": "Strategy"}
+    body: dict[str, Any] = {"label": "paragraph", "text": "The force moves."}
 
-    translate_text_item(heading, client, settings)  # type: ignore[arg-type]
-    translate_text_item(body, client, settings)  # type: ignore[arg-type]
+    translate_text_item(heading, client, settings)
+    translate_text_item(body, client, settings)
 
     assert heading["translate_ja_v2"]["render_text"] == "Strategy / 戦略"
     assert body["translate_ja_v2"]["render_text"] == "部隊が移動する。"

@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -14,10 +15,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-try:  # pragma: no cover - runtime convenience when requests exists.
-    import requests  # type: ignore
+try:  # pragma: no cover - runtime convenience when HTTPX exists.
+    import httpx
 except ImportError:  # pragma: no cover - standard-library fallback.
-    requests = None  # type: ignore
+    requests = None
+else:
+    requests: Any = httpx
 
 DEFAULT_CHANNELS_LIST_PATH = "/api/v1/channels/"
 DEFAULT_POST_PATH_TEMPLATE = "/api/v1/channels/{channel_id}/messages/post"
@@ -51,7 +54,11 @@ class _UrllibRequests:
     """Small urllib-backed subset of the requests API."""
 
     @staticmethod
-    def get(url: str, headers: dict[str, str] | None = None, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> _UrllibResponse:
+    def get(
+        url: str,
+        headers: dict[str, str] | None = None,
+        timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    ) -> _UrllibResponse:
         """Send a GET request."""
         request = urllib.request.Request(url, headers=headers or {}, method="GET")
         return _UrllibRequests._open(request, timeout)
@@ -65,11 +72,17 @@ class _UrllibRequests:
     ) -> _UrllibResponse:
         """Send a POST request with an optional JSON body."""
         body = None if json is None else __import__("json").dumps(json).encode("utf-8")
-        request = urllib.request.Request(url, data=body, headers=headers or {}, method="POST")
+        request = urllib.request.Request(
+            url, data=body, headers=headers or {}, method="POST"
+        )
         return _UrllibRequests._open(request, timeout)
 
     @staticmethod
-    def delete(url: str, headers: dict[str, str] | None = None, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> _UrllibResponse:
+    def delete(
+        url: str,
+        headers: dict[str, str] | None = None,
+        timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    ) -> _UrllibResponse:
         """Send a DELETE request."""
         request = urllib.request.Request(url, headers=headers or {}, method="DELETE")
         return _UrllibRequests._open(request, timeout)
@@ -79,9 +92,13 @@ class _UrllibRequests:
         """Open a urllib request and normalize HTTP errors into response objects."""
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                return _UrllibResponse(response.status, response.read().decode("utf-8", errors="replace"))
+                return _UrllibResponse(
+                    response.status, response.read().decode("utf-8", errors="replace")
+                )
         except urllib.error.HTTPError as exc:
-            return _UrllibResponse(exc.code, exc.read().decode("utf-8", errors="replace"))
+            return _UrllibResponse(
+                exc.code, exc.read().decode("utf-8", errors="replace")
+            )
 
 
 def _http_client() -> Any:
@@ -89,7 +106,9 @@ def _http_client() -> Any:
     return requests or _UrllibRequests
 
 
-def _env_int(name: str, default: int, *, minimum: int | None = None, maximum: int | None = None) -> int:
+def _env_int(
+    name: str, default: int, *, minimum: int | None = None, maximum: int | None = None
+) -> int:
     """Read an integer environment variable with optional bounds."""
     value = os.getenv(name)
     try:
@@ -121,7 +140,9 @@ def _timeout() -> int:
 
 def _max_message_chars() -> int:
     """Return the maximum allowed channel post size."""
-    return _env_int("OPEN_WEBUI_MAX_MESSAGE_CHARS", DEFAULT_MAX_MESSAGE_CHARS, minimum=1)
+    return _env_int(
+        "OPEN_WEBUI_MAX_MESSAGE_CHARS", DEFAULT_MAX_MESSAGE_CHARS, minimum=1
+    )
 
 
 def _max_retries() -> int:
@@ -155,7 +176,10 @@ def _config_error() -> dict[str, Any] | None:
     if not _api_key():
         missing.append("OPEN_WEBUI_API_KEY")
     if missing:
-        return {"ok": False, "error": f"Missing required environment variable(s): {', '.join(missing)}"}
+        return {
+            "ok": False,
+            "error": f"Missing required environment variable(s): {', '.join(missing)}",
+        }
     return None
 
 
@@ -179,7 +203,9 @@ def _error_message(status_code: int, payload: Any, text: str) -> str:
     return f"Open WebUI API returned HTTP {status_code}"
 
 
-def _request(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+def _request(
+    method: str, path: str, body: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Send an authenticated Open WebUI request with retry handling."""
     config_error = _config_error()
     if config_error:
@@ -195,18 +221,29 @@ def _request(method: str, path: str, body: dict[str, Any] | None = None) -> dict
     for attempt in range(1, _max_retries() + 1):
         try:
             if method == "GET":
-                response = client.get(url, headers=_headers(api_key), timeout=_timeout())
+                response = client.get(
+                    url, headers=_headers(api_key), timeout=_timeout()
+                )
             elif method == "POST":
-                response = client.post(url, headers=_headers(api_key), json=body or {}, timeout=_timeout())
+                response = client.post(
+                    url, headers=_headers(api_key), json=body or {}, timeout=_timeout()
+                )
             elif method == "DELETE":
-                response = client.delete(url, headers=_headers(api_key), timeout=_timeout())
+                response = client.delete(
+                    url, headers=_headers(api_key), timeout=_timeout()
+                )
             else:
                 return {"ok": False, "error": f"Unsupported HTTP method: {method}"}
 
             status_code = int(getattr(response, "status_code", 0))
             payload, text = _parse_response(response)
             if 200 <= status_code < 300:
-                return {"ok": True, "status_code": status_code, "json": payload, "text": _redact(text)}
+                return {
+                    "ok": True,
+                    "status_code": status_code,
+                    "json": payload,
+                    "text": _redact(text),
+                }
 
             last_error = {
                 "ok": False,
@@ -215,7 +252,9 @@ def _request(method: str, path: str, body: dict[str, Any] | None = None) -> dict
                 "response_text": _redact(text),
             }
             if isinstance(payload, dict):
-                last_error["response"] = json.loads(_redact(json.dumps(payload, ensure_ascii=False)))
+                last_error["response"] = json.loads(
+                    _redact(json.dumps(payload, ensure_ascii=False))
+                )
             if status_code < 500 or attempt >= _max_retries():
                 return last_error
         except Exception as exc:
@@ -279,7 +318,11 @@ def list_models() -> dict[str, Any]:
     if not result.get("ok"):
         return result
     payload = result.get("json")
-    return {"ok": True, "models": _items_from_payload(payload, "models"), "response": payload}
+    return {
+        "ok": True,
+        "models": _items_from_payload(payload, "models"),
+        "response": payload,
+    }
 
 
 def get_model(model_id: str) -> dict[str, Any]:
@@ -291,23 +334,36 @@ def get_model(model_id: str) -> dict[str, Any]:
     return {"ok": True, "model_id": model_id, "model": result.get("json")}
 
 
-def list_chats(skip: int = 0, limit: int = 50, include_archived: bool = False) -> dict[str, Any]:
+def list_chats(
+    skip: int = 0, limit: int = 50, include_archived: bool = False
+) -> dict[str, Any]:
     """Fetch chats visible to the configured Open WebUI user."""
-    path = _path_with_query(DEFAULT_CHATS_PATH, {"skip": skip, "limit": limit, "include_archived": include_archived})
+    path = _path_with_query(
+        DEFAULT_CHATS_PATH,
+        {"skip": skip, "limit": limit, "include_archived": include_archived},
+    )
     result = _request("GET", path)
     if not result.get("ok"):
         return result
     payload = result.get("json")
-    return {"ok": True, "chats": _items_from_payload(payload, "chats"), "response": payload}
+    return {
+        "ok": True,
+        "chats": _items_from_payload(payload, "chats"),
+        "response": payload,
+    }
 
 
-def list_all_chats(page_size: int = 100, max_pages: int = 100, include_archived: bool = False) -> dict[str, Any]:
+def list_all_chats(
+    page_size: int = 100, max_pages: int = 100, include_archived: bool = False
+) -> dict[str, Any]:
     """Fetch all visible chats by paging until a short page is returned."""
     chats: list[Any] = []
     pages = 0
     for page in range(max_pages):
         skip = page * page_size
-        result = list_chats(skip=skip, limit=page_size, include_archived=include_archived)
+        result = list_chats(
+            skip=skip, limit=page_size, include_archived=include_archived
+        )
         if not result.get("ok"):
             return result
         page_items = result.get("chats", [])
@@ -322,12 +378,18 @@ def list_all_chats(page_size: int = 100, max_pages: int = 100, include_archived:
 
 def list_all_db_chats() -> dict[str, Any]:
     """Fetch all chats in the database. Requires an admin API key and admin export access."""
-    path = _ensure_path(os.getenv("OPEN_WEBUI_CHATS_ALL_DB_PATH", DEFAULT_CHATS_ALL_DB_PATH))
+    path = _ensure_path(
+        os.getenv("OPEN_WEBUI_CHATS_ALL_DB_PATH", DEFAULT_CHATS_ALL_DB_PATH)
+    )
     result = _request("GET", path)
     if not result.get("ok"):
         return result
     payload = result.get("json")
-    return {"ok": True, "chats": _items_from_payload(payload, "chats"), "response": payload}
+    return {
+        "ok": True,
+        "chats": _items_from_payload(payload, "chats"),
+        "response": payload,
+    }
 
 
 def get_chat(chat_id: str) -> dict[str, Any]:
@@ -350,7 +412,9 @@ def create_chat(chat: dict[str, Any]) -> dict[str, Any]:
 
 def update_chat(chat_id: str, chat: dict[str, Any]) -> dict[str, Any]:
     """Update an existing chat with a partial or full chat payload."""
-    result = _request("POST", f"{DEFAULT_CHATS_PATH}/{urllib.parse.quote(chat_id)}", {"chat": chat})
+    result = _request(
+        "POST", f"{DEFAULT_CHATS_PATH}/{urllib.parse.quote(chat_id)}", {"chat": chat}
+    )
     if not result.get("ok"):
         return result
     return {"ok": True, "chat_id": chat_id, "response": result.get("json")}
@@ -364,7 +428,9 @@ def post_chat_completion(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "response": result.get("json"), "text": result.get("text")}
 
 
-def add_user_message_to_chat(chat_id: str, content: str, model: str, *, stream: bool = True) -> dict[str, Any]:
+def add_user_message_to_chat(
+    chat_id: str, content: str, model: str, *, stream: bool = True
+) -> dict[str, Any]:
     """Append a user message plus assistant placeholder, then trigger completion."""
     if not content or not content.strip():
         return {"ok": False, "error": "content is required"}
@@ -373,9 +439,17 @@ def add_user_message_to_chat(chat_id: str, content: str, model: str, *, stream: 
         return chat_result
 
     chat_payload = chat_result.get("chat")
-    chat_data = chat_payload.get("chat") if isinstance(chat_payload, dict) and isinstance(chat_payload.get("chat"), dict) else chat_payload
+    chat_data = (
+        chat_payload.get("chat")
+        if isinstance(chat_payload, dict) and isinstance(chat_payload.get("chat"), dict)
+        else chat_payload
+    )
     if not isinstance(chat_data, dict):
-        return {"ok": False, "error": "chat payload is not an object", "details": chat_payload}
+        return {
+            "ok": False,
+            "error": "chat payload is not an object",
+            "details": chat_payload,
+        }
 
     history = chat_data.setdefault("history", {})
     if not isinstance(history, dict):
@@ -427,9 +501,17 @@ def add_user_message_to_chat(chat_id: str, content: str, model: str, *, stream: 
         return update_result
 
     completion_messages = []
-    for message in flat_messages if isinstance(flat_messages, list) else messages_by_id.values():
-        if isinstance(message, dict) and message.get("role") in {"user", "assistant", "system"} and message.get("content"):
-            completion_messages.append({"role": message["role"], "content": message["content"]})
+    for message in (
+        flat_messages if isinstance(flat_messages, list) else messages_by_id.values()
+    ):
+        if (
+            isinstance(message, dict)
+            and message.get("role") in {"user", "assistant", "system"}
+            and message.get("content")
+        ):
+            completion_messages.append(
+                {"role": message["role"], "content": message["content"]}
+            )
     if not completion_messages or completion_messages[-1].get("content") != content:
         completion_messages.append({"role": "user", "content": content})
 
@@ -459,12 +541,18 @@ def list_knowledge() -> dict[str, Any]:
     if not result.get("ok"):
         return result
     payload = result.get("json")
-    return {"ok": True, "knowledge": _items_from_payload(payload, "knowledge"), "response": payload}
+    return {
+        "ok": True,
+        "knowledge": _items_from_payload(payload, "knowledge"),
+        "response": payload,
+    }
 
 
 def get_knowledge(knowledge_id: str) -> dict[str, Any]:
     """Fetch one knowledge base by ID."""
-    result = _request("GET", f"{DEFAULT_KNOWLEDGE_PATH}/{urllib.parse.quote(knowledge_id)}")
+    result = _request(
+        "GET", f"{DEFAULT_KNOWLEDGE_PATH}/{urllib.parse.quote(knowledge_id)}"
+    )
     if not result.get("ok"):
         return result
     return {"ok": True, "knowledge_id": knowledge_id, "knowledge": result.get("json")}
@@ -484,7 +572,11 @@ def list_all_knowledge(include_details: bool = False) -> dict[str, Any]:
             detailed.append(item)
             continue
         detail = get_knowledge(str(item["id"]))
-        detailed.append(detail.get("knowledge") if detail.get("ok") else {"summary": item, "error": detail})
+        detailed.append(
+            detail.get("knowledge")
+            if detail.get("ok")
+            else {"summary": item, "error": detail}
+        )
     return {"ok": True, "knowledge": detailed, "count": len(detailed)}
 
 
@@ -493,7 +585,11 @@ def _channels_from_payload(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         candidates = payload
     elif isinstance(payload, dict):
-        candidates = payload.get("channels") if isinstance(payload.get("channels"), list) else payload.get("data", [])
+        candidates = (
+            payload.get("channels")
+            if isinstance(payload.get("channels"), list)
+            else payload.get("data", [])
+        )
     else:
         candidates = []
 
@@ -561,14 +657,20 @@ def resolve_channel_id(channel: str) -> dict[str, Any]:
 
     for item in channels_result.get("channels", []):
         if item.get("name") == channel_name:
-            return {"ok": True, "channel_id": str(item["id"]), "channel_name": channel_name}
+            return {
+                "ok": True,
+                "channel_id": str(item["id"]),
+                "channel_name": channel_name,
+            }
 
     return {"ok": False, "error": f"channel not found: {channel_name}"}
 
 
 def _post_path(channel_id: str) -> str:
     """Build the channel message post path for a channel ID."""
-    template = os.getenv("OPEN_WEBUI_CHANNELS_POST_PATH_TEMPLATE", DEFAULT_POST_PATH_TEMPLATE)
+    template = os.getenv(
+        "OPEN_WEBUI_CHANNELS_POST_PATH_TEMPLATE", DEFAULT_POST_PATH_TEMPLATE
+    )
     path = template.format(channel_id=channel_id)
     return path if path.startswith("/") else f"/{path}"
 
@@ -611,7 +713,9 @@ def list_channel_messages(
     if not resolved.get("ok"):
         return resolved
     channel_id = str(resolved["channel_id"])
-    path = _path_with_query(f"/api/v1/channels/{channel_id}/messages", {"skip": skip, "limit": limit})
+    path = _path_with_query(
+        f"/api/v1/channels/{channel_id}/messages", {"skip": skip, "limit": limit}
+    )
     result = _request("GET", path)
     if not result.get("ok"):
         return result
@@ -644,7 +748,9 @@ def list_all_channel_messages(
     pages = 0
     for page in range(max_pages):
         skip = page * page_size
-        result = list_channel_messages(channel_id, skip=skip, limit=page_size, include_threads=include_threads)
+        result = list_channel_messages(
+            channel_id, skip=skip, limit=page_size, include_threads=include_threads
+        )
         if not result.get("ok"):
             return result
         page_items = result.get("messages", [])
@@ -654,10 +760,18 @@ def list_all_channel_messages(
         pages += 1
         if len(page_items) < page_size:
             break
-    return {"ok": True, "channel_id": channel_id, "messages": messages, "count": len(messages), "pages": pages}
+    return {
+        "ok": True,
+        "channel_id": channel_id,
+        "messages": messages,
+        "count": len(messages),
+        "pages": pages,
+    }
 
 
-def get_message_thread(channel: str, message_id: str, skip: int = 0, limit: int = 50) -> dict[str, Any]:
+def get_message_thread(
+    channel: str, message_id: str, skip: int = 0, limit: int = 50
+) -> dict[str, Any]:
     """Fetch replies for a channel message thread."""
     resolved = resolve_channel_id(channel)
     if not resolved.get("ok"):
@@ -671,7 +785,12 @@ def get_message_thread(channel: str, message_id: str, skip: int = 0, limit: int 
     if not result.get("ok"):
         return result
     messages = result.get("json")
-    return {"ok": True, "channel_id": channel_id, "message_id": message_id, "messages": messages if isinstance(messages, list) else []}
+    return {
+        "ok": True,
+        "channel_id": channel_id,
+        "message_id": message_id,
+        "messages": messages if isinstance(messages, list) else [],
+    }
 
 
 def get_file_metadata(file_id: str) -> dict[str, Any]:
@@ -690,11 +809,21 @@ def get_file_content(file_id: str, *, data_content: bool = True) -> dict[str, An
         if result.get("ok"):
             payload = result.get("json")
             content = payload.get("content") if isinstance(payload, dict) else None
-            return {"ok": True, "file_id": file_id, "content": content or "", "response": payload}
+            return {
+                "ok": True,
+                "file_id": file_id,
+                "content": content or "",
+                "response": payload,
+            }
     result = _request("GET", f"/api/v1/files/{encoded}/content")
     if not result.get("ok"):
         return result
-    return {"ok": True, "file_id": file_id, "content": result.get("text", ""), "response": result.get("json")}
+    return {
+        "ok": True,
+        "file_id": file_id,
+        "content": result.get("text", ""),
+        "response": result.get("json"),
+    }
 
 
 def post_message(
@@ -710,7 +839,10 @@ def post_message(
         return {"ok": False, "error": "content is required"}
     max_chars = _max_message_chars()
     if len(content) > max_chars:
-        return {"ok": False, "error": f"content exceeds OPEN_WEBUI_MAX_MESSAGE_CHARS ({max_chars})"}
+        return {
+            "ok": False,
+            "error": f"content exceeds OPEN_WEBUI_MAX_MESSAGE_CHARS ({max_chars})",
+        }
 
     meta = {"source": "hermes-agent", "skill": "open-webui-skill", **(metadata or {})}
     request_body: dict[str, Any] = {"content": content, "meta": meta}
@@ -720,10 +852,18 @@ def post_message(
         request_body["parent_id"] = thread_id
 
     if dry_run:
-        preview_channel = channel.strip() if channel else os.getenv("OPEN_WEBUI_DEFAULT_CHANNEL", "").strip()
+        preview_channel = (
+            channel.strip()
+            if channel
+            else os.getenv("OPEN_WEBUI_DEFAULT_CHANNEL", "").strip()
+        )
         if not preview_channel:
             return {"ok": False, "error": "channel is required"}
-        preview_channel_id = preview_channel if _looks_like_channel_id(preview_channel) else _normalize_channel_name(preview_channel)
+        preview_channel_id = (
+            preview_channel
+            if _looks_like_channel_id(preview_channel)
+            else _normalize_channel_name(preview_channel)
+        )
         return {
             "ok": True,
             "dry_run": True,
@@ -748,7 +888,12 @@ def post_message(
 
     payload = result.get("json")
     response: dict[str, Any] = payload if isinstance(payload, dict) else {}
-    output = {"ok": True, "channel_id": channel_id, "message_id": _message_id(payload), "response": response}
+    output = {
+        "ok": True,
+        "channel_id": channel_id,
+        "message_id": _message_id(payload),
+        "response": response,
+    }
     if not response and result.get("text"):
         output["response_text"] = str(result["text"])
     return output
@@ -767,7 +912,9 @@ def _read_content(path_or_text: str | None) -> str:
 def _add_channel_subcommands(subparsers: argparse._SubParsersAction) -> None:
     """Register channel-related CLI subcommands."""
     channels_parser = subparsers.add_parser("channels")
-    channels_subparsers = channels_parser.add_subparsers(dest="channels_command", required=True)
+    channels_subparsers = channels_parser.add_subparsers(
+        dest="channels_command", required=True
+    )
 
     channels_subparsers.add_parser("list")
 
@@ -820,14 +967,23 @@ def _handle_channels_command(args: argparse.Namespace) -> dict[str, Any]:
                 max_pages=args.max_pages,
                 include_threads=args.include_threads,
             )
-        return list_channel_messages(args.channel, skip=args.skip, limit=args.limit, include_threads=args.include_threads)
+        return list_channel_messages(
+            args.channel,
+            skip=args.skip,
+            limit=args.limit,
+            include_threads=args.include_threads,
+        )
     if args.channels_command == "thread":
-        return get_message_thread(args.channel, args.message_id, skip=args.skip, limit=args.limit)
+        return get_message_thread(
+            args.channel, args.message_id, skip=args.skip, limit=args.limit
+        )
     if args.channels_command == "file-content":
         return get_file_content(args.file_id, data_content=not args.raw)
     if args.channels_command == "post":
         content = _read_content(args.file) if args.file else _read_content(args.content)
-        return post_message(args.channel, content, thread_id=args.thread_id, dry_run=args.dry_run)
+        return post_message(
+            args.channel, content, thread_id=args.thread_id, dry_run=args.dry_run
+        )
     return {"ok": False, "error": f"unknown channels command: {args.channels_command}"}
 
 
@@ -837,7 +993,9 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     models_parser = subparsers.add_parser("models")
-    models_subparsers = models_parser.add_subparsers(dest="models_command", required=True)
+    models_subparsers = models_parser.add_subparsers(
+        dest="models_command", required=True
+    )
     models_subparsers.add_parser("list")
     model_get_parser = models_subparsers.add_parser("get")
     model_get_parser.add_argument("--model", required=True)
@@ -868,7 +1026,9 @@ def _build_parser() -> argparse.ArgumentParser:
     chat_completion_parser.add_argument("--payload-json", required=True)
 
     knowledge_parser = subparsers.add_parser("knowledge")
-    knowledge_subparsers = knowledge_parser.add_subparsers(dest="knowledge_command", required=True)
+    knowledge_subparsers = knowledge_parser.add_subparsers(
+        dest="knowledge_command", required=True
+    )
     knowledge_list_parser = knowledge_subparsers.add_parser("list")
     knowledge_list_parser.add_argument("--details", action="store_true")
     knowledge_get_parser = knowledge_subparsers.add_parser("get")
@@ -888,15 +1048,26 @@ def main(argv: list[str] | None = None) -> int:
         elif args.models_command == "get":
             result = get_model(args.model)
         else:
-            result = {"ok": False, "error": f"unknown models command: {args.models_command}"}
+            result = {
+                "ok": False,
+                "error": f"unknown models command: {args.models_command}",
+            }
     elif args.command == "chats":
         if args.chats_command == "list":
             if args.all_users:
                 result = list_all_db_chats()
             elif args.all:
-                result = list_all_chats(page_size=args.page_size, max_pages=args.max_pages, include_archived=args.include_archived)
+                result = list_all_chats(
+                    page_size=args.page_size,
+                    max_pages=args.max_pages,
+                    include_archived=args.include_archived,
+                )
             else:
-                result = list_chats(skip=args.skip, limit=args.limit, include_archived=args.include_archived)
+                result = list_chats(
+                    skip=args.skip,
+                    limit=args.limit,
+                    include_archived=args.include_archived,
+                )
         elif args.chats_command == "get":
             result = get_chat(args.chat_id)
         elif args.chats_command == "create":
@@ -904,18 +1075,26 @@ def main(argv: list[str] | None = None) -> int:
         elif args.chats_command == "update":
             result = update_chat(args.chat_id, _json_file_or_text(args.chat_json))
         elif args.chats_command == "post":
-            result = add_user_message_to_chat(args.chat_id, args.content, args.model, stream=not args.no_stream)
+            result = add_user_message_to_chat(
+                args.chat_id, args.content, args.model, stream=not args.no_stream
+            )
         elif args.chats_command == "completion":
             result = post_chat_completion(_json_file_or_text(args.payload_json))
         else:
-            result = {"ok": False, "error": f"unknown chats command: {args.chats_command}"}
+            result = {
+                "ok": False,
+                "error": f"unknown chats command: {args.chats_command}",
+            }
     elif args.command == "knowledge":
         if args.knowledge_command == "list":
             result = list_all_knowledge(include_details=args.details)
         elif args.knowledge_command == "get":
             result = get_knowledge(args.knowledge_id)
         else:
-            result = {"ok": False, "error": f"unknown knowledge command: {args.knowledge_command}"}
+            result = {
+                "ok": False,
+                "error": f"unknown knowledge command: {args.knowledge_command}",
+            }
     elif args.command == "channels":
         result = _handle_channels_command(args)
     else:
@@ -925,4 +1104,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

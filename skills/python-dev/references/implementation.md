@@ -25,13 +25,15 @@ Pythonコードやスクリプトを実装・修正するときはこの規約�
 - `logging.basicConfig` などのformatには `%(pathname)s`、`%(funcName)s`、`%(lineno)d` を含め、対象ファイル、対象関数、対象行を追跡できるようにする。
 - `print` はCLIの最終結果など、標準出力が外部仕様になっている場合だけに限定する。
 - 例外を握りつぶさず、原因が追えるように `logger.exception` または適切なログレベルを使う。
+- CLI の終了処理は `raise SystemExit(...)` を直接書かず、`sys.exit(...)` を使う。`os._exit` は cleanup を飛ばすため、通常のCLI終了には使わない。
 
 ## スクリプト入口
 
-Pythonを1ファイルのスクリプトとして実装する場合は、`main` 関数に引数解析、環境変数読み込み、主要ロジック呼び出し、簡単な例外処理を置く。`if __name__ == "__main__"` には `time.perf_counter` によるad-hocな実行時間計測、`main` 呼び出し、`raise SystemExit(...)` による終了処理を置く。
+Pythonを1ファイルのスクリプトとして実装する場合は、`main` 関数に引数解析、環境変数読み込み、主要ロジック呼び出し、簡単な例外処理を置く。`if __name__ == "__main__"` には `time.perf_counter` によるad-hocな実行時間計測、`main` 呼び出し、`sys.exit(...)` による終了処理を置く。
 
 ```python
 import logging
+import sys
 import time
 from typing import Annotated
 
@@ -133,5 +135,5 @@ if __name__ == "__main__":
     exit_code = main()
     elapsed = time.perf_counter() - started_at
     logger.info("Elapsed time: %.3fs", elapsed)
-    raise SystemExit(exit_code)
+    sys.exit(exit_code)
 ```

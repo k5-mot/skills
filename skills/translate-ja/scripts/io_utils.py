@@ -29,8 +29,14 @@ def utc_now_iso() -> str:
 def configure_logging(level_name: str | None = None) -> None:
     """標準 logger の出力形式とレベルを設定する。"""
 
-    level = getattr(logging, (level_name or os.environ.get("LOG_LEVEL") or "INFO").upper(), logging.INFO)
-    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    level = getattr(
+        logging,
+        (level_name or os.environ.get("LOG_LEVEL") or "INFO").upper(),
+        logging.INFO,
+    )
+    logging.basicConfig(
+        level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+    )
 
 
 def mask_secret(value: Any) -> str:
@@ -38,7 +44,9 @@ def mask_secret(value: Any) -> str:
 
     text = str(value)
     for pattern in SECRET_PATTERNS:
-        text = pattern.sub(lambda match: match.group(1) + "***" if match.groups() else "***", text)
+        text = pattern.sub(
+            lambda match: match.group(1) + "***" if match.groups() else "***", text
+        )
     return text
 
 
@@ -80,7 +88,9 @@ def atomic_write_text(path: str | Path, text: str) -> None:
 
     target = Path(path)
     ensure_parent(target)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+    )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as file:
             file.write(text)
@@ -108,7 +118,9 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
 def write_jsonl(path: str | Path, rows: Iterable[dict[str, Any]]) -> None:
     """JSONL を atomic に書き込む。"""
 
-    text = "".join(json.dumps(row, ensure_ascii=False, sort_keys=False) + "\n" for row in rows)
+    text = "".join(
+        json.dumps(row, ensure_ascii=False, sort_keys=False) + "\n" for row in rows
+    )
     atomic_write_text(path, text)
 
 

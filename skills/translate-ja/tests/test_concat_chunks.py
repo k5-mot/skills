@@ -27,4 +27,6 @@ def test_concat_chunks_uses_translated_text_and_normalizes_typo() -> None:
 def test_validate_markdown_reports_unclosed_code_fence() -> None:
     """閉じていない code fence は警告になる。"""
 
-    assert validate_markdown("```python\nprint('x')\n") == ["fenced code block is not closed"]
+    assert validate_markdown("```python\nprint('x')\n") == [
+        "fenced code block is not closed"
+    ]
