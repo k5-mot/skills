@@ -962,6 +962,44 @@ def openai_client(settings: OpenAISettings) -> Any:
     )
 
 
+def openai_retry_options() -> tuple[int, float, float]:
+    """OpenAI 互換 API 呼び出しの retry 設定を環境変数から返す。
+
+    Args:
+        なし。
+
+    Returns:
+        最大試行回数、初回待機秒数、最大待機秒数。
+    """
+
+    attempts = max(1, int(os.environ.get("TRANSLATE_JA_V2_OPENAI_MAX_ATTEMPTS", "6")))
+    initial_delay = max(
+        0.0, float(os.environ.get("TRANSLATE_JA_V2_OPENAI_RETRY_INITIAL_SECONDS", "5"))
+    )
+    max_delay = max(
+        initial_delay,
+        float(os.environ.get("TRANSLATE_JA_V2_OPENAI_RETRY_MAX_SECONDS", "60")),
+    )
+    return attempts, initial_delay, max_delay
+
+
+def is_retryable_openai_error(exc: Exception) -> bool:
+    """OpenAI 互換 API の一時的な失敗かを判定する。
+
+    Args:
+        exc: API 呼び出しで発生した例外。
+
+    Returns:
+        再試行してよい一時エラーなら True。
+    """
+
+    status_code = getattr(exc, "status_code", None)
+    if status_code in {408, 409, 429, 500, 502, 503, 504}:
+        return True
+    exc_name = exc.__class__.__name__
+    return exc_name in {"APIConnectionError", "APITimeoutError", "RateLimitError"}
+
+
 def chat_text(
     client: Any, settings: OpenAISettings, messages: list[dict[str, Any]]
 ) -> str:
@@ -979,9 +1017,25 @@ def chat_text(
         RuntimeError: 応答本文が空の場合。
     """
 
-    completion = client.chat.completions.create(
-        model=settings.model, messages=messages, temperature=0.0
-    )
+    max_attempts, initial_delay, max_delay = openai_retry_options()
+    for attempt in range(1, max_attempts + 1):
+        try:
+            completion = client.chat.completions.create(
+                model=settings.model, messages=messages, temperature=0.0
+            )
+            break
+        except Exception as exc:
+            if attempt >= max_attempts or not is_retryable_openai_error(exc):
+                raise
+            delay = min(max_delay, initial_delay * (2 ** (attempt - 1)))
+            LOGGER.warning(
+                "Retrying OpenAI request attempt=%s max_attempts=%s delay=%.1f error=%s",
+                attempt,
+                max_attempts,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
     choices = getattr(completion, "choices", None)
     if not choices:
         raise RuntimeError("OpenAI response has no choices")
@@ -2153,7 +2207,7 @@ def cli(
             env=env,
         )
     )
-    raise typer.Exit(exit_code)
+    raise typer.Exit(code=exit_code)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2169,11 +2223,12 @@ def main(argv: list[str] | None = None) -> int:
         環境変数、ログ、Docling/OpenAI/pandoc、成果物ファイルを扱う。
     """
 
+    command = typer.main.get_command(app)
     try:
-        app(args=argv, standalone_mode=False)
+        result = command.main(args=argv, standalone_mode=False)
     except typer.Exit as exc:
         return int(exc.exit_code or 0)
-    return 0
+    return int(result or 0)
 
 
 if __name__ == "__main__":

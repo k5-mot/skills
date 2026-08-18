@@ -17,12 +17,14 @@ from translate import (  # noqa: E402
     apply_reorder_texts,
     apply_structure_patches,
     build_structure_messages,
+    chat_text,
     collect_page_image_paths,
     clean_text,
     convert_markdown_to_docx,
     docling_form_payload,
     env_bool,
     load_dotenv_file,
+    main,
     normalize_document,
     OpenAISettings,
     PipelineOptions,
@@ -83,6 +85,40 @@ class FakeClient:
         """
 
         self.chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+
+class RetryableOpenAIError(Exception):
+    """OpenAI SDK の retryable error 風の例外。"""
+
+    status_code = 429
+
+
+class FlakyCompletions:
+    """初回だけ retryable error を返す fake completions。"""
+
+    def __init__(self) -> None:
+        """呼び出し回数を初期化する。"""
+
+        self.calls = 0
+
+    def create(self, **_kwargs):  # noqa: ANN001, ANN202
+        """初回は 429 相当、2回目は成功応答を返す。"""
+
+        self.calls += 1
+        if self.calls == 1:
+            raise RetryableOpenAIError("rate limited")
+        return _completion("再試行後")
+
+
+class FlakyClient:
+    """retry test 用の最小 fake client。"""
+
+    def __init__(self) -> None:
+        """FlakyClient を初期化する。"""
+
+        completions = FlakyCompletions()
+        self.completions = completions
+        self.chat = type("Chat", (), {"completions": completions})()
 
 
 def _completion(text: str):
@@ -158,6 +194,28 @@ def test_translate_text_item_renders_heading_bilingual_and_body_ja_only() -> Non
 
     assert heading["translate_ja_v2"]["render_text"] == "Strategy / 戦略"
     assert body["translate_ja_v2"]["render_text"] == "部隊が移動する。"
+
+
+def test_chat_text_retries_retryable_openai_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """429 などの一時エラーは設定回数内で再試行する。"""
+
+    client = FlakyClient()
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+    monkeypatch.setenv("TRANSLATE_JA_V2_OPENAI_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("TRANSLATE_JA_V2_OPENAI_RETRY_INITIAL_SECONDS", "0")
+    monkeypatch.setenv("TRANSLATE_JA_V2_OPENAI_RETRY_MAX_SECONDS", "0")
+
+    result = chat_text(client, settings, [{"role": "user", "content": "hello"}])
+
+    assert result == "再試行後"
+    assert client.completions.calls == 2
 
 
 def test_render_markdown_uses_translated_json_fields() -> None:
@@ -312,6 +370,19 @@ def test_env_bool_parses_common_truthy_values(monkeypatch: pytest.MonkeyPatch) -
 
     assert env_bool("TRANSLATE_TEST_BOOL", default=False) is True
     assert env_bool("TRANSLATE_TEST_MISSING", default=True) is True
+
+
+def test_main_returns_pipeline_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Typer CLI は pipeline の終了コードを main の戻り値へ伝播する。"""
+
+    input_path = tmp_path / "source.pdf"
+    input_path.write_bytes(b"%PDF-1.4")
+
+    monkeypatch.setattr("translate.execute_pipeline", lambda _options: 7)
+
+    assert main(["--input", str(input_path)]) == 7
 
 
 def test_convert_markdown_to_docx_falls_back_without_pandoc(

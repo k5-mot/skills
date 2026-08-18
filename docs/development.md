@@ -24,3 +24,9 @@ pnpm dlx @fission-ai/openspec@latest init --tools agents --profile custom --forc
 - Logger messages must be written in English.
 - Logging formats must include the source file, function, and line, for example `%(pathname)s`, `%(funcName)s`, and `%(lineno)d`.
 - Use `sys.exit(...)` for CLI termination instead of directly raising `SystemExit`; avoid `os._exit` for normal CLI shutdown.
+
+## translate-ja-v2 Runtime Settings
+
+- `TRANSLATE_JA_V2_OPENAI_MAX_ATTEMPTS` controls Chat Completions retry attempts for retryable 408/409/429/5xx/API timeout/API connection failures. Default: `6`.
+- `TRANSLATE_JA_V2_OPENAI_RETRY_INITIAL_SECONDS` controls the first retry delay. Default: `5`.
+- `TRANSLATE_JA_V2_OPENAI_RETRY_MAX_SECONDS` caps exponential backoff delay. Default: `60`.
