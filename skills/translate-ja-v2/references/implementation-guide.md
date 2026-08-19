@@ -78,8 +78,7 @@ JSON と artifact は直接本ファイルへ書かない。必ず一時ファ�
 python skills/translate-ja-v2/scripts/translate.py \
   --input ./docs/source/source.pdf \
   --output-dir ./docs/source/output-v2 \
-  --template ./skills/translate-ja/template.dotx \
-  --async-docling
+  --template ./skills/translate-ja-v2/template.dotx
 ```
 
 `--skip-docx` は pandoc がない環境で JSON/Markdown まで検証したい場合に使う。`--skip-vlm` は VLM 構造補正を止めた deterministic test に使う。

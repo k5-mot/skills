@@ -49,7 +49,7 @@ TRANSLATE_JA_V2_OPENAI_RETRY_MAX_SECONDS=60
 uv run python skills/translate-ja-v2/scripts/translate.py \
   --input ./sample.pdf \
   --output-dir ./output-v2/sample \
-  --template ./skills/translate-ja/template.dotx
+  --template ./skills/translate-ja-v2/template.dotx
 ```
 
 VLM 構造補正や docx 生成を省いて軽く検証する場合は次のようにします。

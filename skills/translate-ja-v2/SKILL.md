@@ -22,7 +22,7 @@ PDF/Word から Docling Serve で JSON/PNG を作り、JSON 上で表・コー�
 python skills/translate-ja-v2/scripts/translate.py \
   --input ./docs/source/source.pdf \
   --output-dir ./docs/source/output-v2 \
-  --template ./skills/translate-ja/template.dotx
+  --template ./skills/translate-ja-v2/template.dotx
 ```
 
 Word 変換を後回しにする場合だけ `--skip-docx` を使う。構造補正を明示的に止める検証では `--skip-vlm` を使う。
