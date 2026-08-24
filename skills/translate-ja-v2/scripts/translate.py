@@ -2097,35 +2097,6 @@ app = typer.Typer(
 )
 
 
-def execute_pipeline(options: PipelineOptions) -> int:
-    """translate-ja-v2 パイプラインを実行して終了コードを返す。
-
-    Args:
-        options: CLI オプション。
-
-    Returns:
-        プロセス終了コード。
-
-    Side Effects:
-        環境変数、ログ、Docling/OpenAI/pandoc、成果物ファイルを扱う。
-    """
-
-    load_dotenv_file(options.env)
-    configure_logging()
-    try:
-        paths = run_pipeline(options)
-    except KeyboardInterrupt:
-        LOGGER.error("translate-ja-v2 was interrupted")
-        return 130
-    except Exception as exc:
-        LOGGER.exception("translate-ja-v2 failed: %s", exc)
-        return 1
-    LOGGER.info(
-        "translate-ja-v2 completed markdown=%s docx=%s", paths.markdown, paths.docx
-    )
-    return 0
-
-
 @app.command()
 def cli(
     input: Annotated[Path, typer.Option(help="PDF/Word input path")],
@@ -2165,19 +2136,29 @@ def cli(
         パイプラインを実行し、終了コードを Typer へ渡す。
     """
 
-    exit_code = execute_pipeline(
-        PipelineOptions(
-            input=input,
-            output_dir=output_dir,
-            output=output,
-            template=template,
-            skip_vlm=skip_vlm,
-            skip_docx=skip_docx,
-            force=force,
-            env=env,
-        )
+    options = PipelineOptions(
+        input=input,
+        output_dir=output_dir,
+        output=output,
+        template=template,
+        skip_vlm=skip_vlm,
+        skip_docx=skip_docx,
+        force=force,
+        env=env,
     )
-    raise typer.Exit(code=exit_code)
+    load_dotenv_file(options.env)
+    configure_logging()
+    try:
+        paths = run_pipeline(options)
+    except KeyboardInterrupt:
+        LOGGER.error("translate-ja-v2 was interrupted")
+        raise typer.Exit(code=130) from None
+    except Exception as exc:
+        LOGGER.exception("translate-ja-v2 failed: %s", exc)
+        raise typer.Exit(code=1) from None
+    LOGGER.info(
+        "translate-ja-v2 completed markdown=%s docx=%s", paths.markdown, paths.docx
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

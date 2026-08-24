@@ -641,17 +641,20 @@ def test_env_bool_parses_common_truthy_values(monkeypatch: pytest.MonkeyPatch) -
     assert env_bool("TRANSLATE_TEST_MISSING", default=True) is True
 
 
-def test_main_returns_pipeline_exit_code(
+def test_main_returns_error_for_pipeline_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Typer CLI は pipeline の終了コードを main の戻り値へ伝播する。"""
+    """Typer CLI は pipeline の例外を終了コード1にする。"""
 
     input_path = tmp_path / "source.pdf"
     input_path.write_bytes(b"%PDF-1.4")
 
-    monkeypatch.setattr("translate.execute_pipeline", lambda _options: 7)
+    def fail(_options: PipelineOptions) -> None:
+        raise RuntimeError("test failure")
 
-    assert main(["--input", str(input_path)]) == 7
+    monkeypatch.setattr("translate.run_pipeline", fail)
+
+    assert main(["--input", str(input_path)]) == 1
 
 
 def test_convert_markdown_to_docx_requires_pandoc(
