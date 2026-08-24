@@ -198,12 +198,10 @@ def env_first(*names: str, default: str | None = None) -> str | None:
     return default
 
 
-def require_docling_settings(timeout_seconds: int | None = None) -> DoclingSettings:
+def require_docling_settings() -> DoclingSettings:
     """Docling Serve の必須設定を環境変数から読み込む。
 
     Args:
-        timeout_seconds: CLI から上書きする timeout 秒数。
-
     Returns:
         DoclingSettings。
 
@@ -220,17 +218,14 @@ def require_docling_settings(timeout_seconds: int | None = None) -> DoclingSetti
     return DoclingSettings(
         server_url=server_url.rstrip("/"),
         api_key=api_key,
-        timeout_seconds=timeout_seconds
-        or int(os.environ.get("DOCLING_TIMEOUT_SECONDS", "21600")),
+        timeout_seconds=int(os.environ.get("DOCLING_TIMEOUT_SECONDS", "21600")),
     )
 
 
-def require_openai_settings(timeout_seconds: int | None = None) -> OpenAISettings:
+def require_openai_settings() -> OpenAISettings:
     """OpenAI 互換 API の必須設定を環境変数から読み込む。
 
     Args:
-        timeout_seconds: CLI から上書きする timeout 秒数。
-
     Returns:
         OpenAISettings。
 
@@ -251,8 +246,7 @@ def require_openai_settings(timeout_seconds: int | None = None) -> OpenAISetting
         base_url=base_url.rstrip("/"),
         api_key=api_key,
         model=model,
-        timeout_seconds=timeout_seconds
-        or int(os.environ.get("OPENAI_TIMEOUT_SECONDS", "1800")),
+        timeout_seconds=int(os.environ.get("OPENAI_TIMEOUT_SECONDS", "1800")),
     )
 
 
