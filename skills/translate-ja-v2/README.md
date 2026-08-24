@@ -130,7 +130,7 @@ OpenAI 互換 API で texts と tables を要素単位に翻訳し、原文を�
 
 翻訳済み JSON の texts、tables、pictures をページ順に並べ、見出し、fenced code block、Markdown 表、画像参照として `<stem>.ja.md` へ書き出します。
 
-`--skip-docx` がなければ pandoc を呼び出し、`--template` の dotx/docx を reference document にして `<stem>.ja.docx` を生成します。pandoc がない環境では最小構成の docx へ fallback しますが、この場合は reference document のスタイルを適用できません。
+`--skip-docx` がなければ pandoc を呼び出し、`--template` の dotx/docx を reference document にして `<stem>.ja.docx` を生成します。pandoc がない環境で docx 生成を指定するとエラーになるため、pandoc を導入するか `--skip-docx` を指定してください。
 
 各 JSON、Markdown、Docling zip 内の artifact は、一時ファイルへ書き込んだ後に flush、`fsync`、`os.replace()` の順で置き換えます。例外発生時は stack trace をログへ出力して終了コード `1`、中断時は `130` を返します。
 

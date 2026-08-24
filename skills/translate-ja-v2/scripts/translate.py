@@ -2033,20 +2033,17 @@ def convert_markdown_to_docx(
         なし。
 
     Side Effects:
-        pandoc または組み込み fallback で docx を作成する。
+        pandoc で docx を作成する。
+
+    Raises:
+        RuntimeError: pandoc が利用できない場合。
     """
 
     markdown_path = markdown_path.resolve()
     docx_path = docx_path.resolve()
     template_path = template_path.resolve() if template_path else None
     if shutil.which("pandoc") is None:
-        if template_path:
-            LOGGER.warning(
-                "pandoc is unavailable; writing minimal docx without reference doc template=%s",
-                template_path,
-            )
-        write_minimal_docx(markdown_path, docx_path)
-        return
+        raise RuntimeError("pandoc is required for docx output; use --skip-docx")
     command = [
         "pandoc",
         str(markdown_path),
@@ -2063,193 +2060,6 @@ def convert_markdown_to_docx(
         command.extend(["--reference-doc", str(template_path)])
     docx_path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(command, check=True, cwd=markdown_path.parent)
-
-
-def write_minimal_docx(markdown_path: Path, docx_path: Path) -> None:
-    """Markdown から最低限の Word docx package を生成する。
-
-    Args:
-        markdown_path: 入力 Markdown。
-        docx_path: 出力 docx。
-
-    Returns:
-        なし。
-
-    Side Effects:
-        docx_path に zip 形式の Word 文書を書き込む。
-    """
-
-    markdown = markdown_path.read_text(encoding="utf-8")
-    paragraphs = markdown_to_docx_paragraphs(markdown)
-    document_xml = build_docx_document_xml(paragraphs)
-    docx_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{docx_path.name}.", suffix=".tmp", dir=str(docx_path.parent)
-    )
-    os.close(fd)
-    try:
-        with zipfile.ZipFile(
-            tmp_name, "w", compression=zipfile.ZIP_DEFLATED
-        ) as archive:
-            archive.writestr("[Content_Types].xml", docx_content_types_xml())
-            archive.writestr("_rels/.rels", docx_root_rels_xml())
-            archive.writestr("word/document.xml", document_xml)
-            archive.writestr("word/styles.xml", docx_styles_xml())
-        os.replace(tmp_name, docx_path)
-    finally:
-        if os.path.exists(tmp_name):
-            os.unlink(tmp_name)
-
-
-def markdown_to_docx_paragraphs(markdown: str) -> list[tuple[str | None, str]]:
-    """Markdown を docx paragraph の style と text に分解する。
-
-    Args:
-        markdown: 入力 Markdown。
-
-    Returns:
-        paragraph style 名と本文のタプル配列。style が不要な場合は None。
-    """
-
-    paragraphs: list[tuple[str | None, str]] = []
-    for raw_line in markdown.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        heading = re.match(r"^(#{1,6})\s+(.+)$", line)
-        if heading:
-            level = min(len(heading.group(1)), 6)
-            paragraphs.append((f"Heading{level}", heading.group(2).strip()))
-            continue
-        paragraphs.append((None, line))
-    return paragraphs or [(None, "")]
-
-
-def build_docx_document_xml(paragraphs: list[tuple[str | None, str]]) -> str:
-    """Word document.xml を構築する。
-
-    Args:
-        paragraphs: paragraph style 名と本文のタプル配列。
-
-    Returns:
-        WordprocessingML document.xml。
-    """
-
-    body = "".join(build_docx_paragraph_xml(style, text) for style, text in paragraphs)
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-        f"<w:body>{body}"
-        '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
-        '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" '
-        'w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>'
-        "</w:body></w:document>"
-    )
-
-
-def build_docx_paragraph_xml(style: str | None, text: str) -> str:
-    """単一 paragraph の WordprocessingML を構築する。
-
-    Args:
-        style: paragraph style 名。None の場合は標準 paragraph。
-        text: paragraph 本文。
-
-    Returns:
-        paragraph XML。
-    """
-
-    style_xml = (
-        f'<w:pPr><w:pStyle w:val="{escape_xml_attr(style)}"/></w:pPr>' if style else ""
-    )
-    return f'<w:p>{style_xml}<w:r><w:t xml:space="preserve">{escape_xml_text(text)}</w:t></w:r></w:p>'
-
-
-def escape_xml_text(value: str) -> str:
-    """XML text node 用に特殊文字を escape する。
-
-    Args:
-        value: escape 対象文字列。
-
-    Returns:
-        XML text node に安全に埋め込める文字列。
-    """
-
-    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def escape_xml_attr(value: str) -> str:
-    """XML attribute 用に特殊文字を escape する。
-
-    Args:
-        value: escape 対象文字列。
-
-    Returns:
-        XML attribute に安全に埋め込める文字列。
-    """
-
-    return escape_xml_text(value).replace('"', "&quot;")
-
-
-def docx_content_types_xml() -> str:
-    """最小 docx package の content types XML を返す。
-
-    Returns:
-        [Content_Types].xml の内容。
-    """
-
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-        '<Default Extension="xml" ContentType="application/xml"/>'
-        '<Override PartName="/word/document.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-        '<Override PartName="/word/styles.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
-        "</Types>"
-    )
-
-
-def docx_root_rels_xml() -> str:
-    """最小 docx package の root relationships XML を返す。
-
-    Returns:
-        _rels/.rels の内容。
-    """
-
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        '<Relationship Id="rId1" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
-        'Target="word/document.xml"/>'
-        "</Relationships>"
-    )
-
-
-def docx_styles_xml() -> str:
-    """最小 docx package の styles XML を返す。
-
-    Returns:
-        word/styles.xml の内容。
-    """
-
-    heading_styles = "".join(
-        f'<w:style w:type="paragraph" w:styleId="Heading{level}">'
-        f'<w:name w:val="heading {level}"/>'
-        f'<w:basedOn w:val="Normal"/><w:next w:val="Normal"/>'
-        f"<w:qFormat/><w:pPr><w:keepNext/></w:pPr>"
-        f'<w:rPr><w:b/><w:sz w:val="{max(20, 36 - level * 2)}"/></w:rPr>'
-        f"</w:style>"
-        for level in range(1, 7)
-    )
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-        '<w:style w:type="paragraph" w:default="1" w:styleId="Normal">'
-        '<w:name w:val="Normal"/></w:style>'
-        f"{heading_styles}</w:styles>"
-    )
 
 
 def update_manifest(path: Path, event: dict[str, Any]) -> None:

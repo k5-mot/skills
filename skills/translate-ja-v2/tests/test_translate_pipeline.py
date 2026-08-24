@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 import os
-import zipfile
 import logging
 from pathlib import Path
 from typing import Any
@@ -763,26 +762,17 @@ def test_main_returns_pipeline_exit_code(
     assert main(["--input", str(input_path)]) == 7
 
 
-def test_convert_markdown_to_docx_falls_back_without_pandoc(
+def test_convert_markdown_to_docx_requires_pandoc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """pandoc がない環境では標準ライブラリ fallback で docx を生成する。"""
+    """pandoc がない環境では明示エラーにする。"""
 
     markdown_path = tmp_path / "source.md"
     docx_path = tmp_path / "source.docx"
-    markdown_path.write_text("# Title\n\nBody & details\n", encoding="utf-8")
     monkeypatch.setattr("translate.shutil.which", lambda _name: None)
 
-    convert_markdown_to_docx(markdown_path, docx_path, None)
-
-    with zipfile.ZipFile(docx_path, "r") as archive:
-        names = set(archive.namelist())
-        document = archive.read("word/document.xml").decode("utf-8")
-    assert "[Content_Types].xml" in names
-    assert "_rels/.rels" in names
-    assert "word/styles.xml" in names
-    assert "Heading1" in document
-    assert "Body &amp; details" in document
+    with pytest.raises(RuntimeError, match="pandoc is required"):
+        convert_markdown_to_docx(markdown_path, docx_path, None)
 
 
 def test_convert_markdown_to_docx_runs_pandoc_from_markdown_directory(
