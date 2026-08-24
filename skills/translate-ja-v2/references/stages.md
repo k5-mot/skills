@@ -69,7 +69,7 @@ VLM に禁止する操作:
 - 翻訳
 - validation 不能な任意 JSON の返却
 
-VLM 応答は JSON object として受け取り、`apply_structure_patches` で `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用する。添付画像数は `TRANSLATE_JA_V2_MAX_VLM_IMAGES` で抑制できる。
+VLM 応答は JSON object として受け取り、`apply_structure_patches` で `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用する。添付画像数は先頭12枚に制限する。
 
 ## 04 Translate
 

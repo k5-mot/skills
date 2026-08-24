@@ -29,6 +29,13 @@ LOGGER = logging.getLogger("translate-ja-v2")
 HEADING_LABELS = {"title", "section_header", "heading", "header"}
 CODE_LABELS = {"code", "program_listing"}
 URL_RE = re.compile(r"https?://[^\s)>\"]+")
+LOG_LEVEL = "INFO"
+DOCLING_TIMEOUT_SECONDS = 21600
+OPENAI_TIMEOUT_SECONDS = 1800
+OPENAI_MAX_ATTEMPTS = 6
+OPENAI_RETRY_INITIAL_SECONDS = 5.0
+OPENAI_RETRY_MAX_SECONDS = 60.0
+MAX_VLM_IMAGES = 12
 
 
 class FrozenModel(BaseModel):
@@ -138,7 +145,7 @@ def configure_logging(level_name: str | None = None) -> None:
     """標準 logging を translate-ja-v2 用に設定する。
 
     Args:
-        level_name: 明示するログレベル。None の場合は LOG_LEVEL 環境変数を使う。
+        level_name: 明示するログレベル。None の場合は INFO を使う。
 
     Returns:
         なし。
@@ -149,7 +156,7 @@ def configure_logging(level_name: str | None = None) -> None:
 
     level = getattr(
         logging,
-        (level_name or os.environ.get("LOG_LEVEL") or "INFO").upper(),
+        (level_name or LOG_LEVEL).upper(),
         logging.INFO,
     )
     logging.basicConfig(
@@ -218,7 +225,7 @@ def require_docling_settings() -> DoclingSettings:
     return DoclingSettings(
         server_url=server_url.rstrip("/"),
         api_key=api_key,
-        timeout_seconds=int(os.environ.get("DOCLING_TIMEOUT_SECONDS", "21600")),
+        timeout_seconds=DOCLING_TIMEOUT_SECONDS,
     )
 
 
@@ -246,25 +253,8 @@ def require_openai_settings() -> OpenAISettings:
         base_url=base_url.rstrip("/"),
         api_key=api_key,
         model=model,
-        timeout_seconds=int(os.environ.get("OPENAI_TIMEOUT_SECONDS", "1800")),
+        timeout_seconds=OPENAI_TIMEOUT_SECONDS,
     )
-
-
-def env_bool(name: str, default: bool) -> bool:
-    """環境変数を bool として解釈する。
-
-    Args:
-        name: 環境変数名。
-        default: 環境変数が未設定または空の場合の値。
-
-    Returns:
-        真偽値として解釈した結果。
-    """
-
-    value = os.environ.get(name)
-    if value is None or not value.strip():
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def utc_now_iso() -> str:
@@ -397,24 +387,23 @@ def docling_form_payload(document_timeout: int) -> dict[str, str | list[str]]:
         httpx に渡す form field。
     """
 
-    do_ocr = env_bool("DOCLING_DO_OCR", default=False)
-    force_ocr = env_bool("DOCLING_FORCE_OCR", default=False)
     payload: dict[str, str | list[str]] = {
         "to_formats": "json",
-        "do_ocr": str(do_ocr).lower(),
-        "force_ocr": str(force_ocr).lower(),
+        "do_ocr": "false",
+        "force_ocr": "false",
+        "ocr_preset": "tesseract",
+        "ocr_lang": ["jpn", "jpn_vert", "eng"],
+        "do_table_structure": "true",
+        "table_mode": "accurate",
+        "table_cell_matching": "true",
+        "do_code_enrichment": "true",
+        "do_formula_enrichment": "true",
         "document_timeout": str(document_timeout),
         "include_images": "true",
         "include_page_images": "true",
         "image_export_mode": "referenced",
         "target_type": "zip",
     }
-    if do_ocr or force_ocr:
-        payload["ocr_preset"] = os.environ.get("DOCLING_OCR_PRESET", "tesseract")
-        languages = os.environ.get("DOCLING_OCR_LANGS", "jpn,jpn_vert,eng")
-        payload["ocr_lang"] = [
-            part.strip() for part in languages.split(",") if part.strip()
-        ]
     return payload
 
 
@@ -1122,27 +1111,6 @@ def openai_client(settings: OpenAISettings) -> Any:
     )
 
 
-def openai_retry_options() -> tuple[int, float, float]:
-    """OpenAI 互換 API 呼び出しの retry 設定を環境変数から返す。
-
-    Args:
-        なし。
-
-    Returns:
-        最大試行回数、初回待機秒数、最大待機秒数。
-    """
-
-    attempts = max(1, int(os.environ.get("TRANSLATE_JA_V2_OPENAI_MAX_ATTEMPTS", "6")))
-    initial_delay = max(
-        0.0, float(os.environ.get("TRANSLATE_JA_V2_OPENAI_RETRY_INITIAL_SECONDS", "5"))
-    )
-    max_delay = max(
-        initial_delay,
-        float(os.environ.get("TRANSLATE_JA_V2_OPENAI_RETRY_MAX_SECONDS", "60")),
-    )
-    return attempts, initial_delay, max_delay
-
-
 def is_retryable_openai_error(exc: Exception) -> bool:
     """OpenAI 互換 API の一時的な失敗かを判定する。
 
@@ -1177,21 +1145,23 @@ def chat_text(
         RuntimeError: 応答本文が空の場合。
     """
 
-    max_attempts, initial_delay, max_delay = openai_retry_options()
-    for attempt in range(1, max_attempts + 1):
+    for attempt in range(1, OPENAI_MAX_ATTEMPTS + 1):
         try:
             completion = client.chat.completions.create(
                 model=settings.model, messages=messages, temperature=0.0
             )
             break
         except Exception as exc:
-            if attempt >= max_attempts or not is_retryable_openai_error(exc):
+            if attempt >= OPENAI_MAX_ATTEMPTS or not is_retryable_openai_error(exc):
                 raise
-            delay = min(max_delay, initial_delay * (2 ** (attempt - 1)))
+            delay = min(
+                OPENAI_RETRY_MAX_SECONDS,
+                OPENAI_RETRY_INITIAL_SECONDS * (2 ** (attempt - 1)),
+            )
             LOGGER.warning(
                 "Retrying OpenAI request attempt=%s max_attempts=%s delay=%.1f error=%s",
                 attempt,
-                max_attempts,
+                OPENAI_MAX_ATTEMPTS,
                 delay,
                 exc,
             )
@@ -1314,10 +1284,9 @@ def collect_page_image_paths(artifacts_dir: Path | None) -> list[Path]:
 
     if artifacts_dir is None or not artifacts_dir.exists():
         return []
-    max_images = int(os.environ.get("TRANSLATE_JA_V2_MAX_VLM_IMAGES", "12"))
     pngs = sorted(path for path in artifacts_dir.glob("*.png") if path.is_file())
     page_pngs = [path for path in pngs if "page" in path.name.lower()]
-    return (page_pngs or pngs)[:max_images]
+    return (page_pngs or pngs)[:MAX_VLM_IMAGES]
 
 
 def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:

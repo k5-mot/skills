@@ -29,8 +29,7 @@ pnpm dlx @fission-ai/openspec@latest init --tools agents --profile custom --forc
 
 - Pipeline phases are concrete `ParseStage`, `NormalizeStage`, `StructureStage`, `TranslateStage`, `RenderStage`, and `DocxStage` classes in `scripts/translate.py`; `run_pipeline()` owns their execution order. Do not add a common stage base class, factory, or generic runner unless interchangeable implementations require one.
 - Docling PDF/Word conversion must use `/v1/convert/file/async`; do not call `/v1/convert/file` for PDF-to-JSON conversion.
+- Docling requests must always enable table structure, table cell matching, code enrichment, and formula enrichment, using `accurate` table mode.
 - Docling async polling logs must include the poll count and status on every poll.
 - Normalize must correct text reading order from `prov[].page_no` and `prov[].bbox` before Structure invokes the VLM. `--skip-vlm` skips only the second-stage VLM correction, not coordinate correction.
-- `TRANSLATE_JA_V2_OPENAI_MAX_ATTEMPTS` controls Chat Completions retry attempts for retryable 408/409/429/5xx/API timeout/API connection failures. Default: `6`.
-- `TRANSLATE_JA_V2_OPENAI_RETRY_INITIAL_SECONDS` controls the first retry delay. Default: `5`.
-- `TRANSLATE_JA_V2_OPENAI_RETRY_MAX_SECONDS` caps exponential backoff delay. Default: `60`.
+- translate-ja-v2 timeouts, OCR settings, OpenAI retry settings, VLM image limit, and log level are fixed constants in `scripts/translate.py`, not environment variables.

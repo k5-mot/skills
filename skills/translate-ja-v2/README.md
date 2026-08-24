@@ -26,20 +26,9 @@ OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=your-model
 ```
 
-必要に応じて timeout も設定できます。
+Docling Serve の表構造、セル対応、コード、数式の認識は常に有効です。表構造の解析モードには `accurate` を使います。
 
-```dotenv
-DOCLING_TIMEOUT_SECONDS=21600
-OPENAI_TIMEOUT_SECONDS=1800
-```
-
-OpenAI 互換 API が 429 や一時的な 5xx を返す場合は、Chat Completions 呼び出しを指数バックオフで再試行します。必要に応じて次の値を調整できます。
-
-```dotenv
-TRANSLATE_JA_V2_OPENAI_MAX_ATTEMPTS=6
-TRANSLATE_JA_V2_OPENAI_RETRY_INITIAL_SECONDS=5
-TRANSLATE_JA_V2_OPENAI_RETRY_MAX_SECONDS=60
-```
+timeout、OCR、OpenAI retry、VLM 添付画像数、ログレベルは `translate.py` 内の固定値を使います。OpenAI 互換 API が 429 や一時的な 5xx を返した場合は、最大6回、5秒から最大60秒までの指数バックオフで再試行します。
 
 ### ▶️ 3. 翻訳パイプラインを実行する
 

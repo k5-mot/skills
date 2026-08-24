@@ -24,7 +24,6 @@ from translate import (  # noqa: E402
     convert_with_docling,
     DoclingSettings,
     docling_form_payload,
-    env_bool,
     load_dotenv_file,
     main,
     normalize_document,
@@ -374,7 +373,7 @@ def test_translate_text_item_renders_heading_bilingual_and_body_ja_only() -> Non
 def test_chat_text_retries_retryable_openai_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """429 などの一時エラーは設定回数内で再試行する。"""
+    """429 などの一時エラーは固定された待機時間で再試行する。"""
 
     client = FlakyClient()
     settings = OpenAISettings(
@@ -383,14 +382,14 @@ def test_chat_text_retries_retryable_openai_errors(
         model="fake",
         timeout_seconds=1,
     )
-    monkeypatch.setenv("TRANSLATE_JA_V2_OPENAI_MAX_ATTEMPTS", "2")
-    monkeypatch.setenv("TRANSLATE_JA_V2_OPENAI_RETRY_INITIAL_SECONDS", "0")
-    monkeypatch.setenv("TRANSLATE_JA_V2_OPENAI_RETRY_MAX_SECONDS", "0")
+    delays: list[float] = []
+    monkeypatch.setattr("translate.time.sleep", delays.append)
 
     result = chat_text(client, settings, [{"role": "user", "content": "hello"}])
 
     assert result == "再試行後"
     assert client.completions.calls == 2
+    assert delays == [5.0]
 
 
 def test_render_markdown_uses_translated_json_fields() -> None:
@@ -508,34 +507,27 @@ def test_load_dotenv_file_uses_python_dotenv(
     assert os.environ["OPENAI_MODEL"] == "test-model"
 
 
-def test_docling_payload_disables_ocr_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Docling payload は OCR を既定で無効にし、必要時だけ言語を送る。"""
-
-    monkeypatch.delenv("DOCLING_DO_OCR", raising=False)
-    monkeypatch.delenv("DOCLING_FORCE_OCR", raising=False)
+def test_docling_payload_uses_fixed_ocr_settings() -> None:
+    """Docling payload は固定された OCR 設定を使う。"""
 
     payload = docling_form_payload(120)
 
     assert payload["do_ocr"] == "false"
     assert payload["force_ocr"] == "false"
-    assert "ocr_lang" not in payload
+    assert payload["ocr_preset"] == "tesseract"
+    assert payload["ocr_lang"] == ["jpn", "jpn_vert", "eng"]
 
 
-def test_docling_payload_adds_ocr_languages_when_enabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """OCR 有効時は DOCLING_OCR_LANGS の言語を Docling payload に入れる。"""
-
-    monkeypatch.setenv("DOCLING_DO_OCR", "true")
-    monkeypatch.setenv("DOCLING_OCR_LANGS", "eng,jpn")
+def test_docling_payload_enables_document_enrichment() -> None:
+    """表構造、セル対応、コード、数式認識を常に有効にする。"""
 
     payload = docling_form_payload(120)
 
-    assert payload["do_ocr"] == "true"
-    assert payload["ocr_preset"] == "tesseract"
-    assert payload["ocr_lang"] == ["eng", "jpn"]
+    assert payload["do_table_structure"] == "true"
+    assert payload["table_mode"] == "accurate"
+    assert payload["table_cell_matching"] == "true"
+    assert payload["do_code_enrichment"] == "true"
+    assert payload["do_formula_enrichment"] == "true"
 
 
 def test_convert_with_docling_uses_async_endpoint(
@@ -630,15 +622,6 @@ def test_poll_docling_task_logs_poll_count_each_time(
     assert output_zip.read_bytes() == b"zip-bytes"
     assert "poll_count=1 status=processing" in caplog.text
     assert "poll_count=2 status=success" in caplog.text
-
-
-def test_env_bool_parses_common_truthy_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    """env_bool は一般的な truthy 文字列を True として解釈する。"""
-
-    monkeypatch.setenv("TRANSLATE_TEST_BOOL", "yes")
-
-    assert env_bool("TRANSLATE_TEST_BOOL", default=False) is True
-    assert env_bool("TRANSLATE_TEST_MISSING", default=True) is True
 
 
 def test_main_returns_error_for_pipeline_failure(

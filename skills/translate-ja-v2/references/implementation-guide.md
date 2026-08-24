@@ -53,11 +53,11 @@ output-v2/
 
 - `DOCLING_SERVER_URL` または `DOCLING_SERVE_URL`
 - `DOCLING_API_KEY` または `DOCLING_SERVE_API_KEY`
-- `DOCLING_TIMEOUT_SECONDS`
 - `OPENAI_BASE_URL`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
-- `OPENAI_TIMEOUT_SECONDS`
+
+timeout、OCR、OpenAI retry、VLM 添付画像数、ログレベルは `scripts/translate.py` 内の固定値とする。
 
 ## Atomic Write
 
