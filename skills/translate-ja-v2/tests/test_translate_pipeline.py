@@ -162,6 +162,37 @@ def _completion(text: str):
     return type("Completion", (), {"choices": [choice]})()
 
 
+def _text_item(
+    index: int,
+    text: str,
+    *,
+    top: int | None = None,
+    bottom: int | None = None,
+    page: int = 1,
+    origin: str = "BOTTOMLEFT",
+    label: str | None = None,
+) -> dict[str, Any]:
+    """bbox 付きの最小 Docling text item を作る。"""
+
+    item: dict[str, Any] = {"self_ref": f"#/texts/{index}", "text": text}
+    if label:
+        item["label"] = label
+    if top is not None and bottom is not None:
+        item["prov"] = [
+            {
+                "page_no": page,
+                "bbox": {
+                    "l": 72,
+                    "t": top,
+                    "r": 200,
+                    "b": bottom,
+                    "coord_origin": origin,
+                },
+            }
+        ]
+    return item
+
+
 def test_clean_text_preserves_url_and_compacts_noise() -> None:
     """URL を壊さずに過剰な記号と空白を縮約する。"""
 
@@ -211,8 +242,34 @@ def test_normalize_document_marks_code_and_cleans_table_cells() -> None:
     assert len(patches) == 2
 
 
-def test_normalize_document_reorders_bottomleft_bbox_and_updates_refs() -> None:
-    """Normalize は BOTTOMLEFT bbox で読み順と JSON 参照を補正する。"""
+@pytest.mark.parametrize(
+    ("origin", "lower", "upper"),
+    [("BOTTOMLEFT", (300, 280), (700, 680)), ("TOPLEFT", (500, 520), (100, 120))],
+)
+def test_normalize_document_orders_bbox_and_preserves_missing_slot(
+    origin: str, lower: tuple[int, int], upper: tuple[int, int]
+) -> None:
+    """Normalize は座標原点に応じて読み順を補正する。"""
+
+    data = {
+        "texts": [
+            _text_item(0, "Lower", top=lower[0], bottom=lower[1], origin=origin),
+            _text_item(1, "No coordinates"),
+            _text_item(2, "Upper", top=upper[0], bottom=upper[1], origin=origin),
+        ]
+    }
+
+    normalized, _patches = normalize_document(data)
+
+    assert [item["text"] for item in normalized["texts"]] == [
+        "Upper",
+        "No coordinates",
+        "Lower",
+    ]
+
+
+def test_normalize_document_updates_refs_after_coordinate_reorder() -> None:
+    """Normalize は座標並べ替え後も JSON 参照を保つ。"""
 
     data = {
         "body": {
@@ -222,64 +279,12 @@ def test_normalize_document_reorders_bottomleft_bbox_and_updates_refs() -> None:
                 {"$ref": "#/texts/2"},
             ]
         },
-        "groups": [
-            {
-                "children": [
-                    {"$ref": "#/texts/0"},
-                    {"$ref": "#/texts/1"},
-                ]
-            }
-        ],
+        "groups": [{"children": [{"$ref": "#/texts/0"}, {"$ref": "#/texts/1"}]}],
         "links": [{"$ref": "#/texts/1"}],
         "texts": [
-            {
-                "self_ref": "#/texts/0",
-                "text": "Lower",
-                "prov": [
-                    {
-                        "page_no": 1,
-                        "bbox": {
-                            "l": 72,
-                            "t": 300,
-                            "r": 200,
-                            "b": 280,
-                            "coord_origin": "BOTTOMLEFT",
-                        },
-                    }
-                ],
-            },
-            {
-                "self_ref": "#/texts/1",
-                "text": "Upper",
-                "prov": [
-                    {
-                        "page_no": 1,
-                        "bbox": {
-                            "l": 72,
-                            "t": 700,
-                            "r": 200,
-                            "b": 680,
-                            "coord_origin": "BOTTOMLEFT",
-                        },
-                    }
-                ],
-            },
-            {
-                "self_ref": "#/texts/2",
-                "text": "Next page",
-                "prov": [
-                    {
-                        "page_no": 2,
-                        "bbox": {
-                            "l": 72,
-                            "t": 700,
-                            "r": 200,
-                            "b": 680,
-                            "coord_origin": "BOTTOMLEFT",
-                        },
-                    }
-                ],
-            },
+            _text_item(0, "Lower", top=300, bottom=280),
+            _text_item(1, "Upper", top=700, bottom=680),
+            _text_item(2, "Next page", top=700, bottom=680, page=2),
         ],
     }
 
@@ -309,101 +314,18 @@ def test_normalize_document_reorders_bottomleft_bbox_and_updates_refs() -> None:
     assert patches[0]["after"] == ["#/texts/1", "#/texts/0", "#/texts/2"]
 
 
-def test_normalize_document_supports_topleft_and_preserves_missing_bbox_slot() -> None:
-    """TOPLEFT bbox は小さい y を先にし、座標なし要素の位置は保つ。"""
-
-    data = {
-        "texts": [
-            {
-                "self_ref": "#/texts/0",
-                "text": "Lower",
-                "prov": [
-                    {
-                        "page_no": 1,
-                        "bbox": {
-                            "l": 72,
-                            "t": 500,
-                            "r": 200,
-                            "b": 520,
-                            "coord_origin": "TOPLEFT",
-                        },
-                    }
-                ],
-            },
-            {"self_ref": "#/texts/1", "text": "No coordinates"},
-            {
-                "self_ref": "#/texts/2",
-                "text": "Upper",
-                "prov": [
-                    {
-                        "page_no": 1,
-                        "bbox": {
-                            "l": 72,
-                            "t": 100,
-                            "r": 200,
-                            "b": 120,
-                            "coord_origin": "TOPLEFT",
-                        },
-                    }
-                ],
-            },
-        ]
-    }
-
-    normalized, _patches = normalize_document(data)
-
-    assert [item["text"] for item in normalized["texts"]] == [
-        "Upper",
-        "No coordinates",
-        "Lower",
-    ]
-
-
 def test_structure_messages_include_coordinate_corrected_bbox() -> None:
     """VLM には座標補正後の順序と bbox を渡す。"""
 
-    data = {
-        "texts": [
-            {
-                "self_ref": "#/texts/0",
-                "label": "paragraph",
-                "text": "Lower",
-                "prov": [
-                    {
-                        "page_no": 1,
-                        "bbox": {
-                            "l": 72,
-                            "t": 300,
-                            "r": 200,
-                            "b": 280,
-                            "coord_origin": "BOTTOMLEFT",
-                        },
-                    }
-                ],
-            },
-            {
-                "self_ref": "#/texts/1",
-                "label": "section_header",
-                "text": "Upper",
-                "prov": [
-                    {
-                        "page_no": 1,
-                        "bbox": {
-                            "l": 72,
-                            "t": 700,
-                            "r": 200,
-                            "b": 680,
-                            "coord_origin": "BOTTOMLEFT",
-                        },
-                    }
-                ],
-            },
-        ]
-    }
-    normalized, _patches = normalize_document(data)
-
-    messages = build_structure_messages(normalized)
-    content = messages[1]["content"]
+    normalized, _patches = normalize_document(
+        {
+            "texts": [
+                _text_item(0, "Lower", top=300, bottom=280, label="paragraph"),
+                _text_item(1, "Upper", top=700, bottom=680, label="section_header"),
+            ]
+        }
+    )
+    content = build_structure_messages(normalized)[1]["content"]
 
     assert isinstance(content, str)
     assert "座標補正済みDocling要素" in content
@@ -415,44 +337,14 @@ def test_structure_messages_include_coordinate_corrected_bbox() -> None:
 def test_skip_vlm_keeps_coordinate_normalization() -> None:
     """--skip-vlm は第2段階だけを省略し、Normalize の座標補正は保つ。"""
 
-    data = {
-        "texts": [
-            {
-                "self_ref": "#/texts/0",
-                "text": "Lower",
-                "prov": [
-                    {
-                        "page_no": 1,
-                        "bbox": {
-                            "l": 72,
-                            "t": 300,
-                            "r": 200,
-                            "b": 280,
-                            "coord_origin": "BOTTOMLEFT",
-                        },
-                    }
-                ],
-            },
-            {
-                "self_ref": "#/texts/1",
-                "text": "Upper",
-                "prov": [
-                    {
-                        "page_no": 1,
-                        "bbox": {
-                            "l": 72,
-                            "t": 700,
-                            "r": 200,
-                            "b": 680,
-                            "coord_origin": "BOTTOMLEFT",
-                        },
-                    }
-                ],
-            },
-        ]
-    }
-
-    normalized, _normalize_patches = normalize_document(data)
+    normalized, _patches = normalize_document(
+        {
+            "texts": [
+                _text_item(0, "Lower", top=300, bottom=280),
+                _text_item(1, "Upper", top=700, bottom=680),
+            ]
+        }
+    )
     structured, structure_patches = structure_document(normalized, skip_vlm=True)
 
     assert [item["text"] for item in structured["texts"]] == ["Upper", "Lower"]
