@@ -115,7 +115,6 @@ class PipelineOptions(FrozenModel):
         output_dir: 中間成果物の出力ディレクトリ。
         output: 最終 docx の出力パス。
         template: pandoc reference docx/dotx。
-        async_docling: 互換用オプション。Docling conversion は常に async endpoint を使う。
         skip_vlm: VLM による構造補正を省略するかどうか。
         skip_docx: docx 生成を省略するかどうか。
         force: 既存 Docling JSON があっても変換を再実行するかどうか。
@@ -129,7 +128,6 @@ class PipelineOptions(FrozenModel):
     output_dir: Path | None = None
     output: Path | None = None
     template: Path | None = None
-    async_docling: bool = True
     skip_vlm: bool = False
     skip_docx: bool = False
     force: bool = False
@@ -549,7 +547,7 @@ def poll_docling_task(
 
 
 def convert_with_docling(
-    input_path: Path, output_json: Path, artifacts_dir: Path, *, force_async: bool
+    input_path: Path, output_json: Path, artifacts_dir: Path
 ) -> None:
     """入力文書を Docling JSON と PNG artifacts へ変換する。
 
@@ -557,7 +555,6 @@ def convert_with_docling(
         input_path: PDF/Word などの入力文書。
         output_json: Docling JSON の保存先。
         artifacts_dir: PNG などの artifact 保存先。
-        force_async: 互換用引数。Docling conversion は常に async endpoint を使う。
 
     Returns:
         なし。
@@ -2086,7 +2083,6 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
             input_path,
             paths.docling_json,
             artifacts_dir,
-            force_async=True,
         )
         update_manifest(
             paths.manifest,
@@ -2204,9 +2200,6 @@ def cli(
     template: Annotated[
         Path | None, typer.Option(help="pandoc reference docx/dotx")
     ] = None,
-    async_docling: Annotated[
-        bool, typer.Option(help="deprecated; Docling conversion is always async")
-    ] = True,
     skip_vlm: Annotated[
         bool, typer.Option(help="skip VLM structure correction")
     ] = False,
@@ -2224,7 +2217,6 @@ def cli(
         output_dir: 中間成果物の出力ディレクトリ。
         output: 最終 docx の出力パス。
         template: pandoc reference docx/dotx。
-        async_docling: 互換用オプション。Docling conversion は常に async endpoint を使う。
         skip_vlm: VLM による構造補正を省略するかどうか。
         skip_docx: docx 生成を省略するかどうか。
         force: 既存 Docling JSON があっても変換を再実行するかどうか。
@@ -2243,7 +2235,6 @@ def cli(
             output_dir=output_dir,
             output=output,
             template=template,
-            async_docling=async_docling,
             skip_vlm=skip_vlm,
             skip_docx=skip_docx,
             force=force,

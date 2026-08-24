@@ -538,10 +538,10 @@ def test_docling_payload_adds_ocr_languages_when_enabled(
     assert payload["ocr_lang"] == ["eng", "jpn"]
 
 
-def test_convert_with_docling_always_uses_async_endpoint(
+def test_convert_with_docling_uses_async_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Docling 変換は force_async に関係なく async endpoint を使う。"""
+    """Docling 変換は async endpoint を使う。"""
 
     input_path = tmp_path / "source.pdf"
     output_json = tmp_path / "source.docling.json"
@@ -589,7 +589,7 @@ def test_convert_with_docling_always_uses_async_endpoint(
     monkeypatch.setattr("translate.poll_docling_task", fake_poll)
     monkeypatch.setattr("translate.extract_docling_zip", fake_extract)
 
-    convert_with_docling(input_path, output_json, artifacts_dir, force_async=False)
+    convert_with_docling(input_path, output_json, artifacts_dir)
 
     assert endpoints == ["http://docling.test/v1/convert/file/async"]
     assert output_json.exists()
@@ -723,8 +723,6 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         _input_path: Path,
         output_json: Path,
         artifacts_dir: Path,
-        *,
-        force_async: bool,
     ) -> None:
         """Docling Serve の代わりに最小 Docling JSON と page PNG を保存する。
 
@@ -732,13 +730,11 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             _input_path: 入力ファイル。
             output_json: Docling JSON 保存先。
             artifacts_dir: artifacts 保存先。
-            force_async: async 指定。
 
         Returns:
             なし。
         """
 
-        assert force_async is True
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         (artifacts_dir / "page_000001.png").write_bytes(b"png")
         write_json(
@@ -803,7 +799,6 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             output_dir=output_dir,
             output=None,
             template=None,
-            async_docling=False,
             skip_vlm=True,
             skip_docx=False,
             force=True,
