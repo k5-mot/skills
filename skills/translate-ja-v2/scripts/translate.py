@@ -761,71 +761,6 @@ def coordinate_sort_key(
     )
 
 
-def rewrite_json_references(value: Any, mapping: dict[str, str]) -> None:
-    """JSON tree 内の文字列参照を mapping に従って置き換える。
-
-    Args:
-        value: 書き換え対象の JSON value。
-        mapping: 古い JSON pointer から新しい pointer への対応。
-
-    Returns:
-        なし。
-
-    Side Effects:
-        value 内の dict/list を更新する。
-    """
-
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if isinstance(child, str) and child in mapping:
-                value[key] = mapping[child]
-            else:
-                rewrite_json_references(child, mapping)
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            if isinstance(child, str) and child in mapping:
-                value[index] = mapping[child]
-            else:
-                rewrite_json_references(child, mapping)
-
-
-def reorder_text_children(value: Any, rank_by_ref: dict[str, int]) -> None:
-    """body/group の children 内にある text 参照を指定順に並べ替える。
-
-    Args:
-        value: Docling JSON tree。
-        rank_by_ref: text ref ごとの新しい順位。
-
-    Returns:
-        なし。
-
-    Side Effects:
-        children 配列内の text ref 要素を更新する。
-    """
-
-    if isinstance(value, dict):
-        children = value.get("children")
-        if isinstance(children, list):
-            slots: list[int] = []
-            text_refs: list[dict[str, Any]] = []
-            for index, child in enumerate(children):
-                if not isinstance(child, dict):
-                    continue
-                child_dict = cast(dict[str, Any], child)
-                ref = child_dict.get("$ref")
-                if isinstance(ref, str) and ref in rank_by_ref:
-                    slots.append(index)
-                    text_refs.append(child_dict)
-            text_refs.sort(key=lambda child: rank_by_ref[cast(str, child["$ref"])])
-            for index, child in zip(slots, text_refs, strict=True):
-                children[index] = child
-        for child in value.values():
-            reorder_text_children(child, rank_by_ref)
-    elif isinstance(value, list):
-        for child in value:
-            reorder_text_children(child, rank_by_ref)
-
-
 def reorder_text_collection(data: dict[str, Any], ordered_refs: list[str]) -> bool:
     """texts とそれを参照する JSON pointer を整合性を保って並べ替える。
 
@@ -855,13 +790,40 @@ def reorder_text_collection(data: dict[str, Any], ordered_refs: list[str]) -> bo
     ):
         return False
     rank_by_ref = {ref: index for index, ref in enumerate(ordered_refs)}
-    reorder_text_children(data, rank_by_ref)
-    data["texts"] = [by_ref[ref] for ref in ordered_refs]
     ref_mapping = {
         old_ref: f"#/texts/{new_index}"
         for new_index, old_ref in enumerate(ordered_refs)
     }
-    rewrite_json_references(data, ref_mapping)
+
+    def update_refs(value: Any) -> None:
+        if isinstance(value, dict):
+            children = value.get("children")
+            if isinstance(children, list):
+                slots = [
+                    index
+                    for index, child in enumerate(children)
+                    if isinstance(child, dict) and child.get("$ref") in rank_by_ref
+                ]
+                ordered = sorted(
+                    (children[index] for index in slots),
+                    key=lambda child: rank_by_ref[child["$ref"]],
+                )
+                for index, child in zip(slots, ordered, strict=True):
+                    children[index] = child
+            for key, child in value.items():
+                if isinstance(child, str) and child in ref_mapping:
+                    value[key] = ref_mapping[child]
+                else:
+                    update_refs(child)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                if isinstance(child, str) and child in ref_mapping:
+                    value[index] = ref_mapping[child]
+                else:
+                    update_refs(child)
+
+    update_refs(data)
+    data["texts"] = [by_ref[ref] for ref in ordered_refs]
     return True
 
 
