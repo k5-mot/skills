@@ -1298,8 +1298,12 @@ def build_multimodal_content(
         return prompt
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     for path in image_paths:
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         content.append(
-            {"type": "image_url", "image_url": {"url": image_data_url(path)}}
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{encoded}"},
+            }
         )
     return content
 
@@ -1320,20 +1324,6 @@ def collect_page_image_paths(artifacts_dir: Path | None) -> list[Path]:
     pngs = sorted(path for path in artifacts_dir.glob("*.png") if path.is_file())
     page_pngs = [path for path in pngs if "page" in path.name.lower()]
     return (page_pngs or pngs)[:max_images]
-
-
-def image_data_url(path: Path) -> str:
-    """PNG ファイルを Chat Completions image_url 用 data URL にする。
-
-    Args:
-        path: PNG ファイル。
-
-    Returns:
-        data:image/png;base64,... 形式の URL。
-    """
-
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
 
 
 def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
