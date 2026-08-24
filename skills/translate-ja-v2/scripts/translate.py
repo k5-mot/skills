@@ -704,31 +704,6 @@ def coordinate_position(item: dict[str, Any]) -> dict[str, Any] | None:
     return min(positions, key=lambda position: (position[0], position[1]))[2]
 
 
-def coordinate_sort_key(
-    item: dict[str, Any], original_index: int
-) -> tuple[int, float, float, int]:
-    """Docling item のページ・縦・横座標による安定 sort key を返す。
-
-    Args:
-        item: Docling item。
-        original_index: 元の texts index。
-
-    Returns:
-        page、上からの位置、左からの位置、元 index の tuple。
-    """
-
-    position = coordinate_position(item)
-    if position is None:
-        pages = page_numbers(item)
-        return ((pages or [10**9])[0], float("inf"), float("inf"), original_index)
-    return (
-        cast(int, position["page"]),
-        cast(float, position["vertical"]),
-        cast(float, position["left"]),
-        original_index,
-    )
-
-
 def reorder_text_collection(data: dict[str, Any], ordered_refs: list[str]) -> bool:
     """texts とそれを参照する JSON pointer を整合性を保って並べ替える。
 
@@ -814,18 +789,24 @@ def normalize_coordinate_order(
     texts = data.get("texts")
     if not isinstance(texts, list):
         return
-    positioned: list[tuple[int, dict[str, Any]]] = []
+    positioned: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
     for index, item in enumerate(texts):
         if not isinstance(item, dict):
             continue
         item_dict = cast(dict[str, Any], item)
-        if coordinate_position(item_dict) is not None:
-            positioned.append((index, item_dict))
+        position = coordinate_position(item_dict)
+        if position is not None:
+            positioned.append((index, item_dict, position))
     if len(positioned) < 2:
         return
     sorted_items = sorted(
         positioned,
-        key=lambda entry: coordinate_sort_key(entry[1], entry[0]),
+        key=lambda entry: (
+            entry[2]["page"],
+            entry[2]["vertical"],
+            entry[2]["left"],
+            entry[0],
+        ),
     )
     original_ref_by_id = {
         id(item): self_ref(cast(dict[str, Any], item), "texts", index)
@@ -833,7 +814,7 @@ def normalize_coordinate_order(
         if isinstance(item, dict)
     }
     reordered = list(texts)
-    for target_index, (_, item) in zip(
+    for target_index, (_, item, _) in zip(
         (entry[0] for entry in positioned), sorted_items, strict=True
     ):
         reordered[target_index] = item
