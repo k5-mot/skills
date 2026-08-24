@@ -815,3 +815,13 @@ def test_run_pipeline_writes_json_markdown_and_docx(
     assert paths.markdown.read_text(encoding="utf-8").startswith("## Strategy / 戦略")
     assert "部隊が移動する。" in paths.markdown.read_text(encoding="utf-8")
     assert paths.docx.read_bytes() == b"docx"
+    manifest = read_json(paths.manifest)
+    assert [event["stage"] for event in manifest["events"]] == [
+        "start",
+        "docling",
+        "normalize",
+        "structure",
+        "translate",
+        "markdown",
+        "docx",
+    ]

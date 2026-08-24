@@ -27,6 +27,7 @@ pnpm dlx @fission-ai/openspec@latest init --tools agents --profile custom --forc
 
 ## translate-ja-v2 Runtime Settings
 
+- Pipeline phases are concrete `ParseStage`, `NormalizeStage`, `StructureStage`, `TranslateStage`, `RenderStage`, and `DocxStage` classes in `scripts/translate.py`; `run_pipeline()` owns their execution order. Do not add a common stage base class, factory, or generic runner unless interchangeable implementations require one.
 - Docling PDF/Word conversion must use `/v1/convert/file/async`; do not call `/v1/convert/file` for PDF-to-JSON conversion.
 - Docling async polling logs must include the poll count and status on every poll.
 - Normalize must correct text reading order from `prov[].page_no` and `prov[].bbox` before Structure invokes the VLM. `--skip-vlm` skips only the second-stage VLM correction, not coordinate correction.

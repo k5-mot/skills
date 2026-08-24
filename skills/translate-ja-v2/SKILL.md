@@ -44,7 +44,7 @@ output-v2/
 
 ## 実装方針
 
-1. 無駄な wrapper や package 階層を増やさず、まず [scripts/translate.py](scripts/translate.py) を修正する。
+1. 無駄な wrapper や package 階層を増やさず、[scripts/translate.py](scripts/translate.py) 内の具体的な stage クラスを修正する。共通基底クラスや factory は、複数実装の差し替えが必要になるまで追加しない。
 2. JSON 原文は上書きせず、翻訳情報は `translate_ja_v2` フィールドへ追加する。
 3. 見出しと表タイトルは `英語 / 日本語` で Markdown に出す。
 4. 本文は日本語訳のみ Markdown に出す。

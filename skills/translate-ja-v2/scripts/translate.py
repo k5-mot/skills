@@ -1984,6 +1984,152 @@ def update_manifest(path: Path, event: dict[str, Any]) -> None:
     write_json(path, manifest)
 
 
+class ParseStage(FrozenModel):
+    """入力文書を Docling JSON へ変換し、読み込む。"""
+
+    input_path: Path
+    paths: StagePaths
+    artifacts_dir: Path
+    force: bool
+
+    def run(self) -> dict[str, Any]:
+        """Docling JSON を返す。"""
+
+        if self.force or not self.paths.docling_json.exists():
+            LOGGER.info("Starting Docling conversion input=%s", self.input_path)
+            convert_with_docling(
+                self.input_path,
+                self.paths.docling_json,
+                self.artifacts_dir,
+            )
+            update_manifest(
+                self.paths.manifest,
+                {
+                    "stage": "docling",
+                    "output": str(self.paths.docling_json),
+                    "sha256": sha256_file(self.paths.docling_json),
+                },
+            )
+        document = read_json(self.paths.docling_json)
+        if not isinstance(document, dict):
+            raise ValueError("Docling JSON root must be an object")
+        return document
+
+
+class NormalizeStage(FrozenModel):
+    """座標に基づく決定論的補正を実行する。"""
+
+    paths: StagePaths
+
+    def run(self, document: dict[str, Any]) -> dict[str, Any]:
+        """正規化済み文書を返す。"""
+
+        normalized, patches = normalize_document(document)
+        write_json(self.paths.normalized_json, normalized)
+        update_manifest(
+            self.paths.manifest,
+            {
+                "stage": "normalize",
+                "output": str(self.paths.normalized_json),
+                "patches": len(patches),
+                "coordinate_patches": sum(
+                    patch.get("rule") == "bbox_reading_order" for patch in patches
+                ),
+            },
+        )
+        return normalized
+
+
+class StructureStage(FrozenModel):
+    """VLM による構造補正を実行する。"""
+
+    paths: StagePaths
+    artifacts_dir: Path
+    skip_vlm: bool
+
+    def run(self, document: dict[str, Any]) -> dict[str, Any]:
+        """構造補正済み文書を返す。"""
+
+        structured, patches = structure_document(
+            document,
+            skip_vlm=self.skip_vlm,
+            artifacts_dir=self.artifacts_dir,
+        )
+        write_json(self.paths.structured_json, structured)
+        update_manifest(
+            self.paths.manifest,
+            {
+                "stage": "structure",
+                "output": str(self.paths.structured_json),
+                "patches": len(patches),
+            },
+        )
+        return structured
+
+
+class TranslateStage(FrozenModel):
+    """文書要素を日本語へ翻訳する。"""
+
+    paths: StagePaths
+
+    def run(self, document: dict[str, Any]) -> dict[str, Any]:
+        """翻訳 metadata を付与した文書を返す。"""
+
+        translated = translate_document(document)
+        write_json(self.paths.translated_json, translated)
+        update_manifest(
+            self.paths.manifest,
+            {
+                "stage": "translate",
+                "output": str(self.paths.translated_json),
+                "sha256": sha256_file(self.paths.translated_json),
+            },
+        )
+        return translated
+
+
+class RenderStage(FrozenModel):
+    """翻訳済み文書から Markdown を生成する。"""
+
+    paths: StagePaths
+
+    def run(self, document: dict[str, Any]) -> Path:
+        """生成した Markdown のパスを返す。"""
+
+        markdown = render_markdown(document)
+        atomic_write_bytes(self.paths.markdown, markdown.encode("utf-8"))
+        update_manifest(
+            self.paths.manifest,
+            {
+                "stage": "markdown",
+                "output": str(self.paths.markdown),
+                "sha256": sha256_file(self.paths.markdown),
+            },
+        )
+        return self.paths.markdown
+
+
+class DocxStage(FrozenModel):
+    """Markdown を Word docx へ変換する。"""
+
+    paths: StagePaths
+    template: Path | None
+
+    def run(self, markdown_path: Path) -> Path:
+        """生成した docx のパスを返す。"""
+
+        convert_markdown_to_docx(markdown_path, self.paths.docx, self.template)
+        update_manifest(
+            self.paths.manifest,
+            {
+                "stage": "docx",
+                "output": str(self.paths.docx),
+                "sha256": sha256_file(self.paths.docx),
+            },
+        )
+        return self.paths.docx
+
+
 def run_pipeline(args: PipelineOptions) -> StagePaths:
     """CLI 引数に従って translate-ja-v2 パイプラインを実行する。
 
@@ -2013,81 +2159,25 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
             "input_sha256": sha256_file(input_path),
         },
     )
-    if args.force or not paths.docling_json.exists():
-        LOGGER.info("Starting Docling conversion input=%s", input_path)
-        convert_with_docling(
-            input_path,
-            paths.docling_json,
-            artifacts_dir,
-        )
-        update_manifest(
-            paths.manifest,
-            {
-                "stage": "docling",
-                "output": str(paths.docling_json),
-                "sha256": sha256_file(paths.docling_json),
-            },
-        )
-    docling_data = read_json(paths.docling_json)
-    normalized, normalize_patches = normalize_document(docling_data)
-    write_json(paths.normalized_json, normalized)
-    update_manifest(
-        paths.manifest,
-        {
-            "stage": "normalize",
-            "output": str(paths.normalized_json),
-            "patches": len(normalize_patches),
-            "coordinate_patches": sum(
-                patch.get("rule") == "bbox_reading_order" for patch in normalize_patches
-            ),
-        },
-    )
-    structured, structure_patches = structure_document(
-        normalized, skip_vlm=args.skip_vlm, artifacts_dir=artifacts_dir
-    )
-    write_json(paths.structured_json, structured)
-    update_manifest(
-        paths.manifest,
-        {
-            "stage": "structure",
-            "output": str(paths.structured_json),
-            "patches": len(structure_patches),
-        },
-    )
-    translated = translate_document(structured)
-    write_json(paths.translated_json, translated)
-    update_manifest(
-        paths.manifest,
-        {
-            "stage": "translate",
-            "output": str(paths.translated_json),
-            "sha256": sha256_file(paths.translated_json),
-        },
-    )
-    markdown = render_markdown(translated)
-    atomic_write_bytes(paths.markdown, markdown.encode("utf-8"))
-    update_manifest(
-        paths.manifest,
-        {
-            "stage": "markdown",
-            "output": str(paths.markdown),
-            "sha256": sha256_file(paths.markdown),
-        },
-    )
+    docling = ParseStage(
+        input_path=input_path,
+        paths=paths,
+        artifacts_dir=artifacts_dir,
+        force=args.force,
+    ).run()
+    normalized = NormalizeStage(paths=paths).run(docling)
+    structured = StructureStage(
+        paths=paths,
+        artifacts_dir=artifacts_dir,
+        skip_vlm=args.skip_vlm,
+    ).run(normalized)
+    translated = TranslateStage(paths=paths).run(structured)
+    markdown_path = RenderStage(paths=paths).run(translated)
     if not args.skip_docx:
-        convert_markdown_to_docx(
-            paths.markdown,
-            paths.docx,
-            args.template.resolve() if args.template else None,
-        )
-        update_manifest(
-            paths.manifest,
-            {
-                "stage": "docx",
-                "output": str(paths.docx),
-                "sha256": sha256_file(paths.docx),
-            },
-        )
+        DocxStage(
+            paths=paths,
+            template=args.template.resolve() if args.template else None,
+        ).run(markdown_path)
     return paths
 
 

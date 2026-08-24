@@ -78,14 +78,25 @@ Docling Serve への PDF/Word 変換は常に `/v1/convert/file/async` を使い
 CLI 引数解析
   -> .env 読み込み・ログ初期化
   -> 出力パス構築・manifest 開始記録
-  -> Docling 非同期変換
-  -> Normalize（座標による第1段階補正）
-  -> Structure（VLMによる第2段階補正）
-  -> Translate
-  -> Markdown Render
-  -> Word docx 変換
+  -> ParseStage（Docling 非同期変換）
+  -> NormalizeStage（座標による第1段階補正）
+  -> StructureStage（VLMによる第2段階補正）
+  -> TranslateStage
+  -> RenderStage（Markdown）
+  -> DocxStage（Word docx）
   -> 完了ログ・終了コード返却
 ```
+
+各フェーズは `scripts/translate.py` 内の具体クラスとして実装します。共通基底クラス、factory、汎用 `StageRunner` は置かず、`run_pipeline()` が各クラスの `run()` を上記の順に呼び出します。これにより、処理順とフェーズ間の受け渡しを一箇所で確認できます。
+
+| クラス | 入力 | 出力 |
+| --- | --- | --- |
+| `ParseStage` | 入力ファイル | Docling JSON |
+| `NormalizeStage` | Docling JSON | 座標補正済み JSON |
+| `StructureStage` | 座標補正済み JSON | VLM 構造補正済み JSON |
+| `TranslateStage` | 構造補正済み JSON | 翻訳 metadata 付き JSON |
+| `RenderStage` | 翻訳 metadata 付き JSON | Markdown パス |
+| `DocxStage` | Markdown パス | docx パス |
 
 ### 1. 起動と出力先の準備
 

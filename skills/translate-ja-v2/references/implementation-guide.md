@@ -10,7 +10,7 @@
 - `State`: job、stage、page の進捗、retry、artifact hash、error を持つ。文書本文を入れない。
 - `Patch`: normalizer や VLM が文書へ加えた差分と理由を持つ。
 
-Pipeline は `Artifact -> Stage -> Artifact` の連鎖として扱う。ただし現行 v2 skill では `StageRunner` の抽象化を作らず、`scripts/translate.py` 内の小さな関数で stage を順に実行する。
+Pipeline は `Artifact -> Stage -> Artifact` の連鎖として扱う。現行 v2 skill では `ParseStage`、`NormalizeStage`、`StructureStage`、`TranslateStage`、`RenderStage`、`DocxStage` の具体クラスが各境界を担当し、`run_pipeline()` が順番に `run()` を呼ぶ。共通基底クラス、factory、汎用 `StageRunner` は、差し替え可能な実装が必要になるまで追加しない。
 
 ## プロジェクト構成
 
