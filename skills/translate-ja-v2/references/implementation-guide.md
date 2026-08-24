@@ -43,7 +43,7 @@ output-v2/
 └── manifest.json
 ```
 
-`.docling.json` は Docling Serve 直後、`.normalized.json` は表・コード整形後、`.structured.json` は VLM patch 後、`.translated.json` は `translate_ja_v2` 翻訳フィールド付与後の JSON とする。
+`.docling.json` は Docling Serve 直後、`.normalized.json` は座標による読み順補正と表・コード整形後、`.structured.json` は VLM patch 後、`.translated.json` は `translate_ja_v2` 翻訳フィールド付与後の JSON とする。
 
 ## State と Resume
 
@@ -66,8 +66,8 @@ JSON と artifact は直接本ファイルへ書かない。必ず一時ファ�
 ## 実装順序
 
 1. Docling Serve で JSON と PNG artifacts を作る。
-2. JSON 上で表セル、過剰記号、コードブロックを整形する。
-3. VLM/LLM に Docling JSON の要約と `artifacts/` の page PNG を渡し、`set_label`、`set_level`、`reorder_texts` patch だけを返させて見出しと本文の位置を補正する。
+2. JSON の `prov[].page_no` と `prov[].bbox` を使い、ページ順・上から下・左から右の読み順へ決定論的に補正する。同時に表セル、過剰記号、コードブロックを整形する。
+3. VLM/LLM に座標補正済み Docling JSON の要約、bbox、`artifacts/` の page PNG を渡し、`set_label`、`set_level`、`reorder_texts` patch だけを返させて、段組みなど座標だけでは曖昧な見出しと本文の位置を補正する。
 4. JSON 各要素へ `translate_ja_v2` フィールドを追加する。
 5. 見出し・表タイトルは英日併記、本文は和訳のみで Markdown を作る。
 6. pandoc で Markdown を Word docx へ変換する。
@@ -81,7 +81,7 @@ python skills/translate-ja-v2/scripts/translate.py \
   --template ./skills/translate-ja-v2/template.dotx
 ```
 
-`--skip-docx` は pandoc がない環境で JSON/Markdown まで検証したい場合に使う。`--skip-vlm` は VLM 構造補正を止めた deterministic test に使う。
+`--skip-docx` は pandoc がない環境で JSON/Markdown まで検証したい場合に使う。`--skip-vlm` は第2段階の VLM 構造補正だけを止めた deterministic test に使う。Normalize の座標補正は実行される。
 
 ## テスト
 

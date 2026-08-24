@@ -6,6 +6,7 @@ import base64
 import copy
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -674,6 +675,265 @@ def page_numbers(item: dict[str, Any]) -> list[int]:
     return sorted(pages)
 
 
+def coordinate_position(item: dict[str, Any]) -> dict[str, Any] | None:
+    """Docling item の先頭ページと bbox を読み順用座標へ変換する。
+
+    Args:
+        item: Docling item。
+
+    Returns:
+        page、vertical、left、bbox を持つ dict。有効な座標がなければ None。
+    """
+
+    prov = item.get("prov")
+    if not isinstance(prov, list):
+        return None
+    positions: list[tuple[int, int, dict[str, Any]]] = []
+    for prov_index, entry in enumerate(prov):
+        if not isinstance(entry, dict):
+            continue
+        entry_dict = cast(dict[str, Any], entry)
+        page_no = entry_dict.get("page_no")
+        if not isinstance(page_no, int):
+            continue
+        bbox = entry_dict.get("bbox")
+        if not isinstance(bbox, dict):
+            continue
+        bbox_dict = cast(dict[str, Any], bbox)
+        values: dict[str, float] = {}
+        for name in ("l", "t", "r", "b"):
+            value = bbox_dict.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                break
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                break
+            values[name] = numeric
+        if len(values) != 4:
+            continue
+        origin = str(bbox_dict.get("coord_origin") or "").upper()
+        if origin == "BOTTOMLEFT" or (not origin and values["t"] >= values["b"]):
+            vertical = -max(values["t"], values["b"])
+        else:
+            vertical = min(values["t"], values["b"])
+        positions.append(
+            (
+                page_no,
+                prov_index,
+                {
+                    "page": page_no,
+                    "vertical": vertical,
+                    "left": min(values["l"], values["r"]),
+                    "bbox": {
+                        **values,
+                        "coord_origin": origin or "INFERRED",
+                    },
+                },
+            )
+        )
+    if not positions:
+        return None
+    return min(positions, key=lambda position: (position[0], position[1]))[2]
+
+
+def coordinate_sort_key(
+    item: dict[str, Any], original_index: int
+) -> tuple[int, float, float, int]:
+    """Docling item のページ・縦・横座標による安定 sort key を返す。
+
+    Args:
+        item: Docling item。
+        original_index: 元の texts index。
+
+    Returns:
+        page、上からの位置、左からの位置、元 index の tuple。
+    """
+
+    position = coordinate_position(item)
+    if position is None:
+        pages = page_numbers(item)
+        return ((pages or [10**9])[0], float("inf"), float("inf"), original_index)
+    return (
+        cast(int, position["page"]),
+        cast(float, position["vertical"]),
+        cast(float, position["left"]),
+        original_index,
+    )
+
+
+def rewrite_json_references(value: Any, mapping: dict[str, str]) -> None:
+    """JSON tree 内の文字列参照を mapping に従って置き換える。
+
+    Args:
+        value: 書き換え対象の JSON value。
+        mapping: 古い JSON pointer から新しい pointer への対応。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        value 内の dict/list を更新する。
+    """
+
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if isinstance(child, str) and child in mapping:
+                value[key] = mapping[child]
+            else:
+                rewrite_json_references(child, mapping)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            if isinstance(child, str) and child in mapping:
+                value[index] = mapping[child]
+            else:
+                rewrite_json_references(child, mapping)
+
+
+def reorder_text_children(value: Any, rank_by_ref: dict[str, int]) -> None:
+    """body/group の children 内にある text 参照を指定順に並べ替える。
+
+    Args:
+        value: Docling JSON tree。
+        rank_by_ref: text ref ごとの新しい順位。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        children 配列内の text ref 要素を更新する。
+    """
+
+    if isinstance(value, dict):
+        children = value.get("children")
+        if isinstance(children, list):
+            slots: list[int] = []
+            text_refs: list[dict[str, Any]] = []
+            for index, child in enumerate(children):
+                if not isinstance(child, dict):
+                    continue
+                child_dict = cast(dict[str, Any], child)
+                ref = child_dict.get("$ref")
+                if isinstance(ref, str) and ref in rank_by_ref:
+                    slots.append(index)
+                    text_refs.append(child_dict)
+            text_refs.sort(key=lambda child: rank_by_ref[cast(str, child["$ref"])])
+            for index, child in zip(slots, text_refs, strict=True):
+                children[index] = child
+        for child in value.values():
+            reorder_text_children(child, rank_by_ref)
+    elif isinstance(value, list):
+        for child in value:
+            reorder_text_children(child, rank_by_ref)
+
+
+def reorder_text_collection(data: dict[str, Any], ordered_refs: list[str]) -> bool:
+    """texts とそれを参照する JSON pointer を整合性を保って並べ替える。
+
+    Args:
+        data: 更新対象の Docling JSON。
+        ordered_refs: 並べ替え後の古い text ref 配列。
+
+    Returns:
+        並べ替えに成功した場合 True。
+    """
+
+    texts = data.get("texts")
+    if not isinstance(texts, list):
+        return False
+    by_ref: dict[str, Any] = {}
+    original_refs: list[str] = []
+    for index, item in enumerate(texts):
+        if not isinstance(item, dict):
+            return False
+        ref = self_ref(cast(dict[str, Any], item), "texts", index)
+        if ref in by_ref:
+            return False
+        by_ref[ref] = item
+        original_refs.append(ref)
+    if len(ordered_refs) != len(original_refs) or set(ordered_refs) != set(
+        original_refs
+    ):
+        return False
+    rank_by_ref = {ref: index for index, ref in enumerate(ordered_refs)}
+    reorder_text_children(data, rank_by_ref)
+    data["texts"] = [by_ref[ref] for ref in ordered_refs]
+    ref_mapping = {
+        old_ref: f"#/texts/{new_index}"
+        for new_index, old_ref in enumerate(ordered_refs)
+    }
+    rewrite_json_references(data, ref_mapping)
+    return True
+
+
+def normalize_coordinate_order(
+    data: dict[str, Any], patches: list[dict[str, Any]]
+) -> None:
+    """bbox がある text をページ順・上から下・左から右へ並べる。
+
+    Args:
+        data: 更新対象の Docling JSON。
+        patches: 座標補正 patch の追加先。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        texts、self_ref、body/group 参照と patches を更新する。
+    """
+
+    texts = data.get("texts")
+    if not isinstance(texts, list):
+        return
+    positioned: list[tuple[int, dict[str, Any]]] = []
+    for index, item in enumerate(texts):
+        if not isinstance(item, dict):
+            continue
+        item_dict = cast(dict[str, Any], item)
+        if coordinate_position(item_dict) is not None:
+            positioned.append((index, item_dict))
+    if len(positioned) < 2:
+        return
+    sorted_items = sorted(
+        positioned,
+        key=lambda entry: coordinate_sort_key(entry[1], entry[0]),
+    )
+    original_ref_by_id = {
+        id(item): self_ref(cast(dict[str, Any], item), "texts", index)
+        for index, item in enumerate(texts)
+        if isinstance(item, dict)
+    }
+    reordered = list(texts)
+    for target_index, (_, item) in zip(
+        (entry[0] for entry in positioned), sorted_items, strict=True
+    ):
+        reordered[target_index] = item
+    before_refs = [
+        original_ref_by_id[id(item)] for item in texts if isinstance(item, dict)
+    ]
+    after_refs = [
+        original_ref_by_id[id(item)] for item in reordered if isinstance(item, dict)
+    ]
+    if after_refs == before_refs or not reorder_text_collection(data, after_refs):
+        return
+    patch = {
+        "op": "reorder_texts",
+        "processor": "rule",
+        "rule": "bbox_reading_order",
+        "rule_version": "1",
+        "target": "#/texts",
+        "before": before_refs,
+        "after": after_refs,
+        "reason": "page and bbox order: top-to-bottom, then left-to-right",
+        "confidence": 0.9,
+    }
+    patches.append(patch)
+    LOGGER.info(
+        "Applied coordinate normalization rule=%s text_count=%s",
+        patch["rule"],
+        len(after_refs),
+    )
+
+
 def self_ref(item: dict[str, Any], group: str, index: int) -> str:
     """Docling item の self_ref または推定 JSON pointer を返す。
 
@@ -792,6 +1052,7 @@ def normalize_document(
 
     result = copy.deepcopy(data)
     patches: list[dict[str, Any]] = []
+    normalize_coordinate_order(result, patches)
     for group in ("texts", "tables"):
         values = result.get(group)
         if not isinstance(values, list):
@@ -1083,9 +1344,12 @@ def build_structure_messages(
     units = collect_structure_units(data)
     system = (
         "あなたはDocling JSONの構造補正を担当するVLM/LLMです。"
-        "翻訳、要約、本文の創作は禁止です。見出しと本文の順序、label、levelだけを保守的に補正してください。"
+        "翻訳、要約、本文の創作は禁止です。"
+        "対象はpageとbboxで座標補正済みです。"
+        "段組みなど座標だけでは判断しにくい箇所に限定し、"
+        "見出しと本文の順序、label、levelだけを保守的に補正してください。"
     )
-    user = f"""次のDocling要素を読み、明らかに見出し・本文の位置が入れ替わっている箇所だけをpatchで返してください。
+    user = f"""次の座標補正済みDocling要素を読み、画像とbboxも参照して、明らかに見出し・本文の位置が入れ替わっている箇所だけをpatchで返してください。
 
 対象:
 {json.dumps(units, ensure_ascii=False)}
@@ -1168,7 +1432,7 @@ def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
         data: Docling JSON。
 
     Returns:
-        ref、page、label、level、text を持つ unit 配列。
+        ref、page、bbox、coordinate_order、label、level、text を持つ unit 配列。
     """
 
     values = data.get("texts")
@@ -1180,10 +1444,13 @@ def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         item = cast(dict[str, Any], item)
         text = text_of(item).replace("\n", " ")
+        position = coordinate_position(item)
         units.append(
             {
                 "ref": self_ref(item, "texts", index),
                 "page": page_numbers(item),
+                "bbox": position["bbox"] if position else None,
+                "coordinate_order": index,
                 "label": item.get("label"),
                 "level": item.get("level"),
                 "text": text[:500],
@@ -1278,7 +1545,7 @@ def apply_field_patch(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, 
 
 
 def apply_reorder_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    """texts 配列を指定 ref 順へ並べ替える。
+    """texts 配列と関連 JSON pointer を指定 ref 順へ並べ替える。
 
     Args:
         data: 更新対象 JSON。
@@ -1297,23 +1564,27 @@ def apply_reorder_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str
             "error": "texts or refs is not list",
         }
     wanted = [str(ref) for ref in refs]
-    by_ref: dict[str, dict[str, Any]] = {}
-    for index, item in enumerate(texts):
-        if isinstance(item, dict):
-            item_dict = cast(dict[str, Any], item)
-            by_ref[self_ref(item_dict, "texts", index)] = item_dict
-    if any(ref not in by_ref for ref in wanted):
-        return {"op": "reorder_texts", "status": "failed", "error": "unknown ref"}
-    wanted_set = set(wanted)
-    reordered: list[Any] = [by_ref[ref] for ref in wanted]
+    current_refs: list[str] = []
     for index, item in enumerate(texts):
         if not isinstance(item, dict):
-            reordered.append(item)
-            continue
-        item_dict = cast(dict[str, Any], item)
-        if self_ref(item_dict, "texts", index) not in wanted_set:
-            reordered.append(item_dict)
-    data["texts"] = reordered
+            return {
+                "op": "reorder_texts",
+                "status": "failed",
+                "error": "texts contains non-object item",
+            }
+        current_refs.append(self_ref(cast(dict[str, Any], item), "texts", index))
+    if len(wanted) != len(set(wanted)) or any(
+        ref not in current_refs for ref in wanted
+    ):
+        return {"op": "reorder_texts", "status": "failed", "error": "unknown ref"}
+    wanted_set = set(wanted)
+    ordered_refs = wanted + [ref for ref in current_refs if ref not in wanted_set]
+    if not reorder_text_collection(data, ordered_refs):
+        return {
+            "op": "reorder_texts",
+            "status": "failed",
+            "error": "could not preserve text references",
+        }
     return {
         "op": "reorder_texts",
         "status": "success",
@@ -2062,6 +2333,9 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
             "stage": "normalize",
             "output": str(paths.normalized_json),
             "patches": len(normalize_patches),
+            "coordinate_patches": sum(
+                patch.get("rule") == "bbox_reading_order" for patch in normalize_patches
+            ),
         },
     )
     structured, structure_patches = structure_document(

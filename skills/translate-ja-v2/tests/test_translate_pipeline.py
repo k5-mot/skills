@@ -35,6 +35,7 @@ from translate import (  # noqa: E402
     read_json,
     render_markdown,
     run_pipeline,
+    structure_document,
     translate_text_item,
     write_json,
 )
@@ -174,10 +175,11 @@ def test_apply_reorder_texts_moves_selected_refs_first() -> None:
     """reorder_texts patch は指定 ref 順に texts を並べ替える。"""
 
     data = {
+        "body": {"children": [{"$ref": "#/texts/0"}, {"$ref": "#/texts/1"}]},
         "texts": [
             {"self_ref": "#/texts/0", "text": "Body"},
             {"self_ref": "#/texts/1", "text": "Heading"},
-        ]
+        ],
     }
     result = apply_reorder_texts(
         data, {"op": "reorder_texts", "refs": ["#/texts/1", "#/texts/0"]}
@@ -185,6 +187,14 @@ def test_apply_reorder_texts_moves_selected_refs_first() -> None:
 
     assert result["status"] == "success"
     assert [item["text"] for item in data["texts"]] == ["Heading", "Body"]
+    assert [item["self_ref"] for item in data["texts"]] == [
+        "#/texts/0",
+        "#/texts/1",
+    ]
+    assert [child["$ref"] for child in data["body"]["children"]] == [
+        "#/texts/0",
+        "#/texts/1",
+    ]
 
 
 def test_normalize_document_marks_code_and_cleans_table_cells() -> None:
@@ -200,6 +210,254 @@ def test_normalize_document_marks_code_and_cleans_table_cells() -> None:
     assert normalized["tables"][0]["data"]["grid"][0][0]["text"] == "A B"
     assert normalized["tables"][0]["data"]["grid"][0][1]["text"] == "C..."
     assert len(patches) == 2
+
+
+def test_normalize_document_reorders_bottomleft_bbox_and_updates_refs() -> None:
+    """Normalize は BOTTOMLEFT bbox で読み順と JSON 参照を補正する。"""
+
+    data = {
+        "body": {
+            "children": [
+                {"$ref": "#/texts/0"},
+                {"$ref": "#/texts/1"},
+                {"$ref": "#/texts/2"},
+            ]
+        },
+        "groups": [
+            {
+                "children": [
+                    {"$ref": "#/texts/0"},
+                    {"$ref": "#/texts/1"},
+                ]
+            }
+        ],
+        "links": [{"$ref": "#/texts/1"}],
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "text": "Lower",
+                "prov": [
+                    {
+                        "page_no": 1,
+                        "bbox": {
+                            "l": 72,
+                            "t": 300,
+                            "r": 200,
+                            "b": 280,
+                            "coord_origin": "BOTTOMLEFT",
+                        },
+                    }
+                ],
+            },
+            {
+                "self_ref": "#/texts/1",
+                "text": "Upper",
+                "prov": [
+                    {
+                        "page_no": 1,
+                        "bbox": {
+                            "l": 72,
+                            "t": 700,
+                            "r": 200,
+                            "b": 680,
+                            "coord_origin": "BOTTOMLEFT",
+                        },
+                    }
+                ],
+            },
+            {
+                "self_ref": "#/texts/2",
+                "text": "Next page",
+                "prov": [
+                    {
+                        "page_no": 2,
+                        "bbox": {
+                            "l": 72,
+                            "t": 700,
+                            "r": 200,
+                            "b": 680,
+                            "coord_origin": "BOTTOMLEFT",
+                        },
+                    }
+                ],
+            },
+        ],
+    }
+
+    normalized, patches = normalize_document(data)
+
+    assert [item["text"] for item in normalized["texts"]] == [
+        "Upper",
+        "Lower",
+        "Next page",
+    ]
+    assert [item["self_ref"] for item in normalized["texts"]] == [
+        "#/texts/0",
+        "#/texts/1",
+        "#/texts/2",
+    ]
+    assert [child["$ref"] for child in normalized["body"]["children"]] == [
+        "#/texts/0",
+        "#/texts/1",
+        "#/texts/2",
+    ]
+    assert [child["$ref"] for child in normalized["groups"][0]["children"]] == [
+        "#/texts/0",
+        "#/texts/1",
+    ]
+    assert normalized["links"][0]["$ref"] == "#/texts/0"
+    assert patches[0]["rule"] == "bbox_reading_order"
+    assert patches[0]["after"] == ["#/texts/1", "#/texts/0", "#/texts/2"]
+
+
+def test_normalize_document_supports_topleft_and_preserves_missing_bbox_slot() -> None:
+    """TOPLEFT bbox は小さい y を先にし、座標なし要素の位置は保つ。"""
+
+    data = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "text": "Lower",
+                "prov": [
+                    {
+                        "page_no": 1,
+                        "bbox": {
+                            "l": 72,
+                            "t": 500,
+                            "r": 200,
+                            "b": 520,
+                            "coord_origin": "TOPLEFT",
+                        },
+                    }
+                ],
+            },
+            {"self_ref": "#/texts/1", "text": "No coordinates"},
+            {
+                "self_ref": "#/texts/2",
+                "text": "Upper",
+                "prov": [
+                    {
+                        "page_no": 1,
+                        "bbox": {
+                            "l": 72,
+                            "t": 100,
+                            "r": 200,
+                            "b": 120,
+                            "coord_origin": "TOPLEFT",
+                        },
+                    }
+                ],
+            },
+        ]
+    }
+
+    normalized, _patches = normalize_document(data)
+
+    assert [item["text"] for item in normalized["texts"]] == [
+        "Upper",
+        "No coordinates",
+        "Lower",
+    ]
+
+
+def test_structure_messages_include_coordinate_corrected_bbox() -> None:
+    """VLM には座標補正後の順序と bbox を渡す。"""
+
+    data = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "paragraph",
+                "text": "Lower",
+                "prov": [
+                    {
+                        "page_no": 1,
+                        "bbox": {
+                            "l": 72,
+                            "t": 300,
+                            "r": 200,
+                            "b": 280,
+                            "coord_origin": "BOTTOMLEFT",
+                        },
+                    }
+                ],
+            },
+            {
+                "self_ref": "#/texts/1",
+                "label": "section_header",
+                "text": "Upper",
+                "prov": [
+                    {
+                        "page_no": 1,
+                        "bbox": {
+                            "l": 72,
+                            "t": 700,
+                            "r": 200,
+                            "b": 680,
+                            "coord_origin": "BOTTOMLEFT",
+                        },
+                    }
+                ],
+            },
+        ]
+    }
+    normalized, _patches = normalize_document(data)
+
+    messages = build_structure_messages(normalized)
+    content = messages[1]["content"]
+
+    assert isinstance(content, str)
+    assert "座標補正済みDocling要素" in content
+    assert '"coordinate_order": 0' in content
+    assert '"t": 700.0' in content
+    assert content.index("Upper") < content.index("Lower")
+
+
+def test_skip_vlm_keeps_coordinate_normalization() -> None:
+    """--skip-vlm は第2段階だけを省略し、Normalize の座標補正は保つ。"""
+
+    data = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "text": "Lower",
+                "prov": [
+                    {
+                        "page_no": 1,
+                        "bbox": {
+                            "l": 72,
+                            "t": 300,
+                            "r": 200,
+                            "b": 280,
+                            "coord_origin": "BOTTOMLEFT",
+                        },
+                    }
+                ],
+            },
+            {
+                "self_ref": "#/texts/1",
+                "text": "Upper",
+                "prov": [
+                    {
+                        "page_no": 1,
+                        "bbox": {
+                            "l": 72,
+                            "t": 700,
+                            "r": 200,
+                            "b": 680,
+                            "coord_origin": "BOTTOMLEFT",
+                        },
+                    }
+                ],
+            },
+        ]
+    }
+
+    normalized, _normalize_patches = normalize_document(data)
+    structured, structure_patches = structure_document(normalized, skip_vlm=True)
+
+    assert [item["text"] for item in structured["texts"]] == ["Upper", "Lower"]
+    assert structure_patches == []
 
 
 def test_translate_text_item_renders_heading_bilingual_and_body_ja_only() -> None:

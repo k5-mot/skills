@@ -19,6 +19,9 @@ Parse Stage は Docling の文書モデルを可能な限りそのまま保存�
 
 実装済みの主な処理:
 
+- `prov[].page_no` と `prov[].bbox` による texts の読み順補正
+- `BOTTOMLEFT` / `TOPLEFT` の座標原点の差を吸収した、ページ順・上から下・左から右の安定ソート
+- texts の並べ替えに伴う `self_ref`、`$ref`、body/group children の参照更新
 - URL 保護付きの過剰記号・空白縮約
 - table cell の空白・改行整形
 - code/program_listing の翻訳対象外 metadata 付与
@@ -36,7 +39,14 @@ Parse Stage は Docling の文書モデルを可能な限りそのまま保存�
 
 ## 03 Structure
 
-構造と reading order を補正する。現行実装では `collect_structure_units` が text 要素を要約し、`build_multimodal_content` が `artifacts/` 内の page PNG を添付して、VLM/LLM に構造 patch を返させる。
+構造と reading order を第2段階で補正する。現行実装では、Normalize の座標補正済み JSON を入力に、`collect_structure_units` が text 要素と bbox を要約する。`build_multimodal_content` が `artifacts/` 内の page PNG を添付し、VLM/LLM に段組みなど座標だけでは曖昧な構造の patch を返させる。
+
+補正順序は必ず次のとおりとする。
+
+```text
+Normalize: page + bbox の決定論的補正
+    -> Structure: VLM による保守的補正
+```
 
 VLM に許可する操作:
 

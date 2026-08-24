@@ -70,6 +70,70 @@ uv run python skills/translate-ja-v2/scripts/translate.py --help
 
 Docling Serve への PDF/Word 変換は常に `/v1/convert/file/async` を使います。変換完了待ちでは polling ごとに `poll_count` と status をログへ出力します。
 
+## 🔄 `translate.py` の処理フロー
+
+`scripts/translate.py` は、入力文書を次の順序で処理します。各ステージの実行結果は `manifest.json` に追記されます。
+
+```text
+CLI 引数解析
+  -> .env 読み込み・ログ初期化
+  -> 出力パス構築・manifest 開始記録
+  -> Docling 非同期変換
+  -> Normalize（座標による第1段階補正）
+  -> Structure（VLMによる第2段階補正）
+  -> Translate
+  -> Markdown Render
+  -> Word docx 変換
+  -> 完了ログ・終了コード返却
+```
+
+### 1. 起動と出力先の準備
+
+Typer で CLI 引数を解析し、`--env` で指定された `.env` を `python-dotenv` で読み込みます。入力ファイル名から各 JSON、Markdown、docx の出力パスを組み立て、入力ファイルの SHA-256 を `manifest.json` の `start` イベントに記録します。
+
+### 2. Docling 非同期変換
+
+`<stem>.docling.json` がない場合、または `--force` 指定時に Docling Serve を呼び出します。
+
+1. `/v1/convert/file/async` へ PDF/Word と変換設定を multipart 送信します。
+2. 応答の `task_id` を使って `/v1/status/poll/{task_id}` を 10 秒間隔で polling します。
+3. polling ごとに `poll_count`、task status、HTTP status をログへ出力します。
+4. 完了後に `/v1/result/{task_id}` から zip を取得し、Docling JSON と `artifacts/` 内の画像を atomic write で保存します。
+
+既存の `<stem>.docling.json` を再利用する場合、この変換だけを省略し、以降のステージは毎回実行します。
+
+### 3. Normalize
+
+Docling JSON を複製し、まず各 text の `prov[].page_no` と `prov[].bbox` を使って読み順を補正します。`BOTTOMLEFT` と `TOPLEFT` の座標原点を判別し、ページ順、上から下、同じ高さでは左から右の順に並べます。座標がない要素は元の位置を保ちます。
+
+並べ替え時は texts 配列だけでなく、`self_ref`、`$ref`、body/group の children 参照も更新し、Docling JSON の参照整合性を保ちます。その後、URL を保護しながら本文と表セルの過剰な記号、空白、改行を決定論的に整形します。コード要素には翻訳対象外の metadata を付与し、各変更を patch として記録したうえで `<stem>.normalized.json` を保存します。
+
+### 4. Structure
+
+Normalize で座標補正した Docling 要素の順序、bbox、`artifacts/` の page PNG を OpenAI 互換 API へ渡します。VLM は段組みなど座標だけでは曖昧な箇所を判断し、見出し、レベル、本文順序を補正する patch だけを返します。許可された `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用し、`<stem>.structured.json` を保存します。
+
+`--skip-vlm` はこの第2段階補正だけを省略します。Normalize の座標補正は常に実行されます。
+
+### 5. Translate
+
+OpenAI 互換 API で texts と tables を要素単位に翻訳し、原文を保持したまま `translate_ja_v2` metadata を追加します。一時的な 429、5xx、timeout、接続エラーは環境変数の設定に従って指数バックオフで再試行します。
+
+- 見出し: `英語 / 日本語`
+- 本文: 日本語訳のみ
+- 表タイトル: `英語 / 日本語`
+- 表セル: 日本語訳。コード、URL、パス、識別子は原文のまま
+- コードブロック: 翻訳せず原文を保持
+
+結果は `<stem>.translated.json` に保存します。
+
+### 6. Markdown と Word の生成
+
+翻訳済み JSON の texts、tables、pictures をページ順に並べ、見出し、fenced code block、Markdown 表、画像参照として `<stem>.ja.md` へ書き出します。
+
+`--skip-docx` がなければ pandoc を呼び出し、`--template` の dotx/docx を reference document にして `<stem>.ja.docx` を生成します。pandoc がない環境では最小構成の docx へ fallback しますが、この場合は reference document のスタイルを適用できません。
+
+各 JSON、Markdown、Docling zip 内の artifact は、一時ファイルへ書き込んだ後に flush、`fsync`、`os.replace()` の順で置き換えます。例外発生時は stack trace をログへ出力して終了コード `1`、中断時は `130` を返します。
+
 ## 📦 Outputs
 
 出力先には次のファイルが作られます。
