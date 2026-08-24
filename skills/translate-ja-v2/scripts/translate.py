@@ -283,36 +283,6 @@ def utc_now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def atomic_write_text(path: str | Path, text: str) -> None:
-    """テキストを flush/fsync 後に atomic rename で保存する。
-
-    Args:
-        path: 保存先パス。
-        text: UTF-8 で保存する文字列。
-
-    Returns:
-        なし。
-
-    Side Effects:
-        保存先の親ディレクトリを作成し、既存ファイルを置換する。
-    """
-
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as file:
-            file.write(text)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(tmp_name, target)
-    finally:
-        if os.path.exists(tmp_name):
-            os.unlink(tmp_name)
-
-
 def atomic_write_bytes(path: str | Path, content: bytes) -> None:
     """bytes を flush/fsync 後に atomic rename で保存する。
 
@@ -357,7 +327,8 @@ def write_json(path: str | Path, data: Any) -> None:
         保存先ファイルを置換する。
     """
 
-    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    content = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    atomic_write_bytes(path, content)
 
 
 def read_json(path: str | Path) -> Any:
@@ -2129,7 +2100,7 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
         },
     )
     markdown = render_markdown(translated)
-    atomic_write_text(paths.markdown, markdown)
+    atomic_write_bytes(paths.markdown, markdown.encode("utf-8"))
     update_manifest(
         paths.manifest,
         {
