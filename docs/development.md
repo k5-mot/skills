@@ -32,4 +32,6 @@ pnpm dlx @fission-ai/openspec@latest init --tools agents --profile custom --forc
 - Docling requests must always enable table structure, table cell matching, code enrichment, and formula enrichment, using `accurate` table mode.
 - Docling async polling logs must include the poll count and status on every poll.
 - Normalize must correct text reading order from `prov[].page_no` and `prov[].bbox` before Structure invokes the VLM. `--skip-vlm` skips only the second-stage VLM correction, not coordinate correction.
-- translate-ja-v2 timeouts, OCR settings, OpenAI retry settings, VLM image limit, and log level are fixed constants in `scripts/translate.py`, not environment variables.
+- Structure sends one page image and that page's text JSON to the VLM first. If the page text context exceeds 50,000 characters, it falls back to adjacent two-element merge checks, then all-pairs two-element order checks with the page image.
+- Translate keeps one Docling element per LLM request. Optional CSV glossary entries are filtered per source text before being passed to the LLM with translation rules.
+- translate-ja-v2 timeouts, OCR settings, OpenAI retry settings, OpenAI text context limit, VLM image limit, and log level are fixed constants in `scripts/translate.py`, not environment variables.

@@ -38,7 +38,9 @@ timeout、OCR、OpenAI retry、VLM 添付画像数、ログレベルは `transla
 uv run python skills/translate-ja-v2/scripts/translate.py \
   --input ./sample.pdf \
   --output-dir ./output-v2/sample \
-  --template ./skills/translate-ja-v2/template.dotx
+  --template ./skills/translate-ja-v2/template.dotx \
+  --glossary ./skills/translate-ja-v2/examples/glossary.csv \
+  --translation-rules ./skills/translate-ja-v2/examples/translation-rules.md
 ```
 
 VLM 構造補正や docx 生成を省いて軽く検証する場合は次のようにします。
@@ -110,13 +112,17 @@ Docling JSON を複製し、まず各 text の `prov[].page_no` と `prov[].bbox
 
 ### 4. Structure
 
-Normalize で座標補正した Docling 要素の順序、bbox、`artifacts/` の page PNG を OpenAI 互換 API へ渡します。VLM は段組みなど座標だけでは曖昧な箇所を判断し、見出し、レベル、本文順序を補正する patch だけを返します。許可された `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用し、`<stem>.structured.json` を保存します。
+Normalize で座標補正した Docling 要素をページごとに分け、1ページ画像とそのページの text JSON を OpenAI 互換 API へ渡します。VLM は段組みなど座標だけでは曖昧な箇所を判断し、見出し、レベル、本文順序、分割検出された表・コード・段落の結合を patch だけで返します。
+
+1ページ分の text context が 50,000 文字を超える場合は、同じページ内で隣接する2要素を比較して `merge_texts` の要否を判断します。その後、同じページ内の2要素を総当たりで比較し、順序が明らかに逆の場合だけ `swap_texts` を適用します。許可された `set_label`、`set_level`、`set_text`、`reorder_texts`、`merge_texts`、`swap_texts` だけを適用し、`<stem>.structured.json` を保存します。
 
 `--skip-vlm` はこの第2段階補正だけを省略します。Normalize の座標補正は常に実行されます。
 
 ### 5. Translate
 
-OpenAI 互換 API で texts と tables を要素単位に翻訳し、原文を保持したまま `translate_ja_v2` metadata を追加します。一時的な 429、5xx、timeout、接続エラーは環境変数の設定に従って指数バックオフで再試行します。
+OpenAI 互換 API で texts と tables を要素単位に翻訳し、原文を保持したまま `translate_ja_v2` metadata を追加します。文書全体をまとめて送らず、Docling JSON の要素を上から1つずつ翻訳して新しい JSON を返します。一時的な 429、5xx、timeout、接続エラーは環境変数の設定に従って指数バックオフで再試行します。
+
+`--glossary` には `english,japanese,desc,genre,note` 列を持つ CSV を指定できます。翻訳対象テキストに `english` が含まれる entry だけを抽出し、翻訳ルールと一緒に LLM へ渡します。`--translation-rules` を省略した場合は既定の翻訳ルールを使います。
 
 - 見出し: `英語 / 日本語`
 - 本文: 日本語訳のみ

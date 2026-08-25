@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import csv
 import json
 import logging
 import math
@@ -35,7 +36,14 @@ OPENAI_TIMEOUT_SECONDS = 1800
 OPENAI_MAX_ATTEMPTS = 6
 OPENAI_RETRY_INITIAL_SECONDS = 5.0
 OPENAI_RETRY_MAX_SECONDS = 60.0
+OPENAI_CONTEXT_LIMIT_CHARS = 50000
 MAX_VLM_IMAGES = 12
+DEFAULT_TRANSLATION_RULES = """\
+- 原文にない説明、要約、事実追加は禁止。
+- 固有名詞、製品名、API名、コード、URL、パス、識別子、コマンドは英語のまま保持する。
+- 用語集に一致する語は japanese を優先し、文脈上必要な場合だけ自然な助詞を補う。
+- Markdown記号や表の区切り記号を追加しない。
+"""
 
 
 class FrozenModel(BaseModel):
@@ -126,6 +134,8 @@ class PipelineOptions(FrozenModel):
         skip_docx: docx 生成を省略するかどうか。
         force: 既存 Docling JSON があっても変換を再実行するかどうか。
         env: dotenv ファイルのパス。
+        glossary: CSV 用語集のパス。
+        translation_rules: 翻訳ルール Markdown のパス。
 
     Returns:
         パイプライン実行に必要な CLI オプション。
@@ -139,6 +149,8 @@ class PipelineOptions(FrozenModel):
     skip_docx: bool = False
     force: bool = False
     env: Path = Path(".env")
+    glossary: Path | None = None
+    translation_rules: Path | None = None
 
 
 def configure_logging(level_name: str | None = None) -> None:
@@ -327,6 +339,46 @@ def read_json(path: str | Path) -> Any:
 
     with Path(path).open("r", encoding="utf-8") as file:
         return json.load(file)
+
+
+def read_glossary_csv(path: Path | None) -> list[dict[str, str]]:
+    """翻訳用語集 CSV を読み込む。
+
+    Args:
+        path: english,japanese,desc,genre,note 列を持つ CSV パス。
+
+    Returns:
+        空でない english と japanese を持つ用語 dict 配列。
+    """
+
+    if path is None:
+        return []
+    with path.open("r", encoding="utf-8-sig", newline="") as file:
+        reader = csv.DictReader(file)
+        result: list[dict[str, str]] = []
+        for row in reader:
+            entry = {
+                key: str(row.get(key) or "").strip()
+                for key in ("english", "japanese", "desc", "genre", "note")
+            }
+            if entry["english"] and entry["japanese"]:
+                result.append(entry)
+        return result
+
+
+def read_translation_rules(path: Path | None) -> str:
+    """翻訳ルール本文を読み込む。
+
+    Args:
+        path: Markdown などのテキストファイル。None の場合は既定ルール。
+
+    Returns:
+        LLM に渡す翻訳ルール本文。
+    """
+
+    if path is None:
+        return DEFAULT_TRANSLATION_RULES
+    return path.read_text(encoding="utf-8").strip()
 
 
 def sha256_file(path: str | Path) -> str:
@@ -753,6 +805,69 @@ def reorder_text_collection(data: dict[str, Any], ordered_refs: list[str]) -> bo
     return True
 
 
+def replace_text_collection(
+    data: dict[str, Any], new_texts: list[Any], ref_mapping: dict[str, str]
+) -> None:
+    """texts を差し替え、Docling JSON 内の text 参照を張り替える。
+
+    Args:
+        data: 更新対象の Docling JSON。
+        new_texts: 差し替え後の texts。
+        ref_mapping: 差し替え前 ref から差し替え後 ref への対応。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        texts、self_ref、$ref 参照を更新する。
+    """
+
+    for index, item in enumerate(new_texts):
+        if not isinstance(item, dict):
+            continue
+        item_dict = cast(dict[str, Any], item)
+        new_ref = f"#/texts/{index}"
+        old_ref = str(item_dict.get("self_ref") or new_ref)
+        item_dict["self_ref"] = new_ref
+        ref_mapping[old_ref] = new_ref
+
+    def update_refs(value: Any) -> None:
+        if isinstance(value, dict):
+            ref = value.get("$ref")
+            if isinstance(ref, str) and ref in ref_mapping:
+                value["$ref"] = ref_mapping[ref]
+            children = value.get("children")
+            if isinstance(children, list):
+                seen_refs: set[str] = set()
+                deduped: list[Any] = []
+                for child in children:
+                    if isinstance(child, dict):
+                        child_ref = child.get("$ref")
+                        if isinstance(child_ref, str) and child_ref in ref_mapping:
+                            child["$ref"] = ref_mapping[child_ref]
+                        child_ref = child.get("$ref")
+                        if isinstance(child_ref, str):
+                            if child_ref in seen_refs:
+                                continue
+                            seen_refs.add(child_ref)
+                    deduped.append(child)
+                value["children"] = deduped
+            for key, child in value.items():
+                if isinstance(child, str) and child in ref_mapping:
+                    value[key] = ref_mapping[child]
+                else:
+                    update_refs(child)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                if isinstance(child, str) and child in ref_mapping:
+                    value[index] = ref_mapping[child]
+                else:
+                    update_refs(child)
+
+    data["texts"] = new_texts
+    update_refs(data)
+
+
 def normalize_coordinate_order(
     data: dict[str, Any], patches: list[dict[str, Any]]
 ) -> None:
@@ -1128,6 +1243,45 @@ def is_retryable_openai_error(exc: Exception) -> bool:
     return exc_name in {"APIConnectionError", "APITimeoutError", "RateLimitError"}
 
 
+def message_text_chars(value: Any) -> int:
+    """Chat messages のテキスト部分だけを数える。
+
+    Args:
+        value: Chat messages または content。
+
+    Returns:
+        画像 data URL を除いた文字数。
+    """
+
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, list):
+        return sum(message_text_chars(item) for item in value)
+    if isinstance(value, dict):
+        if value.get("type") == "image_url":
+            return 0
+        return sum(message_text_chars(child) for child in value.values())
+    return 0
+
+
+def ensure_openai_context(messages: list[dict[str, Any]]) -> None:
+    """OpenAI 互換 request の文字コンテキスト上限を検証する。
+
+    Args:
+        messages: Chat messages。
+
+    Raises:
+        ValueError: 文字コンテキストが上限を超える場合。
+    """
+
+    size = message_text_chars(messages)
+    if size > OPENAI_CONTEXT_LIMIT_CHARS:
+        raise ValueError(
+            "OpenAI request text context exceeds limit "
+            f"chars={size} limit={OPENAI_CONTEXT_LIMIT_CHARS}"
+        )
+
+
 def chat_text(
     client: Any, settings: OpenAISettings, messages: list[dict[str, Any]]
 ) -> str:
@@ -1145,6 +1299,7 @@ def chat_text(
         RuntimeError: 応答本文が空の場合。
     """
 
+    ensure_openai_context(messages)
     for attempt in range(1, OPENAI_MAX_ATTEMPTS + 1):
         try:
             completion = client.chat.completions.create(
@@ -1217,6 +1372,24 @@ def build_structure_messages(
     """
 
     units = collect_structure_units(data)
+    page_no = units[0]["page"][0] if units and units[0]["page"] else None
+    return build_page_structure_messages(page_no, units, artifacts_dir)
+
+
+def build_page_structure_messages(
+    page_no: int | None, units: list[dict[str, Any]], artifacts_dir: Path | None = None
+) -> list[dict[str, Any]]:
+    """1ページ分の VLM/LLM 構造補正用 messages を作る。
+
+    Args:
+        page_no: 対象ページ番号。
+        units: 対象ページの text unit。
+        artifacts_dir: Docling が出力した PNG artifacts のディレクトリ。
+
+    Returns:
+        Chat messages。
+    """
+
     system = (
         "あなたはDocling JSONの構造補正を担当するVLM/LLMです。"
         "翻訳、要約、本文の創作は禁止です。"
@@ -1224,8 +1397,9 @@ def build_structure_messages(
         "段組みなど座標だけでは判断しにくい箇所に限定し、"
         "見出しと本文の順序、label、levelだけを保守的に補正してください。"
     )
-    user = f"""次の座標補正済みDocling要素を読み、画像とbboxも参照して、明らかに見出し・本文の位置が入れ替わっている箇所だけをpatchで返してください。
+    user = f"""次の1ページ分の座標補正済みDocling要素を読み、ページ画像とbboxも参照して、明らかに構造が壊れている箇所だけをpatchで返してください。
 
+ページ: {page_no if page_no is not None else "unknown"}
 対象:
 {json.dumps(units, ensure_ascii=False)}
 
@@ -1234,30 +1408,38 @@ def build_structure_messages(
   "patches": [
     {{"op": "set_label", "ref": "#/texts/0", "label": "section_header", "reason": "理由"}},
     {{"op": "set_level", "ref": "#/texts/0", "level": 2, "reason": "理由"}},
+    {{"op": "set_text", "ref": "#/texts/0", "text": "整形後テキスト", "reason": "理由"}},
+    {{"op": "merge_texts", "refs": ["#/texts/0", "#/texts/1"], "text": "結合後テキスト", "label": "code", "reason": "理由"}},
     {{"op": "reorder_texts", "refs": ["#/texts/0", "#/texts/1"], "reason": "理由"}}
   ]
 }}
 
 補正不要なら {{"patches":[]}} を返してください。
 """
-    content = build_multimodal_content(user, artifacts_dir)
+    content = build_multimodal_content(user, artifacts_dir, page_no=page_no)
     return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
 
 def build_multimodal_content(
-    prompt: str, artifacts_dir: Path | None
+    prompt: str, artifacts_dir: Path | None, *, page_no: int | None = None
 ) -> str | list[dict[str, Any]]:
     """VLM へ渡す text とページ画像 content を作る。
 
     Args:
         prompt: 構造補正プロンプト本文。
         artifacts_dir: Docling PNG artifacts のディレクトリ。None なら text のみ返す。
+        page_no: 指定時は該当ページらしい PNG だけを添付する。
 
     Returns:
         OpenAI Chat Completions content。画像がなければ文字列、あれば multimodal content 配列。
     """
 
-    image_paths = collect_page_image_paths(artifacts_dir)
+    image_paths = (
+        [path]
+        if page_no is not None
+        and (path := page_image_path(artifacts_dir, page_no)) is not None
+        else collect_page_image_paths(artifacts_dir)
+    )
     if not image_paths:
         return prompt
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
@@ -1287,6 +1469,26 @@ def collect_page_image_paths(artifacts_dir: Path | None) -> list[Path]:
     pngs = sorted(path for path in artifacts_dir.glob("*.png") if path.is_file())
     page_pngs = [path for path in pngs if "page" in path.name.lower()]
     return (page_pngs or pngs)[:MAX_VLM_IMAGES]
+
+
+def page_image_path(artifacts_dir: Path | None, page_no: int) -> Path | None:
+    """指定ページに対応する PNG path を推定する。
+
+    Args:
+        artifacts_dir: Docling PNG artifacts のディレクトリ。
+        page_no: Docling の 1-origin page number。
+
+    Returns:
+        見つかった PNG path。見つからない場合は None。
+    """
+
+    for path in collect_page_image_paths(artifacts_dir):
+        numbers = [int(match) for match in re.findall(r"\d+", path.stem)]
+        if page_no in numbers:
+            return path
+    paths = collect_page_image_paths(artifacts_dir)
+    index = page_no - 1
+    return paths[index] if 0 <= index < len(paths) else None
 
 
 def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1323,6 +1525,134 @@ def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
     return units
 
 
+def page_structure_units(
+    data: dict[str, Any], page_no: int | None
+) -> list[dict[str, Any]]:
+    """指定ページの構造補正 unit を集める。
+
+    Args:
+        data: Docling JSON。
+        page_no: 対象ページ。None の場合はページ不明要素。
+
+    Returns:
+        対象ページに属する unit 配列。
+    """
+
+    result: list[dict[str, Any]] = []
+    for unit in collect_structure_units(data):
+        pages = unit.get("page")
+        if page_no is None:
+            if not pages:
+                result.append(unit)
+            continue
+        if isinstance(pages, list) and page_no in pages:
+            result.append(unit)
+    return result
+
+
+def structure_page_numbers(data: dict[str, Any]) -> list[int | None]:
+    """texts に含まれるページ番号を文書順に返す。
+
+    Args:
+        data: Docling JSON。
+
+    Returns:
+        ページ番号配列。ページ番号がない要素があれば None を含む。
+    """
+
+    pages: list[int | None] = []
+    for unit in collect_structure_units(data):
+        unit_pages = unit.get("page")
+        page_no = unit_pages[0] if isinstance(unit_pages, list) and unit_pages else None
+        if page_no not in pages:
+            pages.append(page_no)
+    return pages
+
+
+def build_merge_messages(
+    page_no: int | None,
+    left: dict[str, Any],
+    right: dict[str, Any],
+    artifacts_dir: Path | None,
+) -> list[dict[str, Any]]:
+    """隣接 2 要素の merge 判定 messages を作る。
+
+    Args:
+        page_no: 対象ページ番号。
+        left: 前方要素 unit。
+        right: 後方要素 unit。
+        artifacts_dir: Docling artifacts directory。
+
+    Returns:
+        Chat messages。
+    """
+
+    system = (
+        "あなたはDocling JSONの構造補正を担当するVLM/LLMです。"
+        "表、コードブロック、箇条書き、段落が誤って分割された場合だけmergeしてください。"
+        "意味変更、翻訳、要約は禁止です。"
+    )
+    user = f"""ページ画像と隣接する2つのDocling text要素を比較し、同一の表・コードブロック・箇条書き・段落として結合すべきか判定してください。
+
+ページ: {page_no if page_no is not None else "unknown"}
+要素:
+{json.dumps([left, right], ensure_ascii=False)}
+
+返却JSON:
+{{
+  "patches": [
+    {{"op": "merge_texts", "refs": ["{left["ref"]}", "{right["ref"]}"], "text": "結合後テキスト", "label": "code", "reason": "理由"}}
+  ]
+}}
+
+結合不要なら {{"patches":[]}} を返してください。
+"""
+    content = build_multimodal_content(user, artifacts_dir, page_no=page_no)
+    return [{"role": "system", "content": system}, {"role": "user", "content": content}]
+
+
+def build_swap_messages(
+    page_no: int | None,
+    left: dict[str, Any],
+    right: dict[str, Any],
+    artifacts_dir: Path | None,
+) -> list[dict[str, Any]]:
+    """2 要素の順序入れ替え判定 messages を作る。
+
+    Args:
+        page_no: 対象ページ番号。
+        left: 現在前にある要素 unit。
+        right: 現在後ろにある要素 unit。
+        artifacts_dir: Docling artifacts directory。
+
+    Returns:
+        Chat messages。
+    """
+
+    system = (
+        "あなたはDocling JSONのreading order補正を担当するVLM/LLMです。"
+        "ページ画像とbboxを根拠に、2要素の順序が明らかに逆の場合だけswapしてください。"
+        "意味変更、翻訳、要約は禁止です。"
+    )
+    user = f"""ページ画像と2つのDocling text要素を比較し、後方要素を前方要素より前に置くべきか判定してください。
+
+ページ: {page_no if page_no is not None else "unknown"}
+要素:
+{json.dumps([left, right], ensure_ascii=False)}
+
+返却JSON:
+{{
+  "patches": [
+    {{"op": "swap_texts", "refs": ["{left["ref"]}", "{right["ref"]}"], "reason": "理由"}}
+  ]
+}}
+
+入れ替え不要なら {{"patches":[]}} を返してください。
+"""
+    content = build_multimodal_content(user, artifacts_dir, page_no=page_no)
+    return [{"role": "system", "content": system}, {"role": "user", "content": content}]
+
+
 def apply_structure_patches(
     data: dict[str, Any], patches: list[dict[str, Any]]
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1344,6 +1674,10 @@ def apply_structure_patches(
             applied.append(apply_field_patch(result, patch))
         elif op == "reorder_texts":
             applied.append(apply_reorder_texts(result, patch))
+        elif op == "merge_texts":
+            applied.append(apply_merge_texts(result, patch))
+        elif op == "swap_texts":
+            applied.append(apply_swap_texts(result, patch))
         else:
             applied.append(
                 {"op": op, "status": "skipped", "reason": "unsupported operation"}
@@ -1457,6 +1791,235 @@ def apply_reorder_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str
     }
 
 
+def apply_merge_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """複数 text 要素を先頭 ref の位置へ結合する。
+
+    Args:
+        data: 更新対象 JSON。
+        patch: refs、text、任意 label/level を持つ patch。
+
+    Returns:
+        適用結果。
+    """
+
+    texts = data.get("texts")
+    refs = patch.get("refs")
+    if not isinstance(texts, list) or not isinstance(refs, list) or len(refs) < 2:
+        return {"op": "merge_texts", "status": "failed", "error": "invalid refs"}
+    wanted = [str(ref) for ref in refs]
+    current_refs = [
+        self_ref(cast(dict[str, Any], item), "texts", index)
+        for index, item in enumerate(texts)
+        if isinstance(item, dict)
+    ]
+    if len(current_refs) != len(texts) or any(
+        ref not in current_refs for ref in wanted
+    ):
+        return {"op": "merge_texts", "status": "failed", "error": "unknown ref"}
+
+    first_index = current_refs.index(wanted[0])
+    merged = copy.deepcopy(cast(dict[str, Any], texts[first_index]))
+    merged["text"] = str(
+        patch.get("text")
+        or "\n".join(
+            text_of(cast(dict[str, Any], texts[current_refs.index(ref)]))
+            for ref in wanted
+        )
+    )
+    if patch.get("label"):
+        merged["label"] = patch["label"]
+    if patch.get("level"):
+        merged["level"] = patch["level"]
+    prov: list[Any] = []
+    for ref in wanted:
+        item = texts[current_refs.index(ref)]
+        if isinstance(item, dict) and isinstance(item.get("prov"), list):
+            prov.extend(item["prov"])
+    if prov:
+        merged["prov"] = prov
+    merged.pop("translate_ja_v2", None)
+
+    wanted_set = set(wanted)
+    new_texts: list[Any] = []
+    ref_mapping: dict[str, str] = {}
+    for old_ref, item in zip(current_refs, texts, strict=True):
+        if old_ref == wanted[0]:
+            ref_mapping[old_ref] = f"#/texts/{len(new_texts)}"
+            new_texts.append(merged)
+            continue
+        if old_ref in wanted_set:
+            ref_mapping[old_ref] = ref_mapping[wanted[0]]
+            continue
+        ref_mapping[old_ref] = f"#/texts/{len(new_texts)}"
+        new_texts.append(item)
+    replace_text_collection(data, new_texts, ref_mapping)
+    return {
+        "op": "merge_texts",
+        "status": "success",
+        "refs": wanted,
+        "text": merged["text"],
+        "reason": patch.get("reason"),
+    }
+
+
+def apply_swap_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """2つの text 要素の順序を入れ替える。
+
+    Args:
+        data: 更新対象 JSON。
+        patch: refs を持つ patch。
+
+    Returns:
+        適用結果。
+    """
+
+    texts = data.get("texts")
+    refs = patch.get("refs")
+    if not isinstance(texts, list) or not isinstance(refs, list) or len(refs) != 2:
+        return {"op": "swap_texts", "status": "failed", "error": "invalid refs"}
+    current_refs = [
+        self_ref(cast(dict[str, Any], item), "texts", index)
+        for index, item in enumerate(texts)
+        if isinstance(item, dict)
+    ]
+    left, right = str(refs[0]), str(refs[1])
+    if (
+        len(current_refs) != len(texts)
+        or left not in current_refs
+        or right not in current_refs
+    ):
+        return {"op": "swap_texts", "status": "failed", "error": "unknown ref"}
+    ordered_refs = list(current_refs)
+    left_index = ordered_refs.index(left)
+    right_index = ordered_refs.index(right)
+    ordered_refs[left_index], ordered_refs[right_index] = (
+        ordered_refs[right_index],
+        ordered_refs[left_index],
+    )
+    if not reorder_text_collection(data, ordered_refs):
+        return {"op": "swap_texts", "status": "failed", "error": "swap failed"}
+    return {
+        "op": "swap_texts",
+        "status": "success",
+        "refs": [left, right],
+        "reason": patch.get("reason"),
+    }
+
+
+def parse_structure_response(response: str) -> list[dict[str, Any]]:
+    """VLM/LLM 応答から structure patches を取り出す。
+
+    Args:
+        response: LLM 応答本文。
+
+    Returns:
+        patch dict 配列。
+
+    Raises:
+        ValueError: patches が配列でない場合。
+    """
+
+    payload = parse_json_object(response)
+    patches = payload.get("patches")
+    if not isinstance(patches, list):
+        raise ValueError("structure response must contain patches list")
+    return [patch for patch in patches if isinstance(patch, dict)]
+
+
+def structure_page_with_vlm(
+    data: dict[str, Any],
+    page_no: int | None,
+    client: Any,
+    settings: OpenAISettings,
+    artifacts_dir: Path | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """1ページ分を VLM で構造補正する。
+
+    Args:
+        data: 更新対象 Docling JSON。
+        page_no: 対象ページ番号。
+        client: OpenAI client。
+        settings: OpenAI settings。
+        artifacts_dir: Docling artifacts directory。
+
+    Returns:
+        補正後 JSON と適用 patch 配列。
+    """
+
+    units = page_structure_units(data, page_no)
+    if not units:
+        return data, []
+    messages = build_page_structure_messages(page_no, units, artifacts_dir)
+    if message_text_chars(messages) <= OPENAI_CONTEXT_LIMIT_CHARS:
+        response = chat_text(client, settings, messages)
+        return apply_structure_patches(data, parse_structure_response(response))
+    LOGGER.info(
+        "Falling back to pairwise structure page=%s units=%s", page_no, len(units)
+    )
+    return structure_page_pairwise(data, page_no, client, settings, artifacts_dir)
+
+
+def structure_page_pairwise(
+    data: dict[str, Any],
+    page_no: int | None,
+    client: Any,
+    settings: OpenAISettings,
+    artifacts_dir: Path | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """隣接 merge 後、総当たり swap で1ページを補正する。
+
+    Args:
+        data: 更新対象 Docling JSON。
+        page_no: 対象ページ番号。
+        client: OpenAI client。
+        settings: OpenAI settings。
+        artifacts_dir: Docling artifacts directory。
+
+    Returns:
+        補正後 JSON と適用 patch 配列。
+    """
+
+    current = data
+    applied: list[dict[str, Any]] = []
+
+    index = 0
+    while index < len(page_structure_units(current, page_no)) - 1:
+        units = page_structure_units(current, page_no)
+        messages = build_merge_messages(
+            page_no, units[index], units[index + 1], artifacts_dir
+        )
+        if message_text_chars(messages) > OPENAI_CONTEXT_LIMIT_CHARS:
+            raise ValueError("merge comparison exceeds OpenAI context limit")
+        current, merge_applied = apply_structure_patches(
+            current, parse_structure_response(chat_text(client, settings, messages))
+        )
+        successful_merge = any(
+            patch.get("op") == "merge_texts" and patch.get("status") == "success"
+            for patch in merge_applied
+        )
+        applied.extend(merge_applied)
+        if not successful_merge:
+            index += 1
+
+    left_index = 0
+    while left_index < len(page_structure_units(current, page_no)):
+        right_index = left_index + 1
+        while right_index < len(page_structure_units(current, page_no)):
+            units = page_structure_units(current, page_no)
+            messages = build_swap_messages(
+                page_no, units[left_index], units[right_index], artifacts_dir
+            )
+            if message_text_chars(messages) > OPENAI_CONTEXT_LIMIT_CHARS:
+                raise ValueError("swap comparison exceeds OpenAI context limit")
+            current, swap_applied = apply_structure_patches(
+                current, parse_structure_response(chat_text(client, settings, messages))
+            )
+            applied.extend(swap_applied)
+            right_index += 1
+        left_index += 1
+    return current, applied
+
+
 def structure_document(
     data: dict[str, Any], *, skip_vlm: bool, artifacts_dir: Path | None = None
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1475,20 +2038,43 @@ def structure_document(
         return copy.deepcopy(data), []
     settings = require_openai_settings()
     client = openai_client(settings)
-    response = chat_text(
-        client, settings, build_structure_messages(data, artifacts_dir)
-    )
-    payload = parse_json_object(response)
-    patches = payload.get("patches")
-    if not isinstance(patches, list):
-        raise ValueError("structure response must contain patches list")
-    return apply_structure_patches(
-        data, [patch for patch in patches if isinstance(patch, dict)]
-    )
+    result = copy.deepcopy(data)
+    applied: list[dict[str, Any]] = []
+    for page_no in structure_page_numbers(result):
+        result, page_applied = structure_page_with_vlm(
+            result, page_no, client, settings, artifacts_dir
+        )
+        applied.extend(page_applied)
+    return result, applied
+
+
+def glossary_hits(source: str, glossary: list[dict[str, str]]) -> list[dict[str, str]]:
+    """原文に含まれる用語集 entry を抽出する。
+
+    Args:
+        source: 翻訳対象テキスト。
+        glossary: read_glossary_csv が返す用語集。
+
+    Returns:
+        原文に english が含まれる entry 配列。
+    """
+
+    lowered = source.lower()
+    return [
+        entry
+        for entry in glossary
+        if entry.get("english") and entry["english"].lower() in lowered
+    ]
 
 
 def translate_text(
-    client: Any, settings: OpenAISettings, source: str, *, style: str
+    client: Any,
+    settings: OpenAISettings,
+    source: str,
+    *,
+    style: str,
+    glossary: list[dict[str, str]] | None = None,
+    translation_rules: str = DEFAULT_TRANSLATION_RULES,
 ) -> str:
     """短いテキストを日本語へ翻訳する。
 
@@ -1497,6 +2083,8 @@ def translate_text(
         settings: OpenAI 互換 API 設定。
         source: 原文。
         style: heading/table/body の翻訳スタイル。
+        glossary: 原文に一致した用語集 entry。
+        translation_rules: LLM に渡す翻訳ルール。
 
     Returns:
         日本語訳。
@@ -1507,12 +2095,16 @@ def translate_text(
     system = (
         "あなたは専門文書の日英翻訳者です。原文にない説明、要約、事実追加は禁止です。"
     )
+    terms = glossary or []
     user = f"""次の{style}を日本語へ翻訳してください。
 
-厳守事項:
-- 出力は翻訳文だけにする。
-- コード、URL、パス、識別子、コマンドは翻訳しない。
-- Markdown記号や表の区切り記号を追加しない。
+翻訳ルール:
+{translation_rules.strip()}
+
+用語集:
+{json.dumps(terms, ensure_ascii=False)}
+
+出力は翻訳文だけにしてください。
 
 原文:
 {source}
@@ -1524,11 +2116,17 @@ def translate_text(
     )
 
 
-def translate_document(data: dict[str, Any]) -> dict[str, Any]:
+def translate_document(
+    data: dict[str, Any],
+    glossary: list[dict[str, str]] | None = None,
+    translation_rules: str = DEFAULT_TRANSLATION_RULES,
+) -> dict[str, Any]:
     """Docling JSON の各要素へ日本語翻訳フィールドを追加する。
 
     Args:
         data: 構造補正済み Docling JSON。
+        glossary: CSV から読み込んだ用語集。
+        translation_rules: 翻訳ルール本文。
 
     Returns:
         翻訳フィールドを追加した JSON。
@@ -1537,6 +2135,7 @@ def translate_document(data: dict[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(data)
     settings = require_openai_settings()
     client = openai_client(settings)
+    glossary_entries = glossary or []
     for group in ("texts", "tables"):
         values = result.get(group)
         if not isinstance(values, list):
@@ -1546,16 +2145,31 @@ def translate_document(data: dict[str, Any]) -> dict[str, Any]:
                 continue
             item = cast(dict[str, Any], item)
             if group == "texts":
-                translate_text_item(item, client, settings)
+                translate_text_item(
+                    item,
+                    client,
+                    settings,
+                    glossary_entries,
+                    translation_rules,
+                )
             if group == "tables":
                 translate_table_item(
-                    item, client, settings, self_ref(item, group, index)
+                    item,
+                    client,
+                    settings,
+                    self_ref(item, group, index),
+                    glossary_entries,
+                    translation_rules,
                 )
     return result
 
 
 def translate_text_item(
-    item: dict[str, Any], client: Any, settings: OpenAISettings
+    item: dict[str, Any],
+    client: Any,
+    settings: OpenAISettings,
+    glossary: list[dict[str, str]] | None = None,
+    translation_rules: str = DEFAULT_TRANSLATION_RULES,
 ) -> None:
     """Docling text item に翻訳フィールドを追加する。
 
@@ -1563,6 +2177,8 @@ def translate_text_item(
         item: Docling text item。
         client: OpenAI client。
         settings: OpenAI 互換 API 設定。
+        glossary: CSV から読み込んだ用語集。
+        translation_rules: 翻訳ルール本文。
 
     Returns:
         なし。
@@ -1578,8 +2194,16 @@ def translate_text_item(
     if is_code(item):
         meta.update({"kind": "code", "render_text": text, "translated": False})
         return
+    terms = glossary_hits(text, glossary or [])
     if is_heading(item):
-        ja = translate_text(client, settings, text, style="見出し")
+        ja = translate_text(
+            client,
+            settings,
+            text,
+            style="見出し",
+            glossary=terms,
+            translation_rules=translation_rules,
+        )
         meta.update(
             {
                 "kind": "heading",
@@ -1587,10 +2211,18 @@ def translate_text_item(
                 "text_ja": ja,
                 "render_text": f"{text} / {ja}",
                 "translated": True,
+                "glossary_terms": [term["english"] for term in terms],
             }
         )
         return
-    ja = translate_text(client, settings, text, style="本文")
+    ja = translate_text(
+        client,
+        settings,
+        text,
+        style="本文",
+        glossary=terms,
+        translation_rules=translation_rules,
+    )
     meta.update(
         {
             "kind": "body",
@@ -1598,12 +2230,18 @@ def translate_text_item(
             "text_ja": ja,
             "render_text": ja,
             "translated": True,
+            "glossary_terms": [term["english"] for term in terms],
         }
     )
 
 
 def translate_table_item(
-    item: dict[str, Any], client: Any, settings: OpenAISettings, ref: str
+    item: dict[str, Any],
+    client: Any,
+    settings: OpenAISettings,
+    ref: str,
+    glossary: list[dict[str, str]] | None = None,
+    translation_rules: str = DEFAULT_TRANSLATION_RULES,
 ) -> None:
     """Docling table item のタイトルとセルへ翻訳フィールドを追加する。
 
@@ -1612,6 +2250,8 @@ def translate_table_item(
         client: OpenAI client。
         settings: OpenAI 互換 API 設定。
         ref: table item の JSON pointer。
+        glossary: CSV から読み込んだ用語集。
+        translation_rules: 翻訳ルール本文。
 
     Returns:
         なし。
@@ -1623,12 +2263,21 @@ def translate_table_item(
     meta = item.setdefault("translate_ja_v2", {})
     caption = str(item.get("caption") or item.get("title") or "").strip()
     if caption:
-        caption_ja = translate_text(client, settings, caption, style="表タイトル")
+        terms = glossary_hits(caption, glossary or [])
+        caption_ja = translate_text(
+            client,
+            settings,
+            caption,
+            style="表タイトル",
+            glossary=terms,
+            translation_rules=translation_rules,
+        )
         meta.update(
             {
                 "caption_en": caption,
                 "caption_ja": caption_ja,
                 "caption_render": f"{caption} / {caption_ja}",
+                "glossary_terms": [term["english"] for term in terms],
             }
         )
     for _cell_ref, cell in iter_table_cells(item, ref):
@@ -1641,13 +2290,22 @@ def translate_table_item(
                 {"text_en": source, "render_text": source, "translated": False}
             )
             continue
-        translated = translate_text(client, settings, source, style="表セル")
+        terms = glossary_hits(source, glossary or [])
+        translated = translate_text(
+            client,
+            settings,
+            source,
+            style="表セル",
+            glossary=terms,
+            translation_rules=translation_rules,
+        )
         cell_meta.update(
             {
                 "text_en": source,
                 "text_ja": translated,
                 "render_text": translated,
                 "translated": True,
+                "glossary_terms": [term["english"] for term in terms],
             }
         )
 
@@ -2040,11 +2698,17 @@ class TranslateStage(FrozenModel):
     """文書要素を日本語へ翻訳する。"""
 
     paths: StagePaths
+    glossary_path: Path | None = None
+    translation_rules_path: Path | None = None
 
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
         """翻訳 metadata を付与した文書を返す。"""
 
-        translated = translate_document(document)
+        translated = translate_document(
+            document,
+            glossary=read_glossary_csv(self.glossary_path),
+            translation_rules=read_translation_rules(self.translation_rules_path),
+        )
         write_json(self.paths.translated_json, translated)
         update_manifest(
             self.paths.manifest,
@@ -2140,7 +2804,11 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
         artifacts_dir=artifacts_dir,
         skip_vlm=args.skip_vlm,
     ).run(normalized)
-    translated = TranslateStage(paths=paths).run(structured)
+    translated = TranslateStage(
+        paths=paths,
+        glossary_path=args.glossary,
+        translation_rules_path=args.translation_rules,
+    ).run(structured)
     markdown_path = RenderStage(paths=paths).run(translated)
     if not args.skip_docx:
         DocxStage(
@@ -2175,6 +2843,13 @@ def cli(
         typer.Option(help="rerun Docling conversion even if JSON exists"),
     ] = False,
     env: Annotated[Path, typer.Option(help="dotenv path")] = Path(".env"),
+    glossary: Annotated[
+        Path | None,
+        typer.Option(help="CSV glossary with english,japanese,desc,genre,note"),
+    ] = None,
+    translation_rules: Annotated[
+        Path | None, typer.Option(help="translation rules text file")
+    ] = None,
 ) -> None:
     """CLI から translate-ja-v2 パイプラインを実行する。
 
@@ -2187,6 +2862,8 @@ def cli(
         skip_docx: docx 生成を省略するかどうか。
         force: 既存 Docling JSON があっても変換を再実行するかどうか。
         env: dotenv ファイルのパス。
+        glossary: CSV 用語集のパス。
+        translation_rules: 翻訳ルール本文ファイルのパス。
 
     Returns:
         なし。
@@ -2204,6 +2881,8 @@ def cli(
         skip_docx=skip_docx,
         force=force,
         env=env,
+        glossary=glossary,
+        translation_rules=translation_rules,
     )
     load_dotenv_file(options.env)
     configure_logging()

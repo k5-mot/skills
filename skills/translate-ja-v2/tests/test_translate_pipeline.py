@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import sys
-import os
+import json
 import logging
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -26,14 +27,19 @@ from translate import (  # noqa: E402
     docling_form_payload,
     load_dotenv_file,
     main,
+    message_text_chars,
     normalize_document,
     OpenAISettings,
+    page_image_path,
     PipelineOptions,
     poll_docling_task,
     read_json,
+    read_glossary_csv,
+    read_translation_rules,
     render_markdown,
     run_pipeline,
     structure_document,
+    translate_document,
     translate_text_item,
     write_json,
 )
@@ -120,6 +126,32 @@ class FlakyClient:
         """FlakyClient を初期化する。"""
 
         completions = FlakyCompletions()
+        self.completions = completions
+        self.chat = type("Chat", (), {"completions": completions})()
+
+
+class RecordingCompletions:
+    """request messages を記録する fake completions。"""
+
+    def __init__(self) -> None:
+        """記録領域を初期化する。"""
+
+        self.calls: list[dict[str, Any]] = []
+
+    def create(self, **kwargs):  # noqa: ANN001, ANN202
+        """request を保存して固定応答を返す。"""
+
+        self.calls.append(kwargs)
+        return _completion("訳文")
+
+
+class RecordingClient:
+    """request messages を検証するための fake client。"""
+
+    def __init__(self) -> None:
+        """RecordingClient を初期化する。"""
+
+        completions = RecordingCompletions()
         self.completions = completions
         self.chat = type("Chat", (), {"completions": completions})()
 
@@ -370,6 +402,58 @@ def test_translate_text_item_renders_heading_bilingual_and_body_ja_only() -> Non
     assert body["translate_ja_v2"]["render_text"] == "部隊が移動する。"
 
 
+def test_translate_document_passes_glossary_hits_and_rules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """翻訳対象に一致した用語集と翻訳ルールだけを LLM に渡す。"""
+
+    glossary_path = tmp_path / "glossary.csv"
+    glossary_path.write_text(
+        (
+            "english,japanese,desc,genre,note\n"
+            "Strategic Command,戦略軍,Command organization,proper noun,keep English when needed\n"
+            "Unmatched Term,未使用語,Not in source,term,\n"
+        ),
+        encoding="utf-8",
+    )
+    rules_path = tmp_path / "rules.md"
+    rules_path.write_text("- 固有名詞は英語のまま和訳する。\n", encoding="utf-8")
+    client = RecordingClient()
+    monkeypatch.setattr(
+        "translate.require_openai_settings",
+        lambda: OpenAISettings(
+            base_url="http://example.test",
+            api_key="test",
+            model="fake",
+            timeout_seconds=1,
+        ),
+    )
+    monkeypatch.setattr("translate.openai_client", lambda _settings: client)
+    document = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "paragraph",
+                "text": "Strategic Command moves.",
+            }
+        ]
+    }
+
+    translated = translate_document(
+        document,
+        glossary=read_glossary_csv(glossary_path),
+        translation_rules=read_translation_rules(rules_path),
+    )
+    prompt = client.completions.calls[0]["messages"][1]["content"]
+
+    assert "Strategic Command" in prompt
+    assert "Unmatched Term" not in prompt
+    assert "固有名詞は英語のまま和訳する" in prompt
+    assert translated["texts"][0]["translate_ja_v2"]["glossary_terms"] == [
+        "Strategic Command"
+    ]
+
+
 def test_chat_text_retries_retryable_openai_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -473,6 +557,89 @@ def test_build_structure_messages_attaches_docling_page_png(tmp_path: Path) -> N
     assert content[0]["type"] == "text"
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_page_image_path_matches_page_number(tmp_path: Path) -> None:
+    """ページ番号に対応する PNG を選ぶ。"""
+
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    page1 = artifacts_dir / "page_000001.png"
+    page2 = artifacts_dir / "page_000002.png"
+    page1.write_bytes(b"page1")
+    page2.write_bytes(b"page2")
+
+    assert page_image_path(artifacts_dir, 2) == page2
+
+
+def test_structure_document_falls_back_to_pairwise_when_page_prompt_is_large(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ページ単位 prompt が大きい場合は隣接 merge と総当たり swap へ fallback する。"""
+
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "page_000001.png").write_bytes(b"png")
+    data = {
+        "texts": [
+            _text_item(
+                index,
+                f"fragment {index} " + ("x" * 300),
+                top=700 - index,
+                bottom=690 - index,
+            )
+            for index in range(8)
+        ]
+    }
+    calls: list[list[dict[str, Any]]] = []
+
+    def fake_chat(
+        _client: object, _settings: OpenAISettings, messages: list[dict[str, Any]]
+    ) -> str:
+        """pairwise request に固定 patch を返す。"""
+
+        calls.append(messages)
+        content = str(messages[1]["content"])
+        if (
+            "隣接する2つ" in content
+            and "#/texts/0" in content
+            and "#/texts/1" in content
+        ):
+            return json.dumps(
+                {
+                    "patches": [
+                        {
+                            "op": "merge_texts",
+                            "refs": ["#/texts/0", "#/texts/1"],
+                            "text": "merged fragment",
+                            "reason": "split paragraph",
+                        }
+                    ]
+                }
+            )
+        return json.dumps({"patches": []})
+
+    monkeypatch.setattr("translate.OPENAI_CONTEXT_LIMIT_CHARS", 3800)
+    monkeypatch.setattr(
+        "translate.require_openai_settings",
+        lambda: OpenAISettings(
+            base_url="http://example.test",
+            api_key="test",
+            model="fake",
+            timeout_seconds=1,
+        ),
+    )
+    monkeypatch.setattr("translate.openai_client", lambda _settings: object())
+    monkeypatch.setattr("translate.chat_text", fake_chat)
+
+    structured, patches = structure_document(
+        data, skip_vlm=False, artifacts_dir=artifacts_dir
+    )
+
+    assert structured["texts"][0]["text"] == "merged fragment"
+    assert any(patch["op"] == "merge_texts" for patch in patches)
+    assert any("2つのDocling text要素" in str(call[1]["content"]) for call in calls)
+    assert all(message_text_chars(call) <= 3800 for call in calls)
 
 
 def test_collect_page_image_paths_prefers_page_png(tmp_path: Path) -> None:
@@ -742,16 +909,23 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             },
         )
 
-    def fake_translate(data: dict[str, object]) -> dict[str, object]:
+    def fake_translate(
+        data: dict[str, object],
+        glossary: list[dict[str, str]] | None = None,
+        translation_rules: str = "",
+    ) -> dict[str, object]:
         """OpenAI 翻訳の代わりに render 用 metadata を追加する。
 
         Args:
             data: 構造補正済み JSON。
+            glossary: fake では未使用。
+            translation_rules: fake では未使用。
 
         Returns:
             翻訳 metadata を追加した JSON。
         """
 
+        _ = (data, glossary, translation_rules)
         copied = read_json(output_dir / "source.structured.json")
         copied["texts"][0]["translate_ja_v2"] = {"render_text": "Strategy / 戦略"}
         copied["texts"][1]["translate_ja_v2"] = {"render_text": "部隊が移動する。"}

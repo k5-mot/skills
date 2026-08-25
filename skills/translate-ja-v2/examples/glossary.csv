@@ -1,0 +1,5 @@
+english,japanese,desc,genre,note
+Strategic Command,戦略軍,Command organization,proper noun,Keep English when the official name is required.
+Docling,Docling,Document parsing tool,product,Do not translate product names.
+reading order,読み順,Order in which document elements should be read,term,
+bounding box,バウンディングボックス,Rectangle coordinates for a detected element,term,
