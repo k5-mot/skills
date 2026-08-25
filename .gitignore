@@ -1,4 +1,6 @@
 inputs/
+output-v2/
+outputs/
 .agents/
 
 # Created by https://www.toptal.com/developers/gitignore/api/windows,macos,linux,vim,emacs,visualstudiocode,visualstudio,python,node,dotenv
