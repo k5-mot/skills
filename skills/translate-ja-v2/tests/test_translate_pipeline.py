@@ -511,6 +511,29 @@ def test_translate_document_batches_text_section_and_table(
     """
 
     client = RecordingClient()
+    captured_blocks: list[list[list[str]]] = []
+
+    def record_blocks(
+        blocks: list[list[dict[str, Any]]], max_chars: int = 3000
+    ) -> list[list[dict[str, Any]]]:
+        """意味ブロックのID構成を記録して通常どおりバッチ化する。
+
+        Args:
+            blocks: 翻訳前の意味ブロック配列。
+            max_chars: 1バッチの原文文字数上限。
+
+        Returns:
+            pack_translation_blocks が作る翻訳バッチ配列。
+
+        Side Effects:
+            captured_blocks に各ブロックのIDを追加する。
+        """
+
+        captured_blocks.append(
+            [[str(item["id"]) for item in block] for block in blocks]
+        )
+        return pack_translation_blocks(blocks, max_chars)
+
     monkeypatch.setattr(
         "translate.require_openai_settings",
         lambda: OpenAISettings(
@@ -521,25 +544,44 @@ def test_translate_document_batches_text_section_and_table(
         ),
     )
     monkeypatch.setattr("translate.openai_client", lambda _settings: client)
+    monkeypatch.setattr("translate.pack_translation_blocks", record_blocks)
     document = {
         "texts": [
             {
                 "self_ref": "#/texts/0",
                 "label": "section_header",
+                "level": 2,
                 "text": "Strategy",
             },
             {
                 "self_ref": "#/texts/1",
-                "label": "paragraph",
-                "text": "The force moves.",
+                "label": "section_header",
+                "level": 3,
+                "text": "Operations",
             },
             {
                 "self_ref": "#/texts/2",
                 "label": "paragraph",
-                "text": "The force stops.",
+                "text": "The force moves.",
             },
             {
                 "self_ref": "#/texts/3",
+                "label": "paragraph",
+                "text": "The force stops.",
+            },
+            {
+                "self_ref": "#/texts/4",
+                "label": "section_header",
+                "level": 2,
+                "text": "Resources",
+            },
+            {
+                "self_ref": "#/texts/5",
+                "label": "paragraph",
+                "text": "The reserve waits.",
+            },
+            {
+                "self_ref": "#/texts/6",
                 "label": "code",
                 "text": "print('do not translate')",
             },
@@ -556,16 +598,28 @@ def test_translate_document_batches_text_section_and_table(
     translated = translate_document(document)
 
     assert len(client.completions.calls) == 2
+    assert captured_blocks[0] == [
+        ["#/texts/0", "#/texts/1", "#/texts/2", "#/texts/3"],
+        ["#/texts/4", "#/texts/5"],
+    ]
     text_prompt = client.completions.calls[0]["messages"][1]["content"]
     table_prompt = client.completions.calls[1]["messages"][1]["content"]
     assert all(
         source in text_prompt
-        for source in ("Strategy", "The force moves.", "The force stops.")
+        for source in (
+            "Strategy",
+            "Operations",
+            "The force moves.",
+            "The force stops.",
+            "Resources",
+            "The reserve waits.",
+        )
     )
+    assert '"context": "Strategy > Operations"' in text_prompt
     assert "do not translate" not in text_prompt
     assert "Terms" in table_prompt
     assert "Long Name" in table_prompt
-    assert translated["texts"][3]["translate_ja_v2"] == {
+    assert translated["texts"][6]["translate_ja_v2"] == {
         "kind": "code",
         "render_text": "print('do not translate')",
         "translated": False,

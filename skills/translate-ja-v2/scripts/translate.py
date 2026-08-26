@@ -2312,7 +2312,7 @@ def translate_text_items(
     glossary: list[dict[str, str]],
     translation_rules: str,
 ) -> None:
-    """見出しと後続本文を意味ブロック化して一括翻訳する。
+    """見出し階層と後続本文を意味ブロック化して一括翻訳する。
 
     Args:
         values: Docling texts 配列。
@@ -2330,7 +2330,8 @@ def translate_text_items(
 
     blocks: list[list[dict[str, Any]]] = []
     block: list[dict[str, Any]] = []
-    section_title = ""
+    block_root_level: int | None = None
+    heading_stack: list[tuple[int, str]] = []
     for index, value in enumerate(values):
         if not isinstance(value, dict):
             continue
@@ -2344,17 +2345,24 @@ def translate_text_items(
             )
             continue
         if is_heading(item):
-            if block:
+            level = heading_level(item)
+            if block and (block_root_level is None or level <= block_root_level):
                 blocks.append(block)
-            block = []
-            section_title = text
+                block = []
+                block_root_level = None
+            while heading_stack and heading_stack[-1][0] >= level:
+                heading_stack.pop()
+            heading_stack.append((level, text))
+            if block_root_level is None:
+                block_root_level = level
+        section_context = " > ".join(title for _level, title in heading_stack)
         terms = glossary_hits(text, glossary)
         block.append(
             {
                 "id": self_ref(item, "texts", index),
                 "text": text,
                 "style": "見出し" if is_heading(item) else "本文",
-                "context": section_title,
+                "context": section_context,
                 "glossary": terms,
                 "item": item,
                 "terms": terms,
