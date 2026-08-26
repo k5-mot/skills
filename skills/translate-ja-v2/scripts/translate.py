@@ -37,6 +37,7 @@ OPENAI_MAX_ATTEMPTS = 6
 OPENAI_RETRY_INITIAL_SECONDS = 5.0
 OPENAI_RETRY_MAX_SECONDS = 60.0
 OPENAI_CONTEXT_LIMIT_CHARS = 50000
+TRANSLATION_BATCH_MAX_CHARS = 3000
 MAX_VLM_IMAGES = 12
 DEFAULT_TRANSLATION_RULES = """\
 - 原文にない説明、要約、事実追加は禁止。
@@ -2116,6 +2117,267 @@ def translate_text(
     )
 
 
+def pack_translation_blocks(
+    blocks: list[list[dict[str, Any]]],
+    max_chars: int = TRANSLATION_BATCH_MAX_CHARS,
+) -> list[list[dict[str, Any]]]:
+    """意味ブロックを原文文字数の上限内で翻訳バッチへ詰める。
+
+    Args:
+        blocks: 見出しと本文など、分離を避けたい翻訳対象の配列。
+        max_chars: 1バッチに含める原文の最大文字数。
+
+    Returns:
+        入力順を保った翻訳バッチ配列。
+
+    Raises:
+        ValueError: max_chars が1未満の場合。
+    """
+
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
+    pieces: list[list[dict[str, Any]]] = []
+    for block in blocks:
+        piece: list[dict[str, Any]] = []
+        piece_chars = 0
+        for item in block:
+            item_chars = len(str(item["text"]))
+            if piece and piece_chars + item_chars > max_chars:
+                pieces.append(piece)
+                piece = []
+                piece_chars = 0
+            piece.append(item)
+            piece_chars += item_chars
+        if piece:
+            pieces.append(piece)
+
+    batches: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_chars = 0
+    for piece in pieces:
+        piece_chars = sum(len(str(item["text"])) for item in piece)
+        if current and current_chars + piece_chars > max_chars:
+            batches.append(current)
+            current = []
+            current_chars = 0
+        current.extend(piece)
+        current_chars += piece_chars
+    if current:
+        batches.append(current)
+    return batches
+
+
+def translate_batch(
+    client: Any,
+    settings: OpenAISettings,
+    items: list[dict[str, Any]],
+    *,
+    translation_rules: str = DEFAULT_TRANSLATION_RULES,
+) -> dict[str, str]:
+    """複数の原文をID付きJSONで一括翻訳する。
+
+    Args:
+        client: OpenAI client。
+        settings: OpenAI 互換 API 設定。
+        items: id、text、style、context、glossary を持つ翻訳対象。
+        translation_rules: LLM に渡す翻訳ルール。
+
+    Returns:
+        入力IDから日本語訳への辞書。
+
+    Raises:
+        ValueError: 応答IDが入力と一致しない場合、または訳文が不正な場合。
+
+    Side Effects:
+        OpenAI 互換 API を1回呼び出す。
+    """
+
+    if not items:
+        return {}
+    request_items = [
+        {
+            "id": str(item["id"]),
+            "style": str(item["style"]),
+            "context": str(item.get("context") or ""),
+            "glossary": item.get("glossary") or [],
+            "text": str(item["text"]),
+        }
+        for item in items
+    ]
+    expected_ids = [item["id"] for item in request_items]
+    if len(expected_ids) != len(set(expected_ids)):
+        raise ValueError("translation batch contains duplicate ids")
+    system = (
+        "あなたは専門文書の日英翻訳者です。原文にない説明、要約、事実追加は禁止です。"
+        "各要素を文脈に沿って翻訳し、入力IDを変更せずJSONだけを返してください。"
+    )
+    user = f"""次の複数要素を日本語へ翻訳してください。
+
+翻訳ルール:
+{translation_rules.strip()}
+
+返却JSON:
+{{"translations":[{{"id":"入力と同じID","translated_text":"日本語訳"}}]}}
+
+IDの追加、削除、変更、重複は禁止です。styleとcontextは訳文の調整にだけ使ってください。
+
+入力JSON:
+{json.dumps(request_items, ensure_ascii=False)}
+"""
+    response = chat_text(
+        client,
+        settings,
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+    )
+    payload = parse_json_object(response)
+    translations = payload.get("translations")
+    if not isinstance(translations, list):
+        raise ValueError("translation response must contain translations list")
+    result: dict[str, str] = {}
+    for entry in translations:
+        if not isinstance(entry, dict):
+            raise ValueError("translation entry must be an object")
+        item_id = entry.get("id")
+        translated_text = entry.get("translated_text")
+        if (
+            not isinstance(item_id, str)
+            or not isinstance(translated_text, str)
+            or not translated_text.strip()
+        ):
+            raise ValueError("translation entry must contain string id and text")
+        if item_id in result:
+            raise ValueError(f"translation response contains duplicate id: {item_id}")
+        result[item_id] = translated_text
+    if set(result) != set(expected_ids):
+        missing = sorted(set(expected_ids) - set(result))
+        unknown = sorted(set(result) - set(expected_ids))
+        raise ValueError(
+            f"translation response ids do not match missing={missing} unknown={unknown}"
+        )
+    LOGGER.info(
+        "Translated batch items=%s source_chars=%s",
+        len(items),
+        sum(len(item["text"]) for item in request_items),
+    )
+    return result
+
+
+def apply_text_translation(
+    item: dict[str, Any], translated: str, terms: list[dict[str, str]]
+) -> None:
+    """text item に検証済みの訳文を反映する。
+
+    Args:
+        item: 更新対象の Docling text item。
+        translated: 対応する日本語訳。
+        terms: 原文に一致した用語集 entry。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        item の translate_ja_v2 フィールドを更新する。
+    """
+
+    text = text_of(item).strip()
+    meta = item.setdefault("translate_ja_v2", {})
+    if is_heading(item):
+        meta.update(
+            {
+                "kind": "heading",
+                "text_en": text,
+                "text_ja": translated,
+                "render_text": f"{text} / {translated}",
+                "translated": True,
+                "glossary_terms": [term["english"] for term in terms],
+            }
+        )
+        return
+    meta.update(
+        {
+            "kind": "body",
+            "text_en": text,
+            "text_ja": translated,
+            "render_text": translated,
+            "translated": True,
+            "glossary_terms": [term["english"] for term in terms],
+        }
+    )
+
+
+def translate_text_items(
+    values: list[Any],
+    client: Any,
+    settings: OpenAISettings,
+    glossary: list[dict[str, str]],
+    translation_rules: str,
+) -> None:
+    """見出しと後続本文を意味ブロック化して一括翻訳する。
+
+    Args:
+        values: Docling texts 配列。
+        client: OpenAI client。
+        settings: OpenAI 互換 API 設定。
+        glossary: CSV から読み込んだ用語集。
+        translation_rules: LLM に渡す翻訳ルール。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        text item の翻訳 metadata を更新し、OpenAI 互換 API を呼び出す。
+    """
+
+    blocks: list[list[dict[str, Any]]] = []
+    block: list[dict[str, Any]] = []
+    section_title = ""
+    for index, value in enumerate(values):
+        if not isinstance(value, dict):
+            continue
+        item = cast(dict[str, Any], value)
+        text = text_of(item).strip()
+        if not text:
+            continue
+        if is_code(item):
+            item.setdefault("translate_ja_v2", {}).update(
+                {"kind": "code", "render_text": text, "translated": False}
+            )
+            continue
+        if is_heading(item):
+            if block:
+                blocks.append(block)
+            block = []
+            section_title = text
+        terms = glossary_hits(text, glossary)
+        block.append(
+            {
+                "id": self_ref(item, "texts", index),
+                "text": text,
+                "style": "見出し" if is_heading(item) else "本文",
+                "context": section_title,
+                "glossary": terms,
+                "item": item,
+                "terms": terms,
+            }
+        )
+    if block:
+        blocks.append(block)
+
+    for batch in pack_translation_blocks(blocks):
+        translations = translate_batch(
+            client,
+            settings,
+            batch,
+            translation_rules=translation_rules,
+        )
+        for target in batch:
+            apply_text_translation(
+                cast(dict[str, Any], target["item"]),
+                translations[str(target["id"])],
+                cast(list[dict[str, str]], target["terms"]),
+            )
+
+
 def translate_document(
     data: dict[str, Any],
     glossary: list[dict[str, str]] | None = None,
@@ -2136,31 +2398,29 @@ def translate_document(
     settings = require_openai_settings()
     client = openai_client(settings)
     glossary_entries = glossary or []
-    for group in ("texts", "tables"):
-        values = result.get(group)
-        if not isinstance(values, list):
-            continue
-        for index, item in enumerate(values):
-            if not isinstance(item, dict):
+    texts = result.get("texts")
+    if isinstance(texts, list):
+        translate_text_items(
+            texts,
+            client,
+            settings,
+            glossary_entries,
+            translation_rules,
+        )
+    tables = result.get("tables")
+    if isinstance(tables, list):
+        for index, value in enumerate(tables):
+            if not isinstance(value, dict):
                 continue
-            item = cast(dict[str, Any], item)
-            if group == "texts":
-                translate_text_item(
-                    item,
-                    client,
-                    settings,
-                    glossary_entries,
-                    translation_rules,
-                )
-            if group == "tables":
-                translate_table_item(
-                    item,
-                    client,
-                    settings,
-                    self_ref(item, group, index),
-                    glossary_entries,
-                    translation_rules,
-                )
+            item = cast(dict[str, Any], value)
+            translate_table_item(
+                item,
+                client,
+                settings,
+                self_ref(item, "tables", index),
+                glossary_entries,
+                translation_rules,
+            )
     return result
 
 
@@ -2260,27 +2520,23 @@ def translate_table_item(
         item と cell の translate_ja_v2 フィールドを更新する。
     """
 
-    meta = item.setdefault("translate_ja_v2", {})
+    targets: list[dict[str, Any]] = []
     caption = str(item.get("caption") or item.get("title") or "").strip()
     if caption:
         terms = glossary_hits(caption, glossary or [])
-        caption_ja = translate_text(
-            client,
-            settings,
-            caption,
-            style="表タイトル",
-            glossary=terms,
-            translation_rules=translation_rules,
-        )
-        meta.update(
+        targets.append(
             {
-                "caption_en": caption,
-                "caption_ja": caption_ja,
-                "caption_render": f"{caption} / {caption_ja}",
-                "glossary_terms": [term["english"] for term in terms],
+                "id": f"{ref}/caption",
+                "text": caption,
+                "style": "表タイトル",
+                "context": caption,
+                "glossary": terms,
+                "kind": "caption",
+                "item": item,
+                "terms": terms,
             }
         )
-    for _cell_ref, cell in iter_table_cells(item, ref):
+    for cell_ref, cell in iter_table_cells(item, ref):
         source = str(cell.get("text") or cell.get("content") or "").strip()
         cell_meta = cell.setdefault("translate_ja_v2", {})
         if not source:
@@ -2291,23 +2547,50 @@ def translate_table_item(
             )
             continue
         terms = glossary_hits(source, glossary or [])
-        translated = translate_text(
-            client,
-            settings,
-            source,
-            style="表セル",
-            glossary=terms,
-            translation_rules=translation_rules,
-        )
-        cell_meta.update(
+        targets.append(
             {
-                "text_en": source,
-                "text_ja": translated,
-                "render_text": translated,
-                "translated": True,
-                "glossary_terms": [term["english"] for term in terms],
+                "id": cell_ref,
+                "text": source,
+                "style": "表セル",
+                "context": caption,
+                "glossary": terms,
+                "kind": "cell",
+                "item": cell,
+                "terms": terms,
             }
         )
+
+    for batch in pack_translation_blocks([targets]):
+        translations = translate_batch(
+            client,
+            settings,
+            batch,
+            translation_rules=translation_rules,
+        )
+        for target in batch:
+            translated = translations[str(target["id"])]
+            target_item = cast(dict[str, Any], target["item"])
+            terms = cast(list[dict[str, str]], target["terms"])
+            if target["kind"] == "caption":
+                target_item.setdefault("translate_ja_v2", {}).update(
+                    {
+                        "caption_en": caption,
+                        "caption_ja": translated,
+                        "caption_render": f"{caption} / {translated}",
+                        "glossary_terms": [term["english"] for term in terms],
+                    }
+                )
+                continue
+            source = str(target["text"])
+            target_item.setdefault("translate_ja_v2", {}).update(
+                {
+                    "text_en": source,
+                    "text_ja": translated,
+                    "render_text": translated,
+                    "translated": True,
+                    "glossary_terms": [term["english"] for term in terms],
+                }
+            )
 
 
 def looks_protected(text: str) -> bool:

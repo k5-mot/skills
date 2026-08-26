@@ -30,6 +30,7 @@ from translate import (  # noqa: E402
     message_text_chars,
     normalize_document,
     OpenAISettings,
+    pack_translation_blocks,
     page_image_path,
     PipelineOptions,
     poll_docling_task,
@@ -40,6 +41,7 @@ from translate import (  # noqa: E402
     run_pipeline,
     structure_document,
     translate_document,
+    translate_batch,
     translate_text_item,
     write_json,
 )
@@ -139,9 +141,24 @@ class RecordingCompletions:
         self.calls: list[dict[str, Any]] = []
 
     def create(self, **kwargs):  # noqa: ANN001, ANN202
-        """request を保存して固定応答を返す。"""
+        """request を保存し、単体またはバッチ用の固定応答を返す。"""
 
         self.calls.append(kwargs)
+        content = kwargs["messages"][-1]["content"]
+        marker = "入力JSON:\n"
+        if marker in content:
+            items = json.loads(content.rsplit(marker, 1)[1])
+            return _completion(
+                json.dumps(
+                    {
+                        "translations": [
+                            {"id": item["id"], "translated_text": "訳文"}
+                            for item in items
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            )
         return _completion("訳文")
 
 
@@ -452,6 +469,145 @@ def test_translate_document_passes_glossary_hits_and_rules(
     assert translated["texts"][0]["translate_ja_v2"]["glossary_terms"] == [
         "Strategic Command"
     ]
+
+
+def test_pack_translation_blocks_keeps_sections_within_limit() -> None:
+    """見出しと本文のブロックを可能な限り保って上限内へ詰める。
+
+    Returns:
+        なし。
+    """
+
+    blocks = [
+        [
+            {"id": "h1", "text": "H" * 100},
+            {"id": "p1", "text": "A" * 1000},
+        ],
+        [
+            {"id": "h2", "text": "H" * 100},
+            {"id": "p2", "text": "B" * 1801},
+        ],
+    ]
+
+    batches = pack_translation_blocks(blocks)
+
+    assert [[item["id"] for item in batch] for batch in batches] == [
+        ["h1", "p1"],
+        ["h2", "p2"],
+    ]
+    assert all(sum(len(item["text"]) for item in batch) <= 3000 for batch in batches)
+
+
+def test_translate_document_batches_text_section_and_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """本文群と1表をそれぞれ1回のLLM呼び出しで翻訳する。
+
+    Args:
+        monkeypatch: OpenAI client を fake に置き換える pytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    client = RecordingClient()
+    monkeypatch.setattr(
+        "translate.require_openai_settings",
+        lambda: OpenAISettings(
+            base_url="http://example.test",
+            api_key="test",
+            model="fake",
+            timeout_seconds=1,
+        ),
+    )
+    monkeypatch.setattr("translate.openai_client", lambda _settings: client)
+    document = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "section_header",
+                "text": "Strategy",
+            },
+            {
+                "self_ref": "#/texts/1",
+                "label": "paragraph",
+                "text": "The force moves.",
+            },
+            {
+                "self_ref": "#/texts/2",
+                "label": "paragraph",
+                "text": "The force stops.",
+            },
+            {
+                "self_ref": "#/texts/3",
+                "label": "code",
+                "text": "print('do not translate')",
+            },
+        ],
+        "tables": [
+            {
+                "self_ref": "#/tables/0",
+                "caption": "Terms",
+                "data": {"grid": [[{"text": "Long Name"}, {"text": "DoD"}]]},
+            }
+        ],
+    }
+
+    translated = translate_document(document)
+
+    assert len(client.completions.calls) == 2
+    text_prompt = client.completions.calls[0]["messages"][1]["content"]
+    table_prompt = client.completions.calls[1]["messages"][1]["content"]
+    assert all(
+        source in text_prompt
+        for source in ("Strategy", "The force moves.", "The force stops.")
+    )
+    assert "do not translate" not in text_prompt
+    assert "Terms" in table_prompt
+    assert "Long Name" in table_prompt
+    assert translated["texts"][3]["translate_ja_v2"] == {
+        "kind": "code",
+        "render_text": "print('do not translate')",
+        "translated": False,
+    }
+    assert translated["tables"][0]["translate_ja_v2"]["caption_ja"] == "訳文"
+
+
+def test_translate_batch_rejects_missing_response_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """バッチ応答に入力IDの欠落があれば翻訳結果を採用しない。
+
+    Args:
+        monkeypatch: LLM 応答を差し替える pytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    monkeypatch.setattr(
+        "translate.chat_text",
+        lambda _client, _settings, _messages: json.dumps(
+            {"translations": [{"id": "a", "translated_text": "訳A"}]},
+            ensure_ascii=False,
+        ),
+    )
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+
+    with pytest.raises(ValueError, match="ids do not match"):
+        translate_batch(
+            object(),
+            settings,
+            [
+                {"id": "a", "text": "A", "style": "本文"},
+                {"id": "b", "text": "B", "style": "本文"},
+            ],
+        )
 
 
 def test_chat_text_retries_retryable_openai_errors(
