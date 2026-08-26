@@ -37,7 +37,8 @@ OPENAI_MAX_ATTEMPTS = 6
 OPENAI_RETRY_INITIAL_SECONDS = 5.0
 OPENAI_RETRY_MAX_SECONDS = 60.0
 OPENAI_CONTEXT_LIMIT_CHARS = 50000
-TRANSLATION_BATCH_MAX_CHARS = 3000
+OPENAI_MAX_OUTPUT_TOKENS = 4096
+TRANSLATION_BATCH_MAX_CHARS = 1500
 MAX_VLM_IMAGES = 12
 DEFAULT_TRANSLATION_RULES = """\
 - 原文にない説明、要約、事実追加は禁止。
@@ -45,6 +46,10 @@ DEFAULT_TRANSLATION_RULES = """\
 - 用語集に一致する語は japanese を優先し、文脈上必要な場合だけ自然な助詞を補う。
 - Markdown記号や表の区切り記号を追加しない。
 """
+
+
+class OpenAIEmptyResponseError(RuntimeError):
+    """OpenAI 互換 API が本文を返さなかったことを表す。"""
 
 
 class FrozenModel(BaseModel):
@@ -823,41 +828,25 @@ def replace_text_collection(
         texts、self_ref、$ref 参照を更新する。
     """
 
-    for index, item in enumerate(new_texts):
-        if not isinstance(item, dict):
-            continue
-        item_dict = cast(dict[str, Any], item)
-        new_ref = f"#/texts/{index}"
-        old_ref = str(item_dict.get("self_ref") or new_ref)
-        item_dict["self_ref"] = new_ref
-        ref_mapping[old_ref] = new_ref
-
     def update_refs(value: Any) -> None:
         if isinstance(value, dict):
-            ref = value.get("$ref")
-            if isinstance(ref, str) and ref in ref_mapping:
-                value["$ref"] = ref_mapping[ref]
-            children = value.get("children")
-            if isinstance(children, list):
-                seen_refs: set[str] = set()
-                deduped: list[Any] = []
-                for child in children:
-                    if isinstance(child, dict):
-                        child_ref = child.get("$ref")
-                        if isinstance(child_ref, str) and child_ref in ref_mapping:
-                            child["$ref"] = ref_mapping[child_ref]
-                        child_ref = child.get("$ref")
-                        if isinstance(child_ref, str):
-                            if child_ref in seen_refs:
-                                continue
-                            seen_refs.add(child_ref)
-                    deduped.append(child)
-                value["children"] = deduped
             for key, child in value.items():
                 if isinstance(child, str) and child in ref_mapping:
                     value[key] = ref_mapping[child]
                 else:
                     update_refs(child)
+            children = value.get("children")
+            if isinstance(children, list):
+                seen_refs: set[str] = set()
+                deduped: list[Any] = []
+                for child in children:
+                    child_ref = child.get("$ref") if isinstance(child, dict) else None
+                    if isinstance(child_ref, str):
+                        if child_ref in seen_refs:
+                            continue
+                        seen_refs.add(child_ref)
+                    deduped.append(child)
+                value["children"] = deduped
         elif isinstance(value, list):
             for index, child in enumerate(value):
                 if isinstance(child, str) and child in ref_mapping:
@@ -1284,7 +1273,12 @@ def ensure_openai_context(messages: list[dict[str, Any]]) -> None:
 
 
 def chat_text(
-    client: Any, settings: OpenAISettings, messages: list[dict[str, Any]]
+    client: Any,
+    settings: OpenAISettings,
+    messages: list[dict[str, Any]],
+    *,
+    json_response: bool = False,
+    max_tokens: int | None = None,
 ) -> str:
     """Chat Completions を呼び出し、本文文字列を返す。
 
@@ -1292,6 +1286,8 @@ def chat_text(
         client: OpenAI client。
         settings: OpenAI 互換 API 設定。
         messages: Chat messages。
+        json_response: JSON object 形式をAPIへ要求するかどうか。
+        max_tokens: 応答の最大トークン数。None の場合は指定しない。
 
     Returns:
         応答本文。
@@ -1303,10 +1299,24 @@ def chat_text(
     ensure_openai_context(messages)
     for attempt in range(1, OPENAI_MAX_ATTEMPTS + 1):
         try:
-            completion = client.chat.completions.create(
-                model=settings.model, messages=messages, temperature=0.0
-            )
-            break
+            request = {
+                "model": settings.model,
+                "messages": messages,
+                "temperature": 0.0,
+            }
+            if max_tokens is not None:
+                request["max_tokens"] = max_tokens
+            if json_response:
+                request["response_format"] = {"type": "json_object"}
+            completion = client.chat.completions.create(**request)
+            choices = getattr(completion, "choices", None)
+            if not choices:
+                raise OpenAIEmptyResponseError("OpenAI response has no choices")
+            message = getattr(choices[0], "message", None)
+            content = getattr(message, "content", None)
+            if not content:
+                raise OpenAIEmptyResponseError("OpenAI response content is empty")
+            return str(content).strip()
         except Exception as exc:
             if attempt >= OPENAI_MAX_ATTEMPTS or not is_retryable_openai_error(exc):
                 raise
@@ -1322,14 +1332,7 @@ def chat_text(
                 exc,
             )
             time.sleep(delay)
-    choices = getattr(completion, "choices", None)
-    if not choices:
-        raise RuntimeError("OpenAI response has no choices")
-    message = getattr(choices[0], "message", None)
-    content = getattr(message, "content", None)
-    if not content:
-        raise RuntimeError("OpenAI response content is empty")
-    return str(content).strip()
+    raise RuntimeError("OpenAI request attempts exhausted")
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
@@ -2207,6 +2210,29 @@ def translate_batch(
     expected_ids = [item["id"] for item in request_items]
     if len(expected_ids) != len(set(expected_ids)):
         raise ValueError("translation batch contains duplicate ids")
+
+    def split_batch(error: Exception) -> dict[str, str]:
+        if len(items) == 1:
+            raise error
+        middle = len(items) // 2
+        LOGGER.warning(
+            "Splitting invalid translation batch items=%s error=%s", len(items), error
+        )
+        return {
+            **translate_batch(
+                client,
+                settings,
+                items[:middle],
+                translation_rules=translation_rules,
+            ),
+            **translate_batch(
+                client,
+                settings,
+                items[middle:],
+                translation_rules=translation_rules,
+            ),
+        }
+
     system = (
         "あなたは専門文書の日英翻訳者です。原文にない説明、要約、事実追加は禁止です。"
         "各要素を文脈に沿って翻訳し、入力IDを変更せずJSONだけを返してください。"
@@ -2224,19 +2250,37 @@ IDの追加、削除、変更、重複は禁止です。styleとcontextは訳文
 入力JSON:
 {json.dumps(request_items, ensure_ascii=False)}
 """
-    response = chat_text(
-        client,
-        settings,
-        [{"role": "system", "content": system}, {"role": "user", "content": user}],
-    )
-    payload = parse_json_object(response)
-    translations = payload.get("translations")
+    try:
+        response = chat_text(
+            client,
+            settings,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            json_response=True,
+            max_tokens=OPENAI_MAX_OUTPUT_TOKENS,
+        )
+    except OpenAIEmptyResponseError as exc:
+        return split_batch(exc)
+    try:
+        try:
+            payload = json.loads(response)
+        except json.JSONDecodeError:
+            payload = parse_json_object(response)
+    except ValueError as exc:
+        return split_batch(exc)
+    translations = payload if isinstance(payload, list) else payload.get("translations")
+    if isinstance(payload, dict) and {"id", "translated_text"} <= payload.keys():
+        translations = [payload]
     if not isinstance(translations, list):
-        raise ValueError("translation response must contain translations list")
+        return split_batch(
+            ValueError("translation response must contain translations list")
+        )
     result: dict[str, str] = {}
     for entry in translations:
         if not isinstance(entry, dict):
-            raise ValueError("translation entry must be an object")
+            return split_batch(ValueError("translation entry must be an object"))
         item_id = entry.get("id")
         translated_text = entry.get("translated_text")
         if (
@@ -2244,15 +2288,22 @@ IDの追加、削除、変更、重複は禁止です。styleとcontextは訳文
             or not isinstance(translated_text, str)
             or not translated_text.strip()
         ):
-            raise ValueError("translation entry must contain string id and text")
+            return split_batch(
+                ValueError("translation entry must contain string id and text")
+            )
         if item_id in result:
-            raise ValueError(f"translation response contains duplicate id: {item_id}")
+            return split_batch(
+                ValueError(f"translation response contains duplicate id: {item_id}")
+            )
         result[item_id] = translated_text
     if set(result) != set(expected_ids):
         missing = sorted(set(expected_ids) - set(result))
         unknown = sorted(set(result) - set(expected_ids))
-        raise ValueError(
-            f"translation response ids do not match missing={missing} unknown={unknown}"
+        return split_batch(
+            ValueError(
+                "translation response ids do not match "
+                f"missing={missing} unknown={unknown}"
+            )
         )
     LOGGER.info(
         "Translated batch items=%s source_chars=%s",

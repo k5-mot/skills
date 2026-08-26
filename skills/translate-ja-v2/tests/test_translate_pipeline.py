@@ -29,6 +29,8 @@ from translate import (  # noqa: E402
     main,
     message_text_chars,
     normalize_document,
+    OpenAIEmptyResponseError,
+    OPENAI_MAX_OUTPUT_TOKENS,
     OpenAISettings,
     pack_translation_blocks,
     page_image_path,
@@ -466,6 +468,8 @@ def test_translate_document_passes_glossary_hits_and_rules(
     assert "Strategic Command" in prompt
     assert "Unmatched Term" not in prompt
     assert "固有名詞は英語のまま和訳する" in prompt
+    assert client.completions.calls[0]["max_tokens"] == OPENAI_MAX_OUTPUT_TOKENS
+    assert client.completions.calls[0]["response_format"] == {"type": "json_object"}
     assert translated["texts"][0]["translate_ja_v2"]["glossary_terms"] == [
         "Strategic Command"
     ]
@@ -489,7 +493,7 @@ def test_pack_translation_blocks_keeps_sections_within_limit() -> None:
         ],
     ]
 
-    batches = pack_translation_blocks(blocks)
+    batches = pack_translation_blocks(blocks, max_chars=3000)
 
     assert [[item["id"] for item in batch] for batch in batches] == [
         ["h1", "p1"],
@@ -641,7 +645,7 @@ def test_translate_batch_rejects_missing_response_id(
 
     monkeypatch.setattr(
         "translate.chat_text",
-        lambda _client, _settings, _messages: json.dumps(
+        lambda _client, _settings, _messages, **_kwargs: json.dumps(
             {"translations": [{"id": "a", "translated_text": "訳A"}]},
             ensure_ascii=False,
         ),
@@ -664,6 +668,65 @@ def test_translate_batch_rejects_missing_response_id(
         )
 
 
+def test_translate_batch_accepts_top_level_array(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemma4 が返すトップレベル翻訳配列も受理する。"""
+
+    monkeypatch.setattr(
+        "translate.chat_text",
+        lambda _client, _settings, _messages, **_kwargs: json.dumps(
+            [{"id": "a", "translated_text": "訳A"}], ensure_ascii=False
+        ),
+    )
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+
+    assert translate_batch(
+        object(), settings, [{"id": "a", "text": "A", "style": "本文"}]
+    ) == {"a": "訳A"}
+
+
+def test_translate_batch_splits_partial_single_entry_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """複数入力に1件だけ返る部分応答は分割して取り直す。"""
+
+    sizes: list[int] = []
+
+    def fake_chat(
+        _client: object,
+        _settings: OpenAISettings,
+        messages: list[dict[str, Any]],
+        **_kwargs: object,
+    ) -> str:
+        items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
+        sizes.append(len(items))
+        return json.dumps(
+            {"id": items[0]["id"], "translated_text": "訳文"},
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("translate.chat_text", fake_chat)
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+    items = [
+        {"id": "a", "text": "A", "style": "本文"},
+        {"id": "b", "text": "B", "style": "本文"},
+    ]
+
+    assert translate_batch(object(), settings, items) == {"a": "訳文", "b": "訳文"}
+    assert sizes == [2, 1, 1]
+
+
 def test_chat_text_retries_retryable_openai_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -684,6 +747,67 @@ def test_chat_text_retries_retryable_openai_errors(
     assert result == "再試行後"
     assert client.completions.calls == 2
     assert delays == [5.0]
+
+
+def test_chat_text_reports_empty_content() -> None:
+    """HTTP 200でも本文が空なら専用例外を返す。"""
+
+    completions = type(
+        "EmptyCompletions",
+        (),
+        {"create": lambda _self, **_kwargs: _completion("")},
+    )()
+    client = type(
+        "EmptyClient",
+        (),
+        {"chat": type("Chat", (), {"completions": completions})()},
+    )()
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+    with pytest.raises(OpenAIEmptyResponseError):
+        chat_text(client, settings, [{"role": "user", "content": "hello"}])
+
+
+def test_translate_batch_splits_after_empty_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """空本文になった複数要素バッチは半分に分割する。"""
+
+    sizes: list[int] = []
+
+    def fake_chat(
+        _client: object,
+        _settings: OpenAISettings,
+        messages: list[dict[str, Any]],
+        **_kwargs: object,
+    ) -> str:
+        items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
+        sizes.append(len(items))
+        if len(items) > 1:
+            raise OpenAIEmptyResponseError("empty")
+        return json.dumps(
+            [{"id": items[0]["id"], "translated_text": "訳文"}],
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("translate.chat_text", fake_chat)
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+    items = [
+        {"id": "a", "text": "A", "style": "本文"},
+        {"id": "b", "text": "B", "style": "本文"},
+    ]
+
+    assert translate_batch(object(), settings, items) == {"a": "訳文", "b": "訳文"}
+    assert sizes == [2, 1, 1]
 
 
 def test_render_markdown_uses_translated_json_fields() -> None:
@@ -752,6 +876,40 @@ def test_apply_structure_patches_supports_label_level_and_reorder() -> None:
     assert patched["texts"][0]["level"] == 2
 
 
+def test_apply_structure_patches_merge_reindexes_references_once() -> None:
+    """merge 後の self_ref と body 参照は連鎖変換せず一意に保つ。"""
+
+    data = {
+        "texts": [
+            {"self_ref": "#/texts/0", "label": "paragraph", "text": "A"},
+            {"self_ref": "#/texts/1", "label": "paragraph", "text": "B"},
+            {"self_ref": "#/texts/2", "label": "paragraph", "text": "C"},
+        ],
+        "body": {
+            "children": [
+                {"$ref": "#/texts/0"},
+                {"$ref": "#/texts/1"},
+                {"$ref": "#/texts/2"},
+            ]
+        },
+    }
+
+    patched, applied = apply_structure_patches(
+        data,
+        [{"op": "merge_texts", "refs": ["#/texts/0", "#/texts/1"]}],
+    )
+
+    assert applied[0]["status"] == "success"
+    assert [item["self_ref"] for item in patched["texts"]] == [
+        "#/texts/0",
+        "#/texts/1",
+    ]
+    assert [child["$ref"] for child in patched["body"]["children"]] == [
+        "#/texts/0",
+        "#/texts/1",
+    ]
+
+
 def test_build_structure_messages_attaches_docling_page_png(tmp_path: Path) -> None:
     """構造補正 prompt は Docling のページ PNG を VLM content として添付する。"""
 
@@ -804,7 +962,10 @@ def test_structure_document_falls_back_to_pairwise_when_page_prompt_is_large(
     calls: list[list[dict[str, Any]]] = []
 
     def fake_chat(
-        _client: object, _settings: OpenAISettings, messages: list[dict[str, Any]]
+        _client: object,
+        _settings: OpenAISettings,
+        messages: list[dict[str, Any]],
+        **_kwargs: object,
     ) -> str:
         """pairwise request に固定 patch を返す。"""
 
