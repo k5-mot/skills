@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import copy
 import csv
+from difflib import SequenceMatcher
 import json
 import logging
 import math
@@ -2678,15 +2679,15 @@ def review_document(
     settings = require_openai_settings()
     client = openai_client(settings)
     changes = 0
-    for batch in pack_translation_blocks([targets]):
+    for target in targets:
         add_review_neighbors(targets)
         reviewed = review_batch(
             client,
             settings,
-            batch,
+            [target],
             translation_rules=translation_rules,
         )
-        changes += apply_review_results(batch, reviewed)
+        changes += apply_review_results([target], reviewed)
     return result, changes
 
 
@@ -2812,7 +2813,7 @@ def review_batch(
     *,
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
 ) -> dict[str, str]:
-    """翻訳済み要素をID付きJSONで一括レビューする。
+    """翻訳済み要素を通常テキスト応答で1件ずつレビューする。
 
     Args:
         client: OpenAI client。
@@ -2829,58 +2830,18 @@ def review_batch(
 
     if not items:
         return {}
-    request_items = [
-        {
-            "id": str(item["id"]),
-            "kind": str(item["kind"]),
-            "context": str(item.get("context") or ""),
-            "glossary_terms": item.get("glossary_terms") or [],
-            "previous_text_ja": str(item.get("previous_text_ja") or ""),
-            "source_text": str(item["source_text"]),
-            "translated_text": str(item["translated_text"]),
-            "next_text_ja": str(item.get("next_text_ja") or ""),
-        }
-        for item in items
-    ]
-    expected_ids = [item["id"] for item in request_items]
+    expected_ids = [str(item["id"]) for item in items]
     if len(expected_ids) != len(set(expected_ids)):
         raise ValueError("review batch contains duplicate ids")
-
-    def keep_originals(error: Exception) -> dict[str, str]:
-        LOGGER.warning(
-            "Keeping original translations after failed review items=%s error=%s",
-            len(items),
-            error,
-        )
-        return {str(item["id"]): str(item["translated_text"]) for item in items}
-
-    def split_batch(error: Exception) -> dict[str, str]:
-        if len(items) == 1:
-            return keep_originals(error)
-        middle = len(items) // 2
-        LOGGER.warning(
-            "Splitting invalid review batch items=%s error=%s", len(items), error
-        )
-        return {
-            **review_batch(
-                client,
-                settings,
-                items[:middle],
-                translation_rules=translation_rules,
-            ),
-            **review_batch(
-                client,
-                settings,
-                items[middle:],
-                translation_rules=translation_rules,
-            ),
-        }
 
     system = (
         "あなたは専門文書の日英翻訳レビュー担当者です。"
         "原文にない説明、要約、事実追加は禁止です。"
+        "レビュー後の日本語訳以外は出力しません。"
     )
-    user = f"""次の翻訳済み要素をレビューし、必要な場合だけ日本語訳を修正してください。
+    result: dict[str, str] = {}
+    for item in items:
+        user = f"""次の翻訳済み要素をレビューし、必要な場合だけ日本語訳を修正してください。
 
 レビュー観点:
 - 原文の意味、数量、否定、固有名詞が保たれているか。
@@ -2891,66 +2852,36 @@ def review_batch(
 翻訳ルール:
 {translation_rules.strip()}
 
-返却JSON:
-{{"reviews":[{{"id":"入力と同じID","reviewed_text":"レビュー後の日本語訳"}}]}}
+種類: {item["kind"]}
+文脈: {item.get("context") or "（なし）"}
+用語集の該当語: {", ".join(item.get("glossary_terms") or []) or "（なし）"}
+前の日本語訳: {item.get("previous_text_ja") or "（なし）"}
+原文: {item["source_text"]}
+現在の日本語訳: {item["translated_text"]}
+次の日本語訳: {item.get("next_text_ja") or "（なし）"}
 
-IDの追加、削除、変更、重複は禁止です。修正不要な要素も reviewed_text に現在の日本語訳をそのまま入れてください。
-
-入力JSON:
-{json.dumps(request_items, ensure_ascii=False)}
+出力はレビュー後の日本語訳だけにしてください。修正不要なら現在の日本語訳だけをそのまま返してください。
 """
-    try:
-        response = chat_text(
-            client,
-            settings,
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            json_response=True,
-            max_tokens=OPENAI_MAX_OUTPUT_TOKENS,
-        )
-    except OpenAIEmptyResponseError as exc:
-        return split_batch(exc)
-    try:
         try:
-            payload = json.loads(response)
-        except json.JSONDecodeError:
-            payload = parse_json_object(response)
-    except ValueError as exc:
-        return split_batch(exc)
-    reviews = payload if isinstance(payload, list) else payload.get("reviews")
-    if isinstance(payload, dict) and {"id", "reviewed_text"} <= payload.keys():
-        reviews = [payload]
-    if not isinstance(reviews, list):
-        return split_batch(ValueError("review response must contain reviews list"))
-    result: dict[str, str] = {}
-    for entry in reviews:
-        if not isinstance(entry, dict):
-            return split_batch(ValueError("review entry must be an object"))
-        item_id = entry.get("id")
-        reviewed_text = entry.get("reviewed_text")
-        if (
-            not isinstance(item_id, str)
-            or not isinstance(reviewed_text, str)
-            or not reviewed_text.strip()
-        ):
-            return split_batch(
-                ValueError("review entry must contain string id and text")
+            reviewed_text = chat_text(
+                client,
+                settings,
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_tokens=OPENAI_MAX_OUTPUT_TOKENS,
             )
-        if item_id in result:
-            return split_batch(
-                ValueError(f"review response contains duplicate id: {item_id}")
+            if not reviewed_text:
+                raise OpenAIEmptyResponseError("OpenAI response content is empty")
+        except OpenAIEmptyResponseError as exc:
+            LOGGER.warning(
+                "Keeping original translation after empty review id=%s error=%s",
+                item["id"],
+                exc,
             )
-        result[item_id] = reviewed_text
-    if set(result) != set(expected_ids):
-        missing = sorted(set(expected_ids) - set(result))
-        unknown = sorted(set(result) - set(expected_ids))
-        return split_batch(
-            ValueError(
-                f"review response ids do not match missing={missing} unknown={unknown}"
-            )
-        )
+            reviewed_text = str(item["translated_text"])
+        result[str(item["id"])] = reviewed_text
     LOGGER.info("Reviewed batch items=%s", len(items))
     return result
 
@@ -2977,6 +2908,14 @@ def apply_review_results(
         before = str(meta.get(text_field) or "")
         if reviewed == before:
             continue
+        changed_chars = sum(
+            max(before_end - before_start, reviewed_end - reviewed_start)
+            for tag, before_start, before_end, reviewed_start, reviewed_end in SequenceMatcher(
+                None, before, reviewed, autojunk=False
+            ).get_opcodes()
+            if tag != "equal"
+        )
+        LOGGER.info("Review changed id=%s changed_chars=%s", item_id, changed_chars)
         meta[text_field] = reviewed
         target["translated_text"] = reviewed
         target["text"] = f"{target['source_text']}\n{reviewed}"

@@ -827,23 +827,7 @@ def test_review_document_checks_neighbor_consistency(
         **_kwargs: object,
     ) -> str:
         calls.append(messages)
-        items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
-        return json.dumps(
-            {
-                "reviews": [
-                    {
-                        "id": item["id"],
-                        "reviewed_text": (
-                            "防衛省"
-                            if item["source_text"] == "Department of Defense"
-                            else item["translated_text"]
-                        ),
-                    }
-                    for item in items
-                ]
-            },
-            ensure_ascii=False,
-        )
+        return "防衛省"
 
     monkeypatch.setattr(
         "translate.require_openai_settings",
@@ -891,22 +875,27 @@ def test_review_document_checks_neighbor_consistency(
     assert changes == 1
     assert reviewed["texts"][0]["translate_ja_v2"]["text_ja"] == "防衛省"
     assert reviewed["texts"][0]["translate_ja_v2"]["render_text"] == "防衛省"
-    assert '"next_text_ja": "防衛省"' in prompt
+    assert "次の日本語訳: 防衛省" in prompt
     assert "日本語表記が揺れていないか" in prompt
 
 
-def test_review_batch_keeps_original_after_missing_response_id(
+def test_review_batch_uses_plain_text_without_structured_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """レビュー応答に入力IDの欠落があれば元訳を使う。"""
+    """レビュー工程は1要素ずつ通常テキスト応答を受け取る。"""
 
-    monkeypatch.setattr(
-        "translate.chat_text",
-        lambda _client, _settings, _messages, **_kwargs: json.dumps(
-            {"reviews": [{"id": "a", "reviewed_text": "訳A"}]},
-            ensure_ascii=False,
-        ),
-    )
+    calls: list[tuple[list[dict[str, Any]], dict[str, object]]] = []
+
+    def fake_chat(
+        _client: object,
+        _settings: OpenAISettings,
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> str:
+        calls.append((messages, kwargs))
+        return "訳A" if "原文: A" in str(messages[-1]["content"]) else "訳B"
+
+    monkeypatch.setattr("translate.chat_text", fake_chat)
     settings = OpenAISettings(
         base_url="http://example.test",
         api_key="test",
@@ -931,7 +920,10 @@ def test_review_batch_keeps_original_after_missing_response_id(
                 "kind": "本文",
             },
         ],
-    ) == {"a": "訳A", "b": "元訳B"}
+    ) == {"a": "訳A", "b": "訳B"}
+    assert len(calls) == 2
+    assert all("json_response" not in kwargs for _messages, kwargs in calls)
+    assert all("返却JSON" not in str(messages[-1]["content"]) for messages, _ in calls)
 
 
 def test_review_batch_keeps_original_after_empty_single_response(
@@ -966,11 +958,14 @@ def test_review_batch_keeps_original_after_empty_single_response(
     ) == {"#/texts/20": "防衛省"}
 
 
-def test_apply_review_results_updates_bilingual_render_text() -> None:
+def test_apply_review_results_updates_bilingual_render_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """レビュー結果は見出しと表タイトルの英日併記表示を保つ。"""
 
     heading_meta = {"text_ja": "作戦", "render_text": "Strategy / 作戦"}
     caption_meta = {"caption_ja": "用語", "caption_render": "Terms / 用語"}
+    caplog.set_level(logging.INFO, logger="translate-ja-v2")
 
     changes = apply_review_results(
         [
@@ -997,6 +992,8 @@ def test_apply_review_results_updates_bilingual_render_text() -> None:
     assert changes == 2
     assert heading_meta["render_text"] == "Strategy / 戦略"
     assert caption_meta["caption_render"] == "Terms / 用語集"
+    assert "Review changed id=#/texts/0 changed_chars=2" in caplog.text
+    assert "Review changed id=#/tables/0/caption changed_chars=1" in caplog.text
 
 
 def test_render_markdown_uses_translated_json_fields() -> None:
