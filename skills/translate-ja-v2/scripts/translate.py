@@ -24,7 +24,7 @@ from time import perf_counter
 from typing import Annotated, Any, cast
 
 import typer
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 LOGGER = logging.getLogger("translate-ja-v2")
 
@@ -91,6 +91,7 @@ class OpenAISettings(FrozenModel):
         api_key: API キー。
         model: 構造補正と翻訳に使うモデル名。
         timeout_seconds: API 呼び出しの timeout 秒数。
+        context_chars: request に含めるテキストの最大文字数。
 
     Returns:
         OpenAI 互換 API の呼び出しに必要な設定値。
@@ -100,6 +101,7 @@ class OpenAISettings(FrozenModel):
     api_key: str
     model: str
     timeout_seconds: int
+    context_chars: int = Field(default=OPENAI_CONTEXT_LIMIT_CHARS, ge=1)
 
 
 class StagePaths(FrozenModel):
@@ -146,6 +148,8 @@ class PipelineOptions(FrozenModel):
         env: dotenv ファイルのパス。
         glossary: CSV 用語集のパス。
         translation_rules: 翻訳ルール Markdown のパス。
+        context_chars: OpenAI request の最大テキスト文字数。
+        batch_chars: 翻訳バッチの最大原文文字数。
 
     Returns:
         パイプライン実行に必要な CLI オプション。
@@ -162,6 +166,8 @@ class PipelineOptions(FrozenModel):
     env: Path = Path(".env")
     glossary: Path | None = None
     translation_rules: Path | None = None
+    context_chars: int = Field(default=OPENAI_CONTEXT_LIMIT_CHARS, ge=1)
+    batch_chars: int = Field(default=TRANSLATION_BATCH_MAX_CHARS, ge=1)
 
 
 def configure_logging(level_name: str | None = None) -> None:
@@ -252,10 +258,13 @@ def require_docling_settings() -> DoclingSettings:
     )
 
 
-def require_openai_settings() -> OpenAISettings:
+def require_openai_settings(
+    context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS,
+) -> OpenAISettings:
     """OpenAI 互換 API の必須設定を環境変数から読み込む。
 
     Args:
+        context_chars: request に含めるテキストの最大文字数。
     Returns:
         OpenAISettings。
 
@@ -277,6 +286,7 @@ def require_openai_settings() -> OpenAISettings:
         api_key=api_key,
         model=model,
         timeout_seconds=OPENAI_TIMEOUT_SECONDS,
+        context_chars=context_chars,
     )
 
 
@@ -1260,21 +1270,24 @@ def message_text_chars(value: Any) -> int:
     return 0
 
 
-def ensure_openai_context(messages: list[dict[str, Any]]) -> None:
+def ensure_openai_context(
+    messages: list[dict[str, Any]],
+    max_chars: int = OPENAI_CONTEXT_LIMIT_CHARS,
+) -> None:
     """OpenAI 互換 request の文字コンテキスト上限を検証する。
 
     Args:
         messages: Chat messages。
+        max_chars: request に含めるテキストの最大文字数。
 
     Raises:
         ValueError: 文字コンテキストが上限を超える場合。
     """
 
     size = message_text_chars(messages)
-    if size > OPENAI_CONTEXT_LIMIT_CHARS:
+    if size > max_chars:
         raise ValueError(
-            "OpenAI request text context exceeds limit "
-            f"chars={size} limit={OPENAI_CONTEXT_LIMIT_CHARS}"
+            f"OpenAI request text context exceeds limit chars={size} limit={max_chars}"
         )
 
 
@@ -1302,7 +1315,7 @@ def chat_text(
         RuntimeError: 応答本文が空の場合。
     """
 
-    ensure_openai_context(messages)
+    ensure_openai_context(messages, settings.context_chars)
     for attempt in range(1, OPENAI_MAX_ATTEMPTS + 1):
         try:
             request = {
@@ -1960,7 +1973,7 @@ def structure_page_with_vlm(
     if not units:
         return data, []
     messages = build_page_structure_messages(page_no, units, artifacts_dir)
-    if message_text_chars(messages) <= OPENAI_CONTEXT_LIMIT_CHARS:
+    if message_text_chars(messages) <= settings.context_chars:
         response = chat_text(client, settings, messages)
         return apply_structure_patches(data, parse_structure_response(response))
     LOGGER.info(
@@ -1998,7 +2011,7 @@ def structure_page_pairwise(
         messages = build_merge_messages(
             page_no, units[index], units[index + 1], artifacts_dir
         )
-        if message_text_chars(messages) > OPENAI_CONTEXT_LIMIT_CHARS:
+        if message_text_chars(messages) > settings.context_chars:
             raise ValueError("merge comparison exceeds OpenAI context limit")
         current, merge_applied = apply_structure_patches(
             current, parse_structure_response(chat_text(client, settings, messages))
@@ -2019,7 +2032,7 @@ def structure_page_pairwise(
             messages = build_swap_messages(
                 page_no, units[left_index], units[right_index], artifacts_dir
             )
-            if message_text_chars(messages) > OPENAI_CONTEXT_LIMIT_CHARS:
+            if message_text_chars(messages) > settings.context_chars:
                 raise ValueError("swap comparison exceeds OpenAI context limit")
             current, swap_applied = apply_structure_patches(
                 current, parse_structure_response(chat_text(client, settings, messages))
@@ -2031,7 +2044,11 @@ def structure_page_pairwise(
 
 
 def structure_document(
-    data: dict[str, Any], *, skip_vlm: bool, artifacts_dir: Path | None = None
+    data: dict[str, Any],
+    *,
+    skip_vlm: bool,
+    artifacts_dir: Path | None = None,
+    context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """VLM/LLM で見出し・本文の構造を補正する。
 
@@ -2039,6 +2056,7 @@ def structure_document(
         data: 正規化済み Docling JSON。
         skip_vlm: VLM 呼び出しをスキップするかどうか。
         artifacts_dir: Docling PNG artifacts のディレクトリ。
+        context_chars: OpenAI request の最大テキスト文字数。
 
     Returns:
         補正後 JSON と patch 適用結果。
@@ -2046,7 +2064,7 @@ def structure_document(
 
     if skip_vlm:
         return copy.deepcopy(data), []
-    settings = require_openai_settings()
+    settings = require_openai_settings(context_chars)
     client = openai_client(settings)
     result = copy.deepcopy(data)
     applied: list[dict[str, Any]] = []
@@ -2368,6 +2386,7 @@ def translate_text_items(
     settings: OpenAISettings,
     glossary: list[dict[str, str]],
     translation_rules: str,
+    batch_chars: int = TRANSLATION_BATCH_MAX_CHARS,
 ) -> None:
     """見出し階層と後続本文を意味ブロック化して一括翻訳する。
 
@@ -2377,6 +2396,7 @@ def translate_text_items(
         settings: OpenAI 互換 API 設定。
         glossary: CSV から読み込んだ用語集。
         translation_rules: LLM に渡す翻訳ルール。
+        batch_chars: 翻訳バッチの最大原文文字数。
 
     Returns:
         なし。
@@ -2428,7 +2448,7 @@ def translate_text_items(
     if block:
         blocks.append(block)
 
-    for batch in pack_translation_blocks(blocks):
+    for batch in pack_translation_blocks(blocks, max_chars=batch_chars):
         translations = translate_batch(
             client,
             settings,
@@ -2447,6 +2467,8 @@ def translate_document(
     data: dict[str, Any],
     glossary: list[dict[str, str]] | None = None,
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
+    context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS,
+    batch_chars: int = TRANSLATION_BATCH_MAX_CHARS,
 ) -> dict[str, Any]:
     """Docling JSON の各要素へ日本語翻訳フィールドを追加する。
 
@@ -2454,13 +2476,15 @@ def translate_document(
         data: 構造補正済み Docling JSON。
         glossary: CSV から読み込んだ用語集。
         translation_rules: 翻訳ルール本文。
+        context_chars: OpenAI request の最大テキスト文字数。
+        batch_chars: 翻訳バッチの最大原文文字数。
 
     Returns:
         翻訳フィールドを追加した JSON。
     """
 
     result = copy.deepcopy(data)
-    settings = require_openai_settings()
+    settings = require_openai_settings(context_chars)
     client = openai_client(settings)
     glossary_entries = glossary or []
     texts = result.get("texts")
@@ -2471,6 +2495,7 @@ def translate_document(
             settings,
             glossary_entries,
             translation_rules,
+            batch_chars,
         )
     tables = result.get("tables")
     if isinstance(tables, list):
@@ -2485,6 +2510,7 @@ def translate_document(
                 self_ref(item, "tables", index),
                 glossary_entries,
                 translation_rules,
+                batch_chars,
             )
     return result
 
@@ -2567,6 +2593,7 @@ def translate_table_item(
     ref: str,
     glossary: list[dict[str, str]] | None = None,
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
+    batch_chars: int = TRANSLATION_BATCH_MAX_CHARS,
 ) -> None:
     """Docling table item のタイトルとセルへ翻訳フィールドを追加する。
 
@@ -2577,6 +2604,7 @@ def translate_table_item(
         ref: table item の JSON pointer。
         glossary: CSV から読み込んだ用語集。
         translation_rules: 翻訳ルール本文。
+        batch_chars: 翻訳バッチの最大原文文字数。
 
     Returns:
         なし。
@@ -2625,7 +2653,7 @@ def translate_table_item(
             }
         )
 
-    for batch in pack_translation_blocks([targets]):
+    for batch in pack_translation_blocks([targets], max_chars=batch_chars):
         translations = translate_batch(
             client,
             settings,
@@ -2661,12 +2689,14 @@ def translate_table_item(
 def review_document(
     data: dict[str, Any],
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
+    context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS,
 ) -> tuple[dict[str, Any], int]:
     """翻訳済み metadata を近接要素と照合して校正する。
 
     Args:
         data: 翻訳 metadata 付き Docling JSON。
         translation_rules: LLM に渡す翻訳ルール。
+        context_chars: OpenAI request の最大テキスト文字数。
 
     Returns:
         レビュー済み JSON と変更件数。
@@ -2676,7 +2706,7 @@ def review_document(
     targets = collect_review_targets(result)
     if not targets:
         return result, 0
-    settings = require_openai_settings()
+    settings = require_openai_settings(context_chars)
     client = openai_client(settings)
     changes = 0
     for target in targets:
@@ -3291,6 +3321,7 @@ class StructureStage(FrozenModel):
     paths: StagePaths
     artifacts_dir: Path
     skip_vlm: bool
+    context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS
 
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
         """構造補正済み文書を返す。"""
@@ -3299,6 +3330,7 @@ class StructureStage(FrozenModel):
             document,
             skip_vlm=self.skip_vlm,
             artifacts_dir=self.artifacts_dir,
+            context_chars=self.context_chars,
         )
         write_json(self.paths.structured_json, structured)
         update_manifest(
@@ -3318,6 +3350,8 @@ class TranslateStage(FrozenModel):
     paths: StagePaths
     glossary_path: Path | None = None
     translation_rules_path: Path | None = None
+    context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS
+    batch_chars: int = TRANSLATION_BATCH_MAX_CHARS
 
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
         """翻訳 metadata を付与した文書を返す。"""
@@ -3326,6 +3360,8 @@ class TranslateStage(FrozenModel):
             document,
             glossary=read_glossary_csv(self.glossary_path),
             translation_rules=read_translation_rules(self.translation_rules_path),
+            context_chars=self.context_chars,
+            batch_chars=self.batch_chars,
         )
         write_json(self.paths.translated_json, translated)
         update_manifest(
@@ -3344,6 +3380,7 @@ class ReviewStage(FrozenModel):
 
     paths: StagePaths
     translation_rules_path: Path | None = None
+    context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS
 
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
         """レビュー済み文書を返す。"""
@@ -3351,6 +3388,7 @@ class ReviewStage(FrozenModel):
         reviewed, changes = review_document(
             document,
             translation_rules=read_translation_rules(self.translation_rules_path),
+            context_chars=self.context_chars,
         )
         write_json(self.paths.reviewed_json, reviewed)
         update_manifest(
@@ -3447,11 +3485,14 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
         paths=paths,
         artifacts_dir=artifacts_dir,
         skip_vlm=args.skip_vlm,
+        context_chars=args.context_chars,
     ).run(normalized)
     translated = TranslateStage(
         paths=paths,
         glossary_path=args.glossary,
         translation_rules_path=args.translation_rules,
+        context_chars=args.context_chars,
+        batch_chars=args.batch_chars,
     ).run(structured)
     render_source = (
         translated
@@ -3459,6 +3500,7 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
         else ReviewStage(
             paths=paths,
             translation_rules_path=args.translation_rules,
+            context_chars=args.context_chars,
         ).run(translated)
     )
     markdown_path = RenderStage(paths=paths).run(render_source)
@@ -3503,6 +3545,14 @@ def cli(
     translation_rules: Annotated[
         Path | None, typer.Option(help="translation rules text file")
     ] = None,
+    context_chars: Annotated[
+        int,
+        typer.Option(min=1, help="maximum text characters per OpenAI request"),
+    ] = OPENAI_CONTEXT_LIMIT_CHARS,
+    batch_chars: Annotated[
+        int,
+        typer.Option(min=1, help="maximum source characters per translation batch"),
+    ] = TRANSLATION_BATCH_MAX_CHARS,
 ) -> None:
     """CLI から translate-ja-v2 パイプラインを実行する。
 
@@ -3518,6 +3568,8 @@ def cli(
         env: dotenv ファイルのパス。
         glossary: CSV 用語集のパス。
         translation_rules: 翻訳ルール本文ファイルのパス。
+        context_chars: OpenAI request の最大テキスト文字数。
+        batch_chars: 翻訳バッチの最大原文文字数。
 
     Returns:
         なし。
@@ -3538,6 +3590,8 @@ def cli(
         env=env,
         glossary=glossary,
         translation_rules=translation_rules,
+        context_chars=context_chars,
+        batch_chars=batch_chars,
     )
     load_dotenv_file(options.env)
     configure_logging()

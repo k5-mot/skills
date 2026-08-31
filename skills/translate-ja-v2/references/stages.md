@@ -69,7 +69,7 @@ VLM に禁止する操作:
 - 翻訳
 - validation 不能な任意 JSON の返却
 
-VLM 応答は JSON object として受け取り、`apply_structure_patches` で `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用する。添付画像数は先頭12枚に制限する。
+VLM 応答は JSON object として受け取り、`apply_structure_patches` で `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用する。request のテキスト上限は `--context-chars`（既定50,000文字）を使う。添付画像数は先頭12枚に制限する。
 
 ## 04 Translate
 
@@ -84,7 +84,7 @@ VLM 応答は JSON object として受け取り、`apply_structure_patches` で 
 - 表セルの自然言語
 - 図表キャプション
 
-見出しとその配下の下位見出し・本文を意味ブロックとし、同じレベルまたは上位レベルの見出しで次のブロックを開始する。見出し階層は翻訳 context に保持する。原文合計3,000文字以内で複数ブロックを1回の翻訳 request へまとめる。上限を超えるブロックは要素境界で分割するが、単独要素を途中で分割して文脈を壊さない。表はタイトルと翻訳対象セルを表単位でまとめ、上限を超える場合だけセル境界で分割する。
+見出しとその配下の下位見出し・本文を意味ブロックとし、同じレベルまたは上位レベルの見出しで次のブロックを開始する。見出し階層は翻訳 context に保持する。原文合計を `--batch-chars` の上限（既定1,500文字）以内に収めて、複数ブロックを1回の翻訳 request へまとめる。上限を超えるブロックは要素境界で分割するが、単独要素を途中で分割して文脈を壊さない。表はタイトルと翻訳対象セルを表単位でまとめ、上限を超える場合だけセル境界で分割する。request 全体には `--context-chars` の上限を適用する。
 
 翻訳 request と response は要素IDを保持する。response のIDに欠落、追加、変更、重複がある場合は訳文を適用しない。
 

@@ -443,11 +443,12 @@ def test_translate_document_passes_glossary_hits_and_rules(
     client = RecordingClient()
     monkeypatch.setattr(
         "translate.require_openai_settings",
-        lambda: OpenAISettings(
+        lambda context_chars: OpenAISettings(
             base_url="http://example.test",
             api_key="test",
             model="fake",
             timeout_seconds=1,
+            context_chars=context_chars,
         ),
     )
     monkeypatch.setattr("translate.openai_client", lambda _settings: client)
@@ -519,6 +520,7 @@ def test_translate_document_batches_text_section_and_table(
 
     client = RecordingClient()
     captured_blocks: list[list[list[str]]] = []
+    captured_limits: list[int] = []
 
     def record_blocks(
         blocks: list[list[dict[str, Any]]], max_chars: int = 3000
@@ -539,11 +541,12 @@ def test_translate_document_batches_text_section_and_table(
         captured_blocks.append(
             [[str(item["id"]) for item in block] for block in blocks]
         )
+        captured_limits.append(max_chars)
         return pack_translation_blocks(blocks, max_chars)
 
     monkeypatch.setattr(
         "translate.require_openai_settings",
-        lambda: OpenAISettings(
+        lambda *_args: OpenAISettings(
             base_url="http://example.test",
             api_key="test",
             model="fake",
@@ -602,13 +605,14 @@ def test_translate_document_batches_text_section_and_table(
         ],
     }
 
-    translated = translate_document(document)
+    translated = translate_document(document, batch_chars=3000)
 
     assert len(client.completions.calls) == 2
     assert captured_blocks[0] == [
         ["#/texts/0", "#/texts/1", "#/texts/2", "#/texts/3"],
         ["#/texts/4", "#/texts/5"],
     ]
+    assert captured_limits == [3000, 3000]
     text_prompt = client.completions.calls[0]["messages"][1]["content"]
     table_prompt = client.completions.calls[1]["messages"][1]["content"]
     assert all(
@@ -831,7 +835,7 @@ def test_review_document_checks_neighbor_consistency(
 
     monkeypatch.setattr(
         "translate.require_openai_settings",
-        lambda: OpenAISettings(
+        lambda *_args: OpenAISettings(
             base_url="http://example.test",
             api_key="test",
             model="fake",
@@ -1176,21 +1180,24 @@ def test_structure_document_falls_back_to_pairwise_when_page_prompt_is_large(
             )
         return json.dumps({"patches": []})
 
-    monkeypatch.setattr("translate.OPENAI_CONTEXT_LIMIT_CHARS", 3800)
     monkeypatch.setattr(
         "translate.require_openai_settings",
-        lambda: OpenAISettings(
+        lambda context_chars: OpenAISettings(
             base_url="http://example.test",
             api_key="test",
             model="fake",
             timeout_seconds=1,
+            context_chars=context_chars,
         ),
     )
     monkeypatch.setattr("translate.openai_client", lambda _settings: object())
     monkeypatch.setattr("translate.chat_text", fake_chat)
 
     structured, patches = structure_document(
-        data, skip_vlm=False, artifacts_dir=artifacts_dir
+        data,
+        skip_vlm=False,
+        artifacts_dir=artifacts_dir,
+        context_chars=3800,
     )
 
     assert structured["texts"][0]["text"] == "merged fragment"
@@ -1364,6 +1371,40 @@ def test_main_returns_error_for_pipeline_failure(
     assert main(["--input", str(input_path)]) == 1
 
 
+def test_main_accepts_character_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Typer CLI は文字数上限を PipelineOptions へ渡す。"""
+
+    input_path = tmp_path / "source.pdf"
+    input_path.write_bytes(b"%PDF-1.4")
+    captured: list[PipelineOptions] = []
+
+    def capture(options: PipelineOptions) -> object:
+        captured.append(options)
+        return type(
+            "Result", (), {"markdown": Path("out.md"), "docx": Path("out.docx")}
+        )()
+
+    monkeypatch.setattr("translate.run_pipeline", capture)
+
+    assert (
+        main(
+            [
+                "--input",
+                str(input_path),
+                "--context-chars",
+                "32000",
+                "--batch-chars",
+                "800",
+            ]
+        )
+        == 0
+    )
+    assert captured[0].context_chars == 32000
+    assert captured[0].batch_chars == 800
+
+
 def test_convert_markdown_to_docx_requires_pandoc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1428,6 +1469,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
     input_path = tmp_path / "source.pdf"
     input_path.write_bytes(b"%PDF-1.4")
     output_dir = tmp_path / "out"
+    limits: dict[str, int] = {}
 
     def fake_docling(
         _input_path: Path,
@@ -1470,6 +1512,8 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         data: dict[str, object],
         glossary: list[dict[str, str]] | None = None,
         translation_rules: str = "",
+        context_chars: int = 0,
+        batch_chars: int = 0,
     ) -> dict[str, object]:
         """OpenAI 翻訳の代わりに render 用 metadata を追加する。
 
@@ -1483,6 +1527,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         """
 
         _ = (data, glossary, translation_rules)
+        limits.update(context_chars=context_chars, batch_chars=batch_chars)
         copied = read_json(output_dir / "source.structured.json")
         copied["texts"][0]["translate_ja_v2"] = {"render_text": "Strategy / 戦略"}
         copied["texts"][1]["translate_ja_v2"] = {"render_text": "部隊が移動する。"}
@@ -1509,10 +1554,12 @@ def test_run_pipeline_writes_json_markdown_and_docx(
     def fake_review(
         data: dict[str, object],
         translation_rules: str = "",
+        context_chars: int = 0,
     ) -> tuple[dict[str, object], int]:
         """OpenAI レビューの代わりに入力をそのまま返す。"""
 
         _ = translation_rules
+        limits["review_context_chars"] = context_chars
         return data, 0
 
     monkeypatch.setattr("translate.convert_with_docling", fake_docling)
@@ -1529,6 +1576,8 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             skip_vlm=True,
             skip_docx=False,
             force=True,
+            context_chars=32000,
+            batch_chars=800,
         )
     )
 
@@ -1540,6 +1589,11 @@ def test_run_pipeline_writes_json_markdown_and_docx(
     assert paths.markdown.read_text(encoding="utf-8").startswith("## Strategy / 戦略")
     assert "部隊が移動する。" in paths.markdown.read_text(encoding="utf-8")
     assert paths.docx.read_bytes() == b"docx"
+    assert limits == {
+        "context_chars": 32000,
+        "batch_chars": 800,
+        "review_context_chars": 32000,
+    }
     manifest = read_json(paths.manifest)
     assert [event["stage"] for event in manifest["events"]] == [
         "start",
