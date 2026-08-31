@@ -895,10 +895,10 @@ def test_review_document_checks_neighbor_consistency(
     assert "日本語表記が揺れていないか" in prompt
 
 
-def test_review_batch_rejects_missing_response_id(
+def test_review_batch_keeps_original_after_missing_response_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """レビュー応答に入力IDの欠落があれば結果を採用しない。"""
+    """レビュー応答に入力IDの欠落があれば元訳を使う。"""
 
     monkeypatch.setattr(
         "translate.chat_text",
@@ -914,25 +914,56 @@ def test_review_batch_rejects_missing_response_id(
         timeout_seconds=1,
     )
 
-    with pytest.raises(ValueError, match="ids do not match"):
-        review_batch(
-            object(),
-            settings,
-            [
-                {
-                    "id": "a",
-                    "source_text": "A",
-                    "translated_text": "訳A",
-                    "kind": "本文",
-                },
-                {
-                    "id": "b",
-                    "source_text": "B",
-                    "translated_text": "訳B",
-                    "kind": "本文",
-                },
-            ],
-        )
+    assert review_batch(
+        object(),
+        settings,
+        [
+            {
+                "id": "a",
+                "source_text": "A",
+                "translated_text": "元訳A",
+                "kind": "本文",
+            },
+            {
+                "id": "b",
+                "source_text": "B",
+                "translated_text": "元訳B",
+                "kind": "本文",
+            },
+        ],
+    ) == {"a": "訳A", "b": "元訳B"}
+
+
+def test_review_batch_keeps_original_after_empty_single_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """単一要素のレビュー応答が空なら元訳を使う。"""
+
+    monkeypatch.setattr(
+        "translate.chat_text",
+        lambda _client, _settings, _messages, **_kwargs: (_ for _ in ()).throw(
+            OpenAIEmptyResponseError("empty")
+        ),
+    )
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+
+    assert review_batch(
+        object(),
+        settings,
+        [
+            {
+                "id": "#/texts/20",
+                "source_text": "Department of Defense",
+                "translated_text": "防衛省",
+                "kind": "本文",
+            }
+        ],
+    ) == {"#/texts/20": "防衛省"}
 
 
 def test_apply_review_results_updates_bilingual_render_text() -> None:

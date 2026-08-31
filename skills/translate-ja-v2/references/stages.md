@@ -120,7 +120,7 @@ VLM 応答は JSON object として受け取り、`apply_structure_patches` で 
 - `translated=false` の保護対象
 - 原文、構造、順序、label、表構造
 
-LLM request と response は要素IDを保持する。response のIDに欠落、追加、変更、重複がある場合はレビュー結果を適用しない。見出しと表タイトルはレビュー後も `英語 / 日本語` の render text を保つ。
+LLM request と response は要素IDを保持する。response のIDに欠落、追加、変更、重複がある場合は batch を分割して再実行する。単一要素まで分割してもレビュー応答が空または不正な場合は、その要素だけ元訳を使う。見出しと表タイトルはレビュー後も `英語 / 日本語` の render text を保つ。
 
 `--skip-review` はこの工程だけを省略する。
 

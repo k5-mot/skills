@@ -2824,7 +2824,7 @@ def review_batch(
         入力IDからレビュー後訳文への辞書。
 
     Raises:
-        ValueError: 応答IDが入力と一致しない場合、または訳文が不正な場合。
+        ValueError: 入力IDが重複している場合。
     """
 
     if not items:
@@ -2846,9 +2846,17 @@ def review_batch(
     if len(expected_ids) != len(set(expected_ids)):
         raise ValueError("review batch contains duplicate ids")
 
+    def keep_originals(error: Exception) -> dict[str, str]:
+        LOGGER.warning(
+            "Keeping original translations after failed review items=%s error=%s",
+            len(items),
+            error,
+        )
+        return {str(item["id"]): str(item["translated_text"]) for item in items}
+
     def split_batch(error: Exception) -> dict[str, str]:
         if len(items) == 1:
-            raise error
+            return keep_originals(error)
         middle = len(items) // 2
         LOGGER.warning(
             "Splitting invalid review batch items=%s error=%s", len(items), error
