@@ -25,6 +25,7 @@ from translate import (  # noqa: E402
     convert_with_docling,
     DoclingSettings,
     docling_form_payload,
+    apply_review_results,
     load_dotenv_file,
     main,
     message_text_chars,
@@ -40,6 +41,8 @@ from translate import (  # noqa: E402
     read_glossary_csv,
     read_translation_rules,
     render_markdown,
+    review_batch,
+    review_document,
     run_pipeline,
     structure_document,
     translate_document,
@@ -810,6 +813,161 @@ def test_translate_batch_splits_after_empty_response(
     assert sizes == [2, 1, 1]
 
 
+def test_review_document_checks_neighbor_consistency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """レビュー工程は前後要素を見て表記ゆれを補正する。"""
+
+    calls: list[list[dict[str, Any]]] = []
+
+    def fake_chat(
+        _client: object,
+        _settings: OpenAISettings,
+        messages: list[dict[str, Any]],
+        **_kwargs: object,
+    ) -> str:
+        calls.append(messages)
+        items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
+        return json.dumps(
+            {
+                "reviews": [
+                    {
+                        "id": item["id"],
+                        "reviewed_text": (
+                            "防衛省"
+                            if item["source_text"] == "Department of Defense"
+                            else item["translated_text"]
+                        ),
+                    }
+                    for item in items
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(
+        "translate.require_openai_settings",
+        lambda: OpenAISettings(
+            base_url="http://example.test",
+            api_key="test",
+            model="fake",
+            timeout_seconds=1,
+        ),
+    )
+    monkeypatch.setattr("translate.openai_client", lambda _settings: object())
+    monkeypatch.setattr("translate.chat_text", fake_chat)
+    document = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "paragraph",
+                "text": "Department of Defense",
+                "translate_ja_v2": {
+                    "kind": "body",
+                    "text_en": "Department of Defense",
+                    "text_ja": "国防省",
+                    "render_text": "国防省",
+                    "translated": True,
+                },
+            },
+            {
+                "self_ref": "#/texts/1",
+                "label": "paragraph",
+                "text": "Department of Defense",
+                "translate_ja_v2": {
+                    "kind": "body",
+                    "text_en": "Department of Defense",
+                    "text_ja": "防衛省",
+                    "render_text": "防衛省",
+                    "translated": True,
+                },
+            },
+        ]
+    }
+
+    reviewed, changes = review_document(document)
+    prompt = calls[0][-1]["content"]
+
+    assert changes == 1
+    assert reviewed["texts"][0]["translate_ja_v2"]["text_ja"] == "防衛省"
+    assert reviewed["texts"][0]["translate_ja_v2"]["render_text"] == "防衛省"
+    assert '"next_text_ja": "防衛省"' in prompt
+    assert "日本語表記が揺れていないか" in prompt
+
+
+def test_review_batch_rejects_missing_response_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """レビュー応答に入力IDの欠落があれば結果を採用しない。"""
+
+    monkeypatch.setattr(
+        "translate.chat_text",
+        lambda _client, _settings, _messages, **_kwargs: json.dumps(
+            {"reviews": [{"id": "a", "reviewed_text": "訳A"}]},
+            ensure_ascii=False,
+        ),
+    )
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+
+    with pytest.raises(ValueError, match="ids do not match"):
+        review_batch(
+            object(),
+            settings,
+            [
+                {
+                    "id": "a",
+                    "source_text": "A",
+                    "translated_text": "訳A",
+                    "kind": "本文",
+                },
+                {
+                    "id": "b",
+                    "source_text": "B",
+                    "translated_text": "訳B",
+                    "kind": "本文",
+                },
+            ],
+        )
+
+
+def test_apply_review_results_updates_bilingual_render_text() -> None:
+    """レビュー結果は見出しと表タイトルの英日併記表示を保つ。"""
+
+    heading_meta = {"text_ja": "作戦", "render_text": "Strategy / 作戦"}
+    caption_meta = {"caption_ja": "用語", "caption_render": "Terms / 用語"}
+
+    changes = apply_review_results(
+        [
+            {
+                "id": "#/texts/0",
+                "kind": "heading",
+                "source_text": "Strategy",
+                "meta": heading_meta,
+                "text_field": "text_ja",
+                "render_field": "render_text",
+            },
+            {
+                "id": "#/tables/0/caption",
+                "kind": "caption",
+                "source_text": "Terms",
+                "meta": caption_meta,
+                "text_field": "caption_ja",
+                "render_field": "caption_render",
+            },
+        ],
+        {"#/texts/0": "戦略", "#/tables/0/caption": "用語集"},
+    )
+
+    assert changes == 2
+    assert heading_meta["render_text"] == "Strategy / 戦略"
+    assert caption_meta["caption_render"] == "Terms / 用語集"
+
+
 def test_render_markdown_uses_translated_json_fields() -> None:
     """renderer は JSON に付与された翻訳フィールドから Markdown を作る。"""
 
@@ -1320,8 +1478,18 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         assert template_path is None
         docx_path.write_bytes(b"docx")
 
+    def fake_review(
+        data: dict[str, object],
+        translation_rules: str = "",
+    ) -> tuple[dict[str, object], int]:
+        """OpenAI レビューの代わりに入力をそのまま返す。"""
+
+        _ = translation_rules
+        return data, 0
+
     monkeypatch.setattr("translate.convert_with_docling", fake_docling)
     monkeypatch.setattr("translate.translate_document", fake_translate)
+    monkeypatch.setattr("translate.review_document", fake_review)
     monkeypatch.setattr("translate.convert_markdown_to_docx", fake_docx)
 
     paths = run_pipeline(
@@ -1340,6 +1508,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
     assert paths.normalized_json.exists()
     assert paths.structured_json.exists()
     assert paths.translated_json.exists()
+    assert paths.reviewed_json.exists()
     assert paths.markdown.read_text(encoding="utf-8").startswith("## Strategy / 戦略")
     assert "部隊が移動する。" in paths.markdown.read_text(encoding="utf-8")
     assert paths.docx.read_bytes() == b"docx"
@@ -1350,6 +1519,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         "normalize",
         "structure",
         "translate",
+        "review",
         "markdown",
         "docx",
     ]

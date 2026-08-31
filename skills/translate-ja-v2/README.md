@@ -53,6 +53,8 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
   --skip-docx
 ```
 
+翻訳レビューを省略して API 呼び出しを減らす場合は `--skip-review` を指定します。
+
 CLI オプションを確認する場合は `--help` を使います。
 
 ```bash
@@ -73,6 +75,7 @@ CLI 引数解析
   -> NormalizeStage（座標による第1段階補正）
   -> StructureStage（VLMによる第2段階補正）
   -> TranslateStage
+  -> ReviewStage（翻訳レビュー）
   -> RenderStage（Markdown）
   -> DocxStage（Word docx）
   -> 完了ログ・終了コード返却
@@ -86,7 +89,8 @@ CLI 引数解析
 | `NormalizeStage` | Docling JSON | 座標補正済み JSON |
 | `StructureStage` | 座標補正済み JSON | VLM 構造補正済み JSON |
 | `TranslateStage` | 構造補正済み JSON | 翻訳 metadata 付き JSON |
-| `RenderStage` | 翻訳 metadata 付き JSON | Markdown パス |
+| `ReviewStage` | 翻訳 metadata 付き JSON | レビュー済み JSON |
+| `RenderStage` | レビュー済み JSON | Markdown パス |
 | `DocxStage` | Markdown パス | docx パス |
 
 ### 1. 起動と出力先の準備
@@ -134,9 +138,17 @@ OpenAI 互換 API で texts と tables をバッチ翻訳し、原文を保持�
 
 結果は `<stem>.translated.json` に保存します。
 
-### 6. Markdown と Word の生成
+### 6. Review
 
-翻訳済み JSON の texts、tables、pictures をページ順に並べ、見出し、fenced code block、Markdown 表、画像参照として `<stem>.ja.md` へ書き出します。
+翻訳済み JSON を近接要素とあわせて OpenAI 互換 API へ渡し、誤訳、用語集不一致、前後要素との表記ゆれ、文体の不自然なずれを保守的に修正します。レビューは `translate_ja_v2` metadata の訳文と render 用文字列だけを更新し、原文、Docling 構造、順序、label、表構造は変更しません。
+
+レビュー対象は翻訳済みの本文、見出し、表タイトル、表セルです。コード、URL、パス、識別子など翻訳対象外の要素は含めません。レビュー応答も入力IDとの完全一致を検証し、欠落、追加、変更、重複があれば採用しません。
+
+結果は `<stem>.reviewed.json` に保存します。`--skip-review` を指定した場合はこの工程を省略し、`<stem>.translated.json` から Markdown を生成します。
+
+### 7. Markdown と Word の生成
+
+レビュー済み JSON の texts、tables、pictures をページ順に並べ、見出し、fenced code block、Markdown 表、画像参照として `<stem>.ja.md` へ書き出します。
 
 `--skip-docx` がなければ pandoc を呼び出し、`--template` の dotx/docx を reference document にして `<stem>.ja.docx` を生成します。pandoc がない環境で docx 生成を指定するとエラーになるため、pandoc を導入するか `--skip-docx` を指定してください。
 
@@ -152,6 +164,7 @@ output-v2/sample/
 ├── sample.normalized.json
 ├── sample.structured.json
 ├── sample.translated.json
+├── sample.reviewed.json
 ├── sample.ja.md
 ├── sample.ja.docx
 ├── artifacts/

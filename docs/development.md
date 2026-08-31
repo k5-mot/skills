@@ -27,11 +27,12 @@ pnpm dlx @fission-ai/openspec@latest init --tools agents --profile custom --forc
 
 ## translate-ja-v2 Runtime Settings
 
-- Pipeline phases are concrete `ParseStage`, `NormalizeStage`, `StructureStage`, `TranslateStage`, `RenderStage`, and `DocxStage` classes in `scripts/translate.py`; `run_pipeline()` owns their execution order. Do not add a common stage base class, factory, or generic runner unless interchangeable implementations require one.
+- Pipeline phases are concrete `ParseStage`, `NormalizeStage`, `StructureStage`, `TranslateStage`, `ReviewStage`, `RenderStage`, and `DocxStage` classes in `scripts/translate.py`; `run_pipeline()` owns their execution order. Do not add a common stage base class, factory, or generic runner unless interchangeable implementations require one.
 - Docling PDF/Word conversion must use `/v1/convert/file/async`; do not call `/v1/convert/file` for PDF-to-JSON conversion.
 - Docling requests must always enable table structure, table cell matching, code enrichment, and formula enrichment, using `accurate` table mode.
 - Docling async polling logs must include the poll count and status on every poll.
 - Normalize must correct text reading order from `prov[].page_no` and `prov[].bbox` before Structure invokes the VLM. `--skip-vlm` skips only the second-stage VLM correction, not coordinate correction.
 - Structure sends one page image and that page's text JSON to the VLM first. If the page text context exceeds 50,000 characters, it falls back to adjacent two-element merge checks, then all-pairs two-element order checks with the page image.
 - Translate groups a heading with its subordinate headings and body until a heading at the same or a higher level, batches blocks up to 1,500 source characters, and batches each table when it fits. Code and protected table cells are excluded. Batch response IDs must exactly match request IDs before translations are applied; empty, malformed, or partial multi-item responses are split at item boundaries and retried. Optional CSV glossary entries are filtered per source text before being passed to the LLM with translation rules.
+- Review checks translated text against neighboring translated elements for mistranslation, glossary conflicts, terminology drift, and nearby style drift. It may update only `translate_ja_v2` translation/render fields, writes `<stem>.reviewed.json`, and is skipped only by `--skip-review`.
 - translate-ja-v2 timeouts, OCR settings, OpenAI retry settings, OpenAI text/output limits, translation batch limit, VLM image limit, and log level are fixed in `scripts/translate.py`, not environment variables.

@@ -110,6 +110,7 @@ class StagePaths(FrozenModel):
         normalized_json: 決定論的整形後の JSON。
         structured_json: VLM 構造補正後の JSON。
         translated_json: 翻訳情報を付与した JSON。
+        reviewed_json: レビュー済み翻訳情報を付与した JSON。
         markdown: 日本語 Markdown。
         docx: Word docx。
         manifest: 実行 manifest。
@@ -123,6 +124,7 @@ class StagePaths(FrozenModel):
     normalized_json: Path
     structured_json: Path
     translated_json: Path
+    reviewed_json: Path
     markdown: Path
     docx: Path
     manifest: Path
@@ -137,6 +139,7 @@ class PipelineOptions(FrozenModel):
         output: 最終 docx の出力パス。
         template: pandoc reference docx/dotx。
         skip_vlm: VLM による構造補正を省略するかどうか。
+        skip_review: 翻訳レビューを省略するかどうか。
         skip_docx: docx 生成を省略するかどうか。
         force: 既存 Docling JSON があっても変換を再実行するかどうか。
         env: dotenv ファイルのパス。
@@ -152,6 +155,7 @@ class PipelineOptions(FrozenModel):
     output: Path | None = None
     template: Path | None = None
     skip_vlm: bool = False
+    skip_review: bool = False
     skip_docx: bool = False
     force: bool = False
     env: Path = Path(".env")
@@ -429,6 +433,7 @@ def build_stage_paths(
         normalized_json=root / f"{stem}.normalized.json",
         structured_json=root / f"{stem}.structured.json",
         translated_json=root / f"{stem}.translated.json",
+        reviewed_json=root / f"{stem}.reviewed.json",
         markdown=root / f"{stem}.ja.md",
         docx=docx,
         manifest=root / "manifest.json",
@@ -2652,6 +2657,330 @@ def translate_table_item(
             )
 
 
+def review_document(
+    data: dict[str, Any],
+    translation_rules: str = DEFAULT_TRANSLATION_RULES,
+) -> tuple[dict[str, Any], int]:
+    """翻訳済み metadata を近接要素と照合して校正する。
+
+    Args:
+        data: 翻訳 metadata 付き Docling JSON。
+        translation_rules: LLM に渡す翻訳ルール。
+
+    Returns:
+        レビュー済み JSON と変更件数。
+    """
+
+    result = copy.deepcopy(data)
+    targets = collect_review_targets(result)
+    if not targets:
+        return result, 0
+    settings = require_openai_settings()
+    client = openai_client(settings)
+    changes = 0
+    for batch in pack_translation_blocks([targets]):
+        add_review_neighbors(targets)
+        reviewed = review_batch(
+            client,
+            settings,
+            batch,
+            translation_rules=translation_rules,
+        )
+        changes += apply_review_results(batch, reviewed)
+    return result, changes
+
+
+def collect_review_targets(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """レビュー対象の翻訳済み text、表タイトル、表セルを文書順に集める。
+
+    Args:
+        data: 翻訳 metadata 付き Docling JSON。
+
+    Returns:
+        review_batch に渡す内部 target 配列。
+    """
+
+    targets: list[dict[str, Any]] = []
+    heading_stack: list[tuple[int, str]] = []
+    texts = data.get("texts")
+    if isinstance(texts, list):
+        for index, value in enumerate(texts):
+            if not isinstance(value, dict):
+                continue
+            item = cast(dict[str, Any], value)
+            if is_heading(item):
+                level = heading_level(item)
+                while heading_stack and heading_stack[-1][0] >= level:
+                    heading_stack.pop()
+                heading_stack.append((level, text_of(item).strip()))
+            context = " > ".join(title for _level, title in heading_stack)
+            meta = item.get("translate_ja_v2")
+            if isinstance(meta, dict) and meta.get("translated") is True:
+                add_review_target(
+                    targets,
+                    {
+                        "id": self_ref(item, "texts", index),
+                        "kind": str(meta.get("kind") or "text"),
+                        "context": context,
+                        "source_text": str(meta.get("text_en") or text_of(item)),
+                        "translated_text": str(meta.get("text_ja") or ""),
+                        "glossary_terms": meta.get("glossary_terms") or [],
+                        "meta": meta,
+                        "text_field": "text_ja",
+                        "render_field": "render_text",
+                    },
+                )
+
+    tables = data.get("tables")
+    if isinstance(tables, list):
+        for index, value in enumerate(tables):
+            if not isinstance(value, dict):
+                continue
+            item = cast(dict[str, Any], value)
+            ref = self_ref(item, "tables", index)
+            caption = str(item.get("caption") or item.get("title") or "").strip()
+            meta = item.get("translate_ja_v2")
+            if isinstance(meta, dict) and isinstance(meta.get("caption_ja"), str):
+                add_review_target(
+                    targets,
+                    {
+                        "id": f"{ref}/caption",
+                        "kind": "caption",
+                        "context": caption,
+                        "source_text": str(meta.get("caption_en") or caption),
+                        "translated_text": str(meta.get("caption_ja") or ""),
+                        "glossary_terms": meta.get("glossary_terms") or [],
+                        "meta": meta,
+                        "text_field": "caption_ja",
+                        "render_field": "caption_render",
+                    },
+                )
+            for cell_ref, cell in iter_table_cells(item, ref):
+                cell_meta = cell.get("translate_ja_v2")
+                if isinstance(cell_meta, dict) and cell_meta.get("translated") is True:
+                    add_review_target(
+                        targets,
+                        {
+                            "id": cell_ref,
+                            "kind": "cell",
+                            "context": caption,
+                            "source_text": str(
+                                cell_meta.get("text_en")
+                                or cell.get("text")
+                                or cell.get("content")
+                                or ""
+                            ),
+                            "translated_text": str(cell_meta.get("text_ja") or ""),
+                            "glossary_terms": cell_meta.get("glossary_terms") or [],
+                            "meta": cell_meta,
+                            "text_field": "text_ja",
+                            "render_field": "render_text",
+                        },
+                    )
+    return targets
+
+
+def add_review_target(targets: list[dict[str, Any]], target: dict[str, Any]) -> None:
+    """空訳を除外し、batch size 計算用 text を足して target を追加する。"""
+
+    if not str(target.get("source_text") or "").strip():
+        return
+    if not str(target.get("translated_text") or "").strip():
+        return
+    target["text"] = f"{target['source_text']}\n{target['translated_text']}"
+    targets.append(target)
+
+
+def add_review_neighbors(targets: list[dict[str, Any]]) -> None:
+    """レビュー対象に前後の訳文を添える。"""
+
+    for index, target in enumerate(targets):
+        target["previous_text_ja"] = (
+            str(targets[index - 1]["translated_text"]) if index > 0 else ""
+        )
+        target["next_text_ja"] = (
+            str(targets[index + 1]["translated_text"])
+            if index + 1 < len(targets)
+            else ""
+        )
+
+
+def review_batch(
+    client: Any,
+    settings: OpenAISettings,
+    items: list[dict[str, Any]],
+    *,
+    translation_rules: str = DEFAULT_TRANSLATION_RULES,
+) -> dict[str, str]:
+    """翻訳済み要素をID付きJSONで一括レビューする。
+
+    Args:
+        client: OpenAI client。
+        settings: OpenAI 互換 API 設定。
+        items: review target 配列。
+        translation_rules: LLM に渡す翻訳ルール。
+
+    Returns:
+        入力IDからレビュー後訳文への辞書。
+
+    Raises:
+        ValueError: 応答IDが入力と一致しない場合、または訳文が不正な場合。
+    """
+
+    if not items:
+        return {}
+    request_items = [
+        {
+            "id": str(item["id"]),
+            "kind": str(item["kind"]),
+            "context": str(item.get("context") or ""),
+            "glossary_terms": item.get("glossary_terms") or [],
+            "previous_text_ja": str(item.get("previous_text_ja") or ""),
+            "source_text": str(item["source_text"]),
+            "translated_text": str(item["translated_text"]),
+            "next_text_ja": str(item.get("next_text_ja") or ""),
+        }
+        for item in items
+    ]
+    expected_ids = [item["id"] for item in request_items]
+    if len(expected_ids) != len(set(expected_ids)):
+        raise ValueError("review batch contains duplicate ids")
+
+    def split_batch(error: Exception) -> dict[str, str]:
+        if len(items) == 1:
+            raise error
+        middle = len(items) // 2
+        LOGGER.warning(
+            "Splitting invalid review batch items=%s error=%s", len(items), error
+        )
+        return {
+            **review_batch(
+                client,
+                settings,
+                items[:middle],
+                translation_rules=translation_rules,
+            ),
+            **review_batch(
+                client,
+                settings,
+                items[middle:],
+                translation_rules=translation_rules,
+            ),
+        }
+
+    system = (
+        "あなたは専門文書の日英翻訳レビュー担当者です。"
+        "原文にない説明、要約、事実追加は禁止です。"
+    )
+    user = f"""次の翻訳済み要素をレビューし、必要な場合だけ日本語訳を修正してください。
+
+レビュー観点:
+- 原文の意味、数量、否定、固有名詞が保たれているか。
+- 用語集に反していないか。
+- 前後の要素と同じ概念・同じ英語表現の日本語表記が揺れていないか。
+- 見出し、本文、表セルの文体が近接要素と不自然にずれていないか。
+
+翻訳ルール:
+{translation_rules.strip()}
+
+返却JSON:
+{{"reviews":[{{"id":"入力と同じID","reviewed_text":"レビュー後の日本語訳"}}]}}
+
+IDの追加、削除、変更、重複は禁止です。修正不要な要素も reviewed_text に現在の日本語訳をそのまま入れてください。
+
+入力JSON:
+{json.dumps(request_items, ensure_ascii=False)}
+"""
+    try:
+        response = chat_text(
+            client,
+            settings,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            json_response=True,
+            max_tokens=OPENAI_MAX_OUTPUT_TOKENS,
+        )
+    except OpenAIEmptyResponseError as exc:
+        return split_batch(exc)
+    try:
+        try:
+            payload = json.loads(response)
+        except json.JSONDecodeError:
+            payload = parse_json_object(response)
+    except ValueError as exc:
+        return split_batch(exc)
+    reviews = payload if isinstance(payload, list) else payload.get("reviews")
+    if isinstance(payload, dict) and {"id", "reviewed_text"} <= payload.keys():
+        reviews = [payload]
+    if not isinstance(reviews, list):
+        return split_batch(ValueError("review response must contain reviews list"))
+    result: dict[str, str] = {}
+    for entry in reviews:
+        if not isinstance(entry, dict):
+            return split_batch(ValueError("review entry must be an object"))
+        item_id = entry.get("id")
+        reviewed_text = entry.get("reviewed_text")
+        if (
+            not isinstance(item_id, str)
+            or not isinstance(reviewed_text, str)
+            or not reviewed_text.strip()
+        ):
+            return split_batch(
+                ValueError("review entry must contain string id and text")
+            )
+        if item_id in result:
+            return split_batch(
+                ValueError(f"review response contains duplicate id: {item_id}")
+            )
+        result[item_id] = reviewed_text
+    if set(result) != set(expected_ids):
+        missing = sorted(set(expected_ids) - set(result))
+        unknown = sorted(set(result) - set(expected_ids))
+        return split_batch(
+            ValueError(
+                f"review response ids do not match missing={missing} unknown={unknown}"
+            )
+        )
+    LOGGER.info("Reviewed batch items=%s", len(items))
+    return result
+
+
+def apply_review_results(
+    targets: list[dict[str, Any]], reviewed_texts: dict[str, str]
+) -> int:
+    """レビュー結果を translate_ja_v2 metadata に反映する。
+
+    Args:
+        targets: review target 配列。
+        reviewed_texts: ID からレビュー後訳文への辞書。
+
+    Returns:
+        変更した要素数。
+    """
+
+    changes = 0
+    for target in targets:
+        item_id = str(target["id"])
+        reviewed = reviewed_texts[item_id].strip()
+        meta = cast(dict[str, Any], target["meta"])
+        text_field = str(target["text_field"])
+        before = str(meta.get(text_field) or "")
+        if reviewed == before:
+            continue
+        meta[text_field] = reviewed
+        target["translated_text"] = reviewed
+        target["text"] = f"{target['source_text']}\n{reviewed}"
+        render_field = str(target["render_field"])
+        if render_field == "caption_render" or target["kind"] == "heading":
+            meta[render_field] = f"{target['source_text']} / {reviewed}"
+        else:
+            meta[render_field] = reviewed
+        changes += 1
+    return changes
+
+
 def looks_protected(text: str) -> bool:
     """翻訳しないほうがよいコード・URL・識別子か判定する。
 
@@ -3063,6 +3392,32 @@ class TranslateStage(FrozenModel):
         return translated
 
 
+class ReviewStage(FrozenModel):
+    """翻訳済み文書をレビューする。"""
+
+    paths: StagePaths
+    translation_rules_path: Path | None = None
+
+    def run(self, document: dict[str, Any]) -> dict[str, Any]:
+        """レビュー済み文書を返す。"""
+
+        reviewed, changes = review_document(
+            document,
+            translation_rules=read_translation_rules(self.translation_rules_path),
+        )
+        write_json(self.paths.reviewed_json, reviewed)
+        update_manifest(
+            self.paths.manifest,
+            {
+                "stage": "review",
+                "output": str(self.paths.reviewed_json),
+                "changes": changes,
+                "sha256": sha256_file(self.paths.reviewed_json),
+            },
+        )
+        return reviewed
+
+
 class RenderStage(FrozenModel):
     """翻訳済み文書から Markdown を生成する。"""
 
@@ -3151,7 +3506,15 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
         glossary_path=args.glossary,
         translation_rules_path=args.translation_rules,
     ).run(structured)
-    markdown_path = RenderStage(paths=paths).run(translated)
+    render_source = (
+        translated
+        if args.skip_review
+        else ReviewStage(
+            paths=paths,
+            translation_rules_path=args.translation_rules,
+        ).run(translated)
+    )
+    markdown_path = RenderStage(paths=paths).run(render_source)
     if not args.skip_docx:
         DocxStage(
             paths=paths,
@@ -3179,6 +3542,7 @@ def cli(
     skip_vlm: Annotated[
         bool, typer.Option(help="skip VLM structure correction")
     ] = False,
+    skip_review: Annotated[bool, typer.Option(help="skip translation review")] = False,
     skip_docx: Annotated[bool, typer.Option(help="write Markdown/JSON only")] = False,
     force: Annotated[
         bool,
@@ -3201,6 +3565,7 @@ def cli(
         output: 最終 docx の出力パス。
         template: pandoc reference docx/dotx。
         skip_vlm: VLM による構造補正を省略するかどうか。
+        skip_review: 翻訳レビューを省略するかどうか。
         skip_docx: docx 生成を省略するかどうか。
         force: 既存 Docling JSON があっても変換を再実行するかどうか。
         env: dotenv ファイルのパス。
@@ -3220,6 +3585,7 @@ def cli(
         output=output,
         template=template,
         skip_vlm=skip_vlm,
+        skip_review=skip_review,
         skip_docx=skip_docx,
         force=force,
         env=env,
