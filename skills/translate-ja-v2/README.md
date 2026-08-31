@@ -36,9 +36,11 @@ timeout、OCR、OpenAI retry、VLM 添付画像数、ログレベルは `transla
 
 ```bash
 uv run python skills/translate-ja-v2/scripts/translate.py \
+  --context-chars 50000 \
+  --batch-chars 5000 \
   --input ./inputs/sample.pdf \
   --output-dir ./outputs/sample \
-  --template ./skills/translate-ja-v2/template.dotx \
+  --template ./skills/translate-ja-v2/examples/template.dotx \
   --glossary ./skills/translate-ja-v2/examples/glossary.csv \
   --translation-rules ./skills/translate-ja-v2/examples/translation-rules.md
 ```
