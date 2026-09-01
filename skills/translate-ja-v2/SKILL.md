@@ -54,7 +54,7 @@ Docling ServeのZIP内にある唯一のJSONを、入力ファイルと同じste
 4. 本文は日本語訳のみ Markdown に出す。
 5. コード、URL、パス、コマンド、識別子は翻訳せず保護する。
 6. Normalize で `prov[].page_no` と `prov[].bbox` を使って読み順を座標補正し、その後に VLM 補正を行う2段階構成にする。
-7. VLM には座標補正済みの Docling JSON 要約、bbox、`pages[].image.uri` が指す page PNG を渡し、全文再生成をさせず、`set_label`、`set_level`、`reorder_texts` のような構造 patch だけを返させる。
+7. VLM には座標補正済みのDocling JSON要約、bbox、表セル、`pages[].image.uri` が指すpage PNGを渡す。本文と誤認識されたコードのlabel変更、隣接コード連結、表セル内インラインコードspanの特定を構造patchだけで行い、全文再生成はさせない。
 8. ファイル保存は一時ファイル、flush、fsync、`os.replace()` で行う。
 9. 外部 API を使う単体テストは fake client で検証する。
 10. `manifest.json` には工程ごとの入力・設定・出力 hash と状態を保存し、Structure、Translate、Review に限って要素 ID ごとの完了状態も保存する。

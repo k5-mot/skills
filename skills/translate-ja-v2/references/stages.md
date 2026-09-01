@@ -2,7 +2,7 @@
 
 この文書は `scripts/translate.py` の各 stage クラスを修正するときに読む。全体方針は `implementation-guide.md`、完全仕様は `spec-v2.md` を参照する。各クラスは、そのフェーズの変換、成果物保存、manifest 記録を担当する。
 
-Parse、Normalize、Render、Docx は工程単位で Resume する。Structure は成功したページ内の text ref、Translate は本文・見出し・表タイトル・表セル、Review はレビュー対象の各 ID を manifest に記録し、通常の出力 JSON を部分成果物として未完了要素から Resume する。再利用時は入力・設定・出力 hash を必ず照合する。
+Parse、Normalize、Render、Docx は工程単位で Resume する。Structure は成功したページ内のtext refと表セルref、Translate は本文・見出し・表タイトル・表セル、Review はレビュー対象の各 ID を manifest に記録し、通常の出力 JSON を部分成果物として未完了要素から Resume する。再利用時は入力・設定・出力 hash を必ず照合する。
 
 ## 01 Parse
 
@@ -35,7 +35,7 @@ Normalizeでは本文、label、表セル、コードmetadataを変更しない�
 
 実装クラス: `StructureStage`
 
-構造と reading order を第2段階で補正する。現行実装では、Normalize の座標補正済み JSON を入力に、`collect_structure_units` が text 要素と bbox を要約する。`build_multimodal_content` が `pages[].image.uri` から解決した page PNG を1枚だけ添付し、VLM/LLM に段組みなど座標だけでは曖昧な構造の patch を返させる。URIや画像ファイルがない場合は、別の画像へフォールバックせずテキストだけを渡す。
+構造を第2段階で補正する。Normalizeの座標補正済みJSONを入力に、text要素、bbox、表セルをページごとに要約する。`build_multimodal_content` が `pages[].image.uri` から解決したpage PNGを1枚だけ添付し、VLM/LLMにコード判定と構造patchを返させる。URIや画像ファイルがない場合は、別の画像へフォールバックせずテキストだけを渡す。
 
 補正順序は必ず次のとおりとする。
 
@@ -48,9 +48,8 @@ VLM に許可する操作:
 
 - reorder
 - merge
-- split
-- group
 - semantic_type 変更
+- 表セルのインラインコードspan設定
 
 VLM に禁止する操作:
 
@@ -59,7 +58,7 @@ VLM に禁止する操作:
 - 翻訳
 - validation 不能な任意 JSON の返却
 
-VLM 応答は JSON object として受け取り、`apply_structure_patches` で `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用する。request のテキスト上限は `--context-chars`（既定50,000文字）を使う。各requestには対象ページの画像だけを添付する。
+VLM応答はJSON objectとして受け取り、`apply_structure_patches` で許可した操作だけを適用する。本文と誤認識されたコードは `set_label` でcodeへ変更し、前後の同一コードブロックは `merge_texts` で連結する。表セルの `set_table_cell_inline_code` は原文に完全一致するspanだけを `structure_ja_v2.inline_code_spans` へ保存する。requestのテキスト上限は `--context-chars`（既定50,000文字）を使い、各requestには対象ページの画像だけを添付する。
 
 ## 04 Translate
 

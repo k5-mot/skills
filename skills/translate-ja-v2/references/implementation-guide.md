@@ -50,7 +50,7 @@ outputs/<stem>/
 
 `manifest.json` を進捗の正本とし、各工程について状態、入力 hash、設定 hash、出力 hash を保存する。既存成果物は hash が完了記録と一致するときだけ再利用する。入力や設定が変化した工程は再実行し、その成果物を入力にする後続工程も自然に再実行される。
 
-- `StructureStage`: 成功したページ内の text ref ごとに完了状態を保存し、未完了要素を含む最初のページから再開する。
+- `StructureStage`: 成功したページ内のtext refと表セルrefごとに完了状態を保存し、未完了要素を含む最初のページから再開する。
 - `TranslateStage`: 本文、見出し、表タイトル、表セルの ID ごとに完了状態を保存し、未完了要素から再開する。
 - `ReviewStage`: レビュー対象 ID ごとに完了状態を保存し、未完了要素から再開する。
 - `ParseStage`、`NormalizeStage`、`RenderStage`、`DocxStage`: 工程単位の完了状態だけを保存する。
@@ -77,7 +77,7 @@ JSON と artifact は直接本ファイルへ書かない。必ず一時ファ�
 
 1. Docling Serve で JSON と PNG artifacts を作る。
 2. JSON の `prov[].page_no` と `prov[].bbox` を使い、ページ順・上から下・左から右の読み順だけを決定論的に補正する。
-3. VLM/LLM に座標補正済み Docling JSON の要約、bbox、`pages[].image.uri` が指す page PNG を渡し、`set_label`、`set_level`、`reorder_texts` patch だけを返させて、段組みなど座標だけでは曖昧な見出しと本文の位置を補正する。URIをファイル名から推測せず、URIや画像がない場合はテキストだけを渡す。
+3. VLM/LLMに座標補正済みDocling JSONの要約、bbox、表セル、`pages[].image.uri` が指すpage PNGを渡す。本文と誤認識されたコードをcodeへ変更し、同じコードブロックに属する前後要素を連結する。表セルでは原文に完全一致するインラインコードspanをmetadataへ保存する。URIをファイル名から推測せず、URIや画像がない場合はテキストだけを渡す。
 4. JSON 各要素へ `translate_ja_v2` フィールドを追加する。
 5. 見出し・表タイトルは英日併記、本文は和訳のみで Markdown を作る。
 6. pandoc で Markdown を Word docx へ変換する。

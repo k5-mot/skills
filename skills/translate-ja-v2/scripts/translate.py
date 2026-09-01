@@ -1368,13 +1368,18 @@ def build_structure_messages(
     """
 
     units = collect_structure_units(data)
-    page_no = units[0]["page"][0] if units and units[0]["page"] else None
+    table_cells = collect_table_cell_structure_units(data)
+    all_units = units + table_cells
+    page_no = all_units[0]["page"][0] if all_units and all_units[0]["page"] else None
     image_path = page_image_path(data, artifacts_dir, page_no)
-    return build_page_structure_messages(page_no, units, image_path)
+    return build_page_structure_messages(page_no, units, image_path, table_cells)
 
 
 def build_page_structure_messages(
-    page_no: int | None, units: list[dict[str, Any]], image_path: Path | None = None
+    page_no: int | None,
+    units: list[dict[str, Any]],
+    image_path: Path | None = None,
+    table_cells: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """1ページ分の VLM/LLM 構造補正用 messages を作る。
 
@@ -1382,6 +1387,7 @@ def build_page_structure_messages(
         page_no: 対象ページ番号。
         units: 対象ページの text unit。
         image_path: Docling JSON の URI から解決したページ画像パス。
+        table_cells: 対象ページの表セルunit。
 
     Returns:
         Chat messages。
@@ -1391,14 +1397,19 @@ def build_page_structure_messages(
         "あなたはDocling JSONの構造補正を担当するVLM/LLMです。"
         "翻訳、要約、本文の創作は禁止です。"
         "対象はpageとbboxで座標補正済みです。"
-        "段組みなど座標だけでは判断しにくい箇所に限定し、"
-        "見出しと本文の順序、label、levelだけを保守的に補正してください。"
+        "本文と誤認識されたコードはcodeへ変更し、前後のコード要素と同じ"
+        "コードブロックなら結合してください。"
+        "表セルでは自然言語を書き換えず、インラインコードのexact spanだけを"
+        "特定してください。"
     )
     user = f"""次の1ページ分の座標補正済みDocling要素を読み、ページ画像とbboxも参照して、明らかに構造が壊れている箇所だけをpatchで返してください。
 
 ページ: {page_no if page_no is not None else "unknown"}
-対象:
+text要素:
 {json.dumps(units, ensure_ascii=False)}
+
+表セル:
+{json.dumps(table_cells or [], ensure_ascii=False)}
 
 返却JSON:
 {{
@@ -1407,9 +1418,12 @@ def build_page_structure_messages(
     {{"op": "set_level", "ref": "#/texts/0", "level": 2, "reason": "理由"}},
     {{"op": "set_text", "ref": "#/texts/0", "text": "整形後テキスト", "reason": "理由"}},
     {{"op": "merge_texts", "refs": ["#/texts/0", "#/texts/1"], "text": "結合後テキスト", "label": "code", "reason": "理由"}},
-    {{"op": "reorder_texts", "refs": ["#/texts/0", "#/texts/1"], "reason": "理由"}}
+    {{"op": "reorder_texts", "refs": ["#/texts/0", "#/texts/1"], "reason": "理由"}},
+    {{"op": "set_table_cell_inline_code", "ref": "#/tables/0/data/grid/0/0", "code_spans": ["api.call()"], "reason": "理由"}}
   ]
 }}
+
+コード本文は `set_label` のlabelを `code` にしてください。同一コードブロックとして隣接する要素は `merge_texts` で改行結合し、labelを `code` にしてください。`code_spans` は表セル原文に完全一致する文字列だけを返してください。
 
 補正不要なら {{"patches":[]}} を返してください。
 """
@@ -1524,6 +1538,40 @@ def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
     return units
 
 
+def collect_table_cell_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """構造補正用に表セルの要約unitを集める。
+
+    Args:
+        data: Docling JSON。
+
+    Returns:
+        ref、page、bbox、textを持つ表セルunit配列。
+    """
+
+    tables = data.get("tables")
+    if not isinstance(tables, list):
+        return []
+    units: list[dict[str, Any]] = []
+    for index, value in enumerate(tables):
+        if not isinstance(value, dict):
+            continue
+        table = cast(dict[str, Any], value)
+        table_ref = self_ref(table, "tables", index)
+        position = coordinate_position(table)
+        for cell_ref, cell in iter_table_cells(table, table_ref):
+            units.append(
+                {
+                    "ref": cell_ref,
+                    "page": page_numbers(cell) or page_numbers(table),
+                    "bbox": (coordinate_position(cell) or position or {"bbox": None})[
+                        "bbox"
+                    ],
+                    "text": str(cell.get("text") or cell.get("content") or "")[:500],
+                }
+            )
+    return units
+
+
 def page_structure_units(
     data: dict[str, Any], page_no: int | None
 ) -> list[dict[str, Any]]:
@@ -1549,6 +1597,31 @@ def page_structure_units(
     return result
 
 
+def page_table_cell_structure_units(
+    data: dict[str, Any], page_no: int | None
+) -> list[dict[str, Any]]:
+    """指定ページの表セル構造補正unitを集める。
+
+    Args:
+        data: Docling JSON。
+        page_no: 対象ページ。Noneの場合はページ不明要素。
+
+    Returns:
+        対象ページに属する表セルunit配列。
+    """
+
+    result: list[dict[str, Any]] = []
+    for unit in collect_table_cell_structure_units(data):
+        pages = unit.get("page")
+        if page_no is None:
+            if not pages:
+                result.append(unit)
+            continue
+        if isinstance(pages, list) and page_no in pages:
+            result.append(unit)
+    return result
+
+
 def structure_page_numbers(data: dict[str, Any]) -> list[int | None]:
     """texts に含まれるページ番号を文書順に返す。
 
@@ -1560,7 +1633,9 @@ def structure_page_numbers(data: dict[str, Any]) -> list[int | None]:
     """
 
     pages: list[int | None] = []
-    for unit in collect_structure_units(data):
+    for unit in collect_structure_units(data) + collect_table_cell_structure_units(
+        data
+    ):
         unit_pages = unit.get("page")
         page_no = unit_pages[0] if isinstance(unit_pages, list) and unit_pages else None
         if page_no not in pages:
@@ -1588,7 +1663,8 @@ def build_merge_messages(
 
     system = (
         "あなたはDocling JSONの構造補正を担当するVLM/LLMです。"
-        "表、コードブロック、箇条書き、段落が誤って分割された場合だけmergeしてください。"
+        "本文と誤認識されたコードをcodeへ変更し、隣接要素が同じコードブロック"
+        "ならmergeしてください。表、箇条書き、段落の明らかな誤分割もmergeできます。"
         "意味変更、翻訳、要約は禁止です。"
     )
     user = f"""ページ画像と隣接する2つのDocling text要素を比較し、同一の表・コードブロック・箇条書き・段落として結合すべきか判定してください。
@@ -1600,9 +1676,12 @@ def build_merge_messages(
 返却JSON:
 {{
   "patches": [
+    {{"op": "set_label", "ref": "{left["ref"]}", "label": "code", "reason": "コード構文"}},
     {{"op": "merge_texts", "refs": ["{left["ref"]}", "{right["ref"]}"], "text": "結合後テキスト", "label": "code", "reason": "理由"}}
   ]
 }}
+
+本文labelの要素がコードなら `set_label` だけを返せます。同じコードブロックの前後要素は、原文を改行で連結した `merge_texts` を返してください。
 
 結合不要なら {{"patches":[]}} を返してください。
 """
@@ -1677,11 +1756,96 @@ def apply_structure_patches(
             applied.append(apply_merge_texts(result, patch))
         elif op == "swap_texts":
             applied.append(apply_swap_texts(result, patch))
+        elif op == "set_table_cell_inline_code":
+            applied.append(apply_table_cell_inline_code_patch(result, patch))
         else:
             applied.append(
                 {"op": op, "status": "skipped", "reason": "unsupported operation"}
             )
     return result, applied
+
+
+def apply_table_cell_inline_code_patch(
+    data: dict[str, Any], patch: dict[str, Any]
+) -> dict[str, Any]:
+    """表セルへVLMが検出したインラインコードspanを保存する。
+
+    Args:
+        data: 更新対象JSON。
+        patch: 表セルrefとcode_spansを持つpatch。
+
+    Returns:
+        patch適用結果。
+    """
+
+    ref = str(patch.get("ref") or "")
+    raw_spans = patch.get("code_spans")
+    if not ref.startswith("#/tables/") or not isinstance(raw_spans, list):
+        return {
+            "op": "set_table_cell_inline_code",
+            "status": "failed",
+            "error": "invalid table cell ref or code_spans",
+        }
+    try:
+        parent, key = pointer_target(data, ref)
+        cell = parent[key] if isinstance(parent, list) else parent.get(key)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return {
+            "op": "set_table_cell_inline_code",
+            "status": "failed",
+            "error": "unknown table cell ref",
+        }
+    if not isinstance(cell, dict):
+        return {
+            "op": "set_table_cell_inline_code",
+            "status": "failed",
+            "error": "table cell is not an object",
+        }
+    text = str(cell.get("text") or cell.get("content") or "")
+    spans = list(
+        dict.fromkeys(
+            span
+            for span in raw_spans
+            if isinstance(span, str) and span and span in text
+        )
+    )
+    if not spans:
+        return {
+            "op": "set_table_cell_inline_code",
+            "ref": ref,
+            "status": "failed",
+            "error": "code_spans do not match cell text",
+        }
+    metadata = cell.setdefault("structure_ja_v2", {})
+    before = metadata.get("inline_code_spans")
+    metadata["inline_code_spans"] = spans
+    return {
+        "op": "set_table_cell_inline_code",
+        "ref": ref,
+        "status": "success",
+        "before": before,
+        "after": spans,
+        "reason": patch.get("reason"),
+    }
+
+
+def inline_code_spans(cell: dict[str, Any]) -> list[str]:
+    """表セルのStructure metadataからインラインコードspanを返す。
+
+    Args:
+        cell: Docling table cell。
+
+    Returns:
+        重複を除いた非空span配列。
+    """
+
+    metadata = cell.get("structure_ja_v2")
+    values = metadata.get("inline_code_spans") if isinstance(metadata, dict) else None
+    if not isinstance(values, list):
+        return []
+    return list(
+        dict.fromkeys(value for value in values if isinstance(value, str) and value)
+    )
 
 
 def pointer_target(data: dict[str, Any], pointer: str) -> tuple[Any, str | int]:
@@ -1949,17 +2113,72 @@ def structure_page_with_vlm(
     """
 
     units = page_structure_units(data, page_no)
-    if not units:
+    table_cells = page_table_cell_structure_units(data, page_no)
+    if not units and not table_cells:
         return data, []
     image_path = page_image_path(data, artifacts_dir, page_no)
-    messages = build_page_structure_messages(page_no, units, image_path)
+    messages = build_page_structure_messages(page_no, units, image_path, table_cells)
     if message_text_chars(messages) <= settings.context_chars:
         response = chat_text(client, settings, messages)
         return apply_structure_patches(data, parse_structure_response(response))
     LOGGER.info(
         "Falling back to pairwise structure page=%s units=%s", page_no, len(units)
     )
-    return structure_page_pairwise(data, page_no, client, settings, image_path)
+    current, applied = structure_page_pairwise(
+        data, page_no, client, settings, image_path
+    )
+    current, table_applied = structure_table_cells_with_vlm(
+        current, page_no, client, settings, image_path
+    )
+    return current, applied + table_applied
+
+
+def structure_table_cells_with_vlm(
+    data: dict[str, Any],
+    page_no: int | None,
+    client: Any,
+    settings: OpenAISettings,
+    image_path: Path | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """表セルをcontext上限内のまとまりでVLM構造補正する。
+
+    Args:
+        data: 更新対象Docling JSON。
+        page_no: 対象ページ番号。
+        client: OpenAI client。
+        settings: OpenAI settings。
+        image_path: 対象ページ画像。
+
+    Returns:
+        補正後JSONと適用patch配列。
+
+    Raises:
+        ValueError: 単一表セルでもcontext上限を超える場合。
+    """
+
+    remaining = page_table_cell_structure_units(data, page_no)
+    current = data
+    applied: list[dict[str, Any]] = []
+    while remaining:
+        chunk: list[dict[str, Any]] = []
+        for cell in remaining:
+            candidate = chunk + [cell]
+            messages = build_page_structure_messages(page_no, [], image_path, candidate)
+            if message_text_chars(messages) > settings.context_chars:
+                break
+            chunk = candidate
+        if not chunk:
+            raise ValueError(
+                "table cell structure request exceeds OpenAI context limit"
+            )
+        messages = build_page_structure_messages(page_no, [], image_path, chunk)
+        response = chat_text(client, settings, messages)
+        current, chunk_applied = apply_structure_patches(
+            current, parse_structure_response(response)
+        )
+        applied.extend(chunk_applied)
+        remaining = remaining[len(chunk) :]
+    return current, applied
 
 
 def structure_page_pairwise(
@@ -2048,7 +2267,9 @@ def structure_document(
         補正後 JSON と patch 適用結果。
     """
 
-    source_units = collect_structure_units(data)
+    source_units = collect_structure_units(data) + collect_table_cell_structure_units(
+        data
+    )
     if skip_vlm:
         result = copy.deepcopy(data)
         if on_progress:
@@ -2060,7 +2281,11 @@ def structure_document(
     completed = completed_ids if completed_ids is not None else set()
     applied: list[dict[str, Any]] = []
     for page_no in structure_page_numbers(data):
-        page_ids = [str(unit["ref"]) for unit in page_structure_units(data, page_no)]
+        page_ids = [
+            str(unit["ref"])
+            for unit in page_structure_units(data, page_no)
+            + page_table_cell_structure_units(data, page_no)
+        ]
         if page_ids and all(element_id in completed for element_id in page_ids):
             continue
         result, page_applied = structure_page_with_vlm(
@@ -2223,6 +2448,7 @@ def translate_batch(
             "style": str(item["style"]),
             "context": str(item.get("context") or ""),
             "glossary": item.get("glossary") or [],
+            "inline_code_spans": item.get("inline_code_spans") or [],
             "text": str(item["text"]),
         }
         for item in items
@@ -2256,6 +2482,7 @@ def translate_batch(
     system = (
         "あなたは専門文書の日英翻訳者です。原文にない説明、要約、事実追加は禁止です。"
         "各要素を文脈に沿って翻訳し、入力IDを変更せずJSONだけを返してください。"
+        "inline_code_spansの文字列は翻訳・変更せず、そのまま訳文へ残してください。"
     )
     user = f"""次の複数要素を日本語へ翻訳してください。
 
@@ -2714,6 +2941,18 @@ def translate_table_item(
         if not source:
             immediate_completed.append(cell_ref)
             continue
+        code_spans = inline_code_spans(cell)
+        if source in code_spans:
+            cell_meta.update(
+                {
+                    "kind": "code",
+                    "text_en": source,
+                    "render_text": source,
+                    "translated": False,
+                }
+            )
+            immediate_completed.append(cell_ref)
+            continue
         if looks_protected(source):
             cell_meta.update(
                 {"text_en": source, "render_text": source, "translated": False}
@@ -2731,6 +2970,7 @@ def translate_table_item(
                 "kind": "cell",
                 "item": cell,
                 "terms": terms,
+                "inline_code_spans": code_spans,
             }
         )
 
@@ -2901,6 +3141,7 @@ def collect_review_targets(data: dict[str, Any]) -> list[dict[str, Any]]:
                             ),
                             "translated_text": str(cell_meta.get("text_ja") or ""),
                             "glossary_terms": cell_meta.get("glossary_terms") or [],
+                            "inline_code_spans": inline_code_spans(cell),
                             "meta": cell_meta,
                             "text_field": "text_ja",
                             "render_field": "render_text",
@@ -2983,6 +3224,7 @@ def review_batch(
 種類: {item["kind"]}
 文脈: {item.get("context") or "（なし）"}
 用語集の該当語: {", ".join(item.get("glossary_terms") or []) or "（なし）"}
+変更禁止のインラインコード: {", ".join(item.get("inline_code_spans") or []) or "（なし）"}
 前の日本語訳: {item.get("previous_text_ja") or "（なし）"}
 原文: {item["source_text"]}
 現在の日本語訳: {item["translated_text"]}
@@ -3253,7 +3495,24 @@ def cell_render_text(cell: dict[str, Any]) -> str:
     raw_meta = cell.get("translate_ja_v2")
     meta = cast(dict[str, Any], raw_meta) if isinstance(raw_meta, dict) else {}
     text = str(meta.get("render_text") or cell.get("text") or cell.get("content") or "")
-    return text.replace("\n", " ").strip()
+    return render_inline_code(text.replace("\n", " ").strip(), inline_code_spans(cell))
+
+
+def render_inline_code(value: str, spans: list[str]) -> str:
+    """文字列内のインラインコードspanをMarkdown codeとして囲む。
+
+    Args:
+        value: 表示対象文字列。
+        spans: 原文と完全一致するインラインコードspan。
+
+    Returns:
+        spanをbacktickで囲んだ文字列。
+    """
+
+    result = value
+    for span in sorted(set(spans), key=len, reverse=True):
+        result = result.replace(span, f"`{span}`")
+    return result
 
 
 def markdown_table_line(row: list[str]) -> str:
@@ -3814,7 +4073,7 @@ class StructureStage(FrozenModel):
         )
         config_hash = sha256_json(
             {
-                "version": 3,
+                "version": 4,
                 "skip_vlm": self.skip_vlm,
                 "context_chars": self.context_chars,
                 "model": None if self.skip_vlm else os.environ.get("OPENAI_MODEL"),
@@ -3839,7 +4098,11 @@ class StructureStage(FrozenModel):
             config_hash,
         )
         resume_data, completed_ids = checkpoint or (None, set())
-        element_ids = {str(unit["ref"]) for unit in collect_structure_units(document)}
+        element_ids = {
+            str(unit["ref"])
+            for unit in collect_structure_units(document)
+            + collect_table_cell_structure_units(document)
+        }
         if checkpoint is None:
             record_stage_start(
                 self.paths.manifest,

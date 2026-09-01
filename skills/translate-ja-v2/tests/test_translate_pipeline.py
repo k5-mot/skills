@@ -731,7 +731,19 @@ def test_translate_document_batches_text_section_and_table(
             {
                 "self_ref": "#/tables/0",
                 "caption": "Terms",
-                "data": {"grid": [[{"text": "Long Name"}, {"text": "DoD"}]]},
+                "data": {
+                    "grid": [
+                        [
+                            {
+                                "text": "Run api.call()",
+                                "structure_ja_v2": {
+                                    "inline_code_spans": ["api.call()"]
+                                },
+                            },
+                            {"text": "DoD"},
+                        ]
+                    ]
+                },
             }
         ],
     }
@@ -760,7 +772,8 @@ def test_translate_document_batches_text_section_and_table(
     assert '"context": "Strategy > Operations"' in text_prompt
     assert "do not translate" not in text_prompt
     assert "Terms" in table_prompt
-    assert "Long Name" in table_prompt
+    assert "Run api.call()" in table_prompt
+    assert '"inline_code_spans": ["api.call()"]' in table_prompt
     assert translated["texts"][6]["translate_ja_v2"] == {
         "kind": "code",
         "render_text": "print('do not translate')",
@@ -1157,7 +1170,15 @@ def test_render_markdown_uses_translated_json_fields() -> None:
                 "translate_ja_v2": {"caption_render": "Terms / 用語"},
                 "data": {
                     "grid": [
-                        [{"text": "Name", "translate_ja_v2": {"render_text": "名称"}}],
+                        [
+                            {
+                                "text": "Run api.call()",
+                                "structure_ja_v2": {
+                                    "inline_code_spans": ["api.call()"]
+                                },
+                                "translate_ja_v2": {"render_text": "api.call() を実行"},
+                            }
+                        ],
                         [{"text": "DoD", "translate_ja_v2": {"render_text": "DoD"}}],
                     ]
                 },
@@ -1170,7 +1191,7 @@ def test_render_markdown_uses_translated_json_fields() -> None:
     assert "## Strategy / 戦略" in markdown
     assert "部隊が移動する。" in markdown
     assert "**Terms / 用語**" in markdown
-    assert "| 名称 |" in markdown
+    assert "| `api.call()` を実行 |" in markdown
 
 
 def test_apply_structure_patches_supports_label_level_and_reorder() -> None:
@@ -1229,6 +1250,100 @@ def test_apply_structure_patches_merge_reindexes_references_once() -> None:
         "#/texts/0",
         "#/texts/1",
     ]
+
+
+def test_apply_structure_patches_converts_and_merges_code_fragments() -> None:
+    """Structure patchは本文をcode化して隣接codeと連結する。
+
+    Returns:
+        なし。
+    """
+
+    data = {
+        "texts": [
+            {"self_ref": "#/texts/0", "label": "code", "text": "def run():"},
+            {"self_ref": "#/texts/1", "label": "paragraph", "text": "    pass"},
+        ]
+    }
+
+    patched, applied = apply_structure_patches(
+        data,
+        [
+            {"op": "set_label", "ref": "#/texts/1", "label": "code"},
+            {
+                "op": "merge_texts",
+                "refs": ["#/texts/0", "#/texts/1"],
+                "text": "def run():\n    pass",
+                "label": "code",
+            },
+        ],
+    )
+
+    assert all(result["status"] == "success" for result in applied)
+    assert patched["texts"] == [
+        {
+            "self_ref": "#/texts/0",
+            "label": "code",
+            "text": "def run():\n    pass",
+        }
+    ]
+
+
+def test_structure_marks_exact_inline_code_in_table_cell() -> None:
+    """Structure patchは表セル原文に一致するinline code spanだけを保存する。
+
+    Returns:
+        なし。
+    """
+
+    data = {
+        "tables": [
+            {
+                "self_ref": "#/tables/0",
+                "data": {"grid": [[{"text": "Run api.call() now"}]]},
+            }
+        ]
+    }
+
+    patched, applied = apply_structure_patches(
+        data,
+        [
+            {
+                "op": "set_table_cell_inline_code",
+                "ref": "#/tables/0/data/grid/0/0",
+                "code_spans": ["api.call()", "missing()"],
+            }
+        ],
+    )
+
+    cell = patched["tables"][0]["data"]["grid"][0][0]
+    assert applied[0]["status"] == "success"
+    assert cell["structure_ja_v2"]["inline_code_spans"] == ["api.call()"]
+
+
+def test_structure_messages_include_table_cells_for_inline_code_detection() -> None:
+    """Structure requestは表セルrefと原文をVLMへ渡す。
+
+    Returns:
+        なし。
+    """
+
+    data = {
+        "tables": [
+            {
+                "self_ref": "#/tables/0",
+                "prov": [{"page_no": 1}],
+                "data": {"grid": [[{"text": "Run api.call() now"}]]},
+            }
+        ]
+    }
+
+    content = build_structure_messages(data)[1]["content"]
+
+    assert isinstance(content, str)
+    assert "#/tables/0/data/grid/0/0" in content
+    assert "Run api.call() now" in content
+    assert "set_table_cell_inline_code" in content
 
 
 def test_build_structure_messages_attaches_docling_page_png(tmp_path: Path) -> None:

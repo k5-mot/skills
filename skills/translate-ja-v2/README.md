@@ -120,9 +120,9 @@ Docling JSON を複製し、まず各 text の `prov[].page_no` と `prov[].bbox
 
 ### 4. Structure
 
-Normalize で座標補正した Docling 要素をページごとに分け、`pages[].image.uri` が指す1ページ画像とそのページの text JSON を OpenAI 互換 API へ渡します。URIや画像ファイルがない場合は無関係な画像を推測せず、テキストだけを渡します。VLM は段組みなど座標だけでは曖昧な箇所を判断し、見出し、レベル、本文順序、分割検出された表・コード・段落の結合を patch だけで返します。
+Normalize で座標補正した Docling 要素をページごとに分け、`pages[].image.uri` が指す1ページ画像、そのページのtext JSON、表セルを OpenAI 互換 API へ渡します。URIや画像ファイルがない場合は無関係な画像を推測せず、テキストだけを渡します。VLMは本文と誤認識されたコードのlabelを `code` へ変更し、同じコードブロックに属する前後要素を連結します。表セルでは原文に完全一致するインラインコードspanを検出し、`structure_ja_v2.inline_code_spans` に保存します。
 
-1ページ分の text context が `--context-chars` の上限（既定50,000文字）を超える場合は、同じページ内で隣接する2要素を比較して `merge_texts` の要否を判断します。その後、同じページ内の2要素を総当たりで比較し、順序が明らかに逆の場合だけ `swap_texts` を適用します。許可された `set_label`、`set_level`、`set_text`、`reorder_texts`、`merge_texts`、`swap_texts` だけを適用し、`document.structured.json` を保存します。
+1ページ分の context が `--context-chars` の上限（既定50,000文字）を超える場合は、同じページ内で隣接する2要素を比較してコード判定と `merge_texts` の要否を判断します。その後、同じページ内の2要素を総当たりで比較し、順序が明らかに逆の場合だけ `swap_texts` を適用します。表セルはcontext上限内のまとまりに分割します。許可された `set_label`、`set_level`、`set_text`、`reorder_texts`、`merge_texts`、`swap_texts`、`set_table_cell_inline_code` だけを適用し、`document.structured.json` を保存します。
 
 `--skip-vlm` はこの第2段階補正だけを省略します。Normalize の座標補正は常に実行されます。
 
@@ -182,7 +182,7 @@ Markdown 内の `artifacts/...` 画像は、docx 変換時に出力ディレク�
 
 同じコマンドを再実行すると、`manifest.json` と成果物の SHA-256 を照合し、完了済みの工程を再利用します。入力、工程設定、成果物のいずれかが変わった工程は再実行され、以降の工程も新しい入力から処理されます。`--force` は Parse から強制的にやり直します。
 
-- Structure は VLM がページ単位で処理するため、成功したページ内の text ref を完了として記録し、未完了要素を含む最初のページから再開します。
+- Structure は VLM がページ単位で処理するため、成功したページ内のtext refと表セルrefを完了として記録し、未完了要素を含む最初のページから再開します。
 - Translate は本文、見出し、表タイトル、表セルの各 ID を記録し、未翻訳要素から再開します。
 - Review はレビュー対象の各 ID を記録し、未レビュー要素から再開します。
 - Parse、Normalize、Markdown、Docx は工程単位で完了状態を記録し、完了済み成果物を再利用します。
