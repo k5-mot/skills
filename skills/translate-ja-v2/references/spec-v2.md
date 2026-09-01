@@ -1,5 +1,8 @@
 # PDF文書解析・整合・翻訳・Markdown変換パイプライン 仕様書
 
+> [!IMPORTANT]
+> この文書は初期設計時の検討資料であり、stage別ディレクトリや多機能Normalizerなど未採用の案を含む。現行仕様の正本は `implementation-guide.md` と `stages.md`、動作の正本は `scripts/translate.py` とする。内容が矛盾する場合、この文書を実装根拠にしない。
+
 ## 1. 目的
 
 PDF文書を入力として、Doclingによる文書解析、ルールベースの整合処理、VLMによる構造補正、OpenAI APIによる翻訳、Markdownレンダリングまでを一貫して実行するPythonアプリケーションを構築する。

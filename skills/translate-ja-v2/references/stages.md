@@ -1,6 +1,6 @@
 # Stage 詳細
 
-この文書は `scripts/translate.py` の各 stage クラスを修正するときに読む。全体方針は `implementation-guide.md`、完全仕様は `spec-v2.md` を参照する。各クラスは、そのフェーズの変換、成果物保存、manifest 記録を担当する。
+この文書は `scripts/translate.py` の各 stage クラスを修正するときに読む。全体方針は `implementation-guide.md` を参照する。`spec-v2.md` は未採用案を含む初期設計資料であり、現行仕様の判断には使わない。各クラスは、そのフェーズの変換、成果物保存、manifest 記録を担当する。
 
 Parse、Normalize、Clean、Render、Docx は工程単位で Resume する。Structure は成功したページ内のtext refと表セルref、Translate は本文・見出し・表タイトル・表セル、Review はレビュー対象の各 ID を manifest に記録し、通常の出力 JSON を部分成果物として未完了要素から Resume する。再利用時は入力・設定・出力 hash を必ず照合する。
 

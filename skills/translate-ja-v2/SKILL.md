@@ -11,7 +11,7 @@ PDF/Word から Docling Serve で JSON/PNG を作り、JSON 上で表・コー�
 
 - 実行・修正を始める前に [implementation-guide.md](references/implementation-guide.md) を読む。
 - Stage 詳細、Normalizer rule、VLM、翻訳、Markdown renderer を修正するときは [stages.md](references/stages.md) を読む。
-- 細かな仕様判断や受け入れ条件の確認が必要なときだけ [spec-v2.md](references/spec-v2.md) を読む。
+- 初期設計の背景が必要なときだけ [spec-v2.md](references/spec-v2.md) を読む。未採用案を含むため、現行仕様の判断には使わない。
 - Python コードを書く、CLI を直す、テストを追加する場合は、利用可能なら `python-dev` も併用し、docstring、logger、pytest、Ruff の方針を合わせる。
 
 ## 実行
