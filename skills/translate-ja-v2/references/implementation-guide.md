@@ -33,7 +33,7 @@ PDF/Word ごとに出力ディレクトリを作り、次のように保存す�
 
 ```text
 outputs/<stem>/
-├── document.json
+├── <stem>.json
 ├── document.normalized.json
 ├── document.structured.json
 ├── document.translated.json
@@ -44,7 +44,7 @@ outputs/<stem>/
 └── manifest.json
 ```
 
-`document.json` は Docling Serve 直後、`document.normalized.json` は座標による読み順補正と表・コード整形後、`document.structured.json` は VLM patch 後、`document.translated.json` は `translate_ja_v2` 翻訳フィールド付与後の JSON とする。
+`<stem>.json` は Docling Serve 直後、`document.normalized.json` は座標による読み順補正と表・コード整形後、`document.structured.json` は VLM patch 後、`document.translated.json` は `translate_ja_v2` 翻訳フィールド付与後の JSON とする。Docling ServeのZIP内にある唯一のJSONを、入力ファイルと同じstemで保存する。
 
 ## State と Resume
 
@@ -85,10 +85,10 @@ JSON と artifact は直接本ファイルへ書かない。必ず一時ファ�
 ## CLI
 
 ```bash
-python skills/translate-ja-v2/scripts/translate.py \
+uv run python skills/translate-ja-v2/scripts/translate.py \
   --input ./docs/source/source.pdf \
   --output-dir ./outputs/source \
-  --template ./skills/translate-ja-v2/template.dotx
+  --template ./skills/translate-ja-v2/examples/template.dotx
 ```
 
 `--skip-docx` は pandoc がない環境で JSON/Markdown まで検証したい場合に使う。`--skip-vlm` は第2段階の VLM 構造補正だけを止めた deterministic test に使う。Normalize の座標補正は実行される。

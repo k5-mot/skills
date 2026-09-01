@@ -508,7 +508,7 @@ def build_stage_paths(
     docx = output_docx or root / "document.ja.docx"
     return StagePaths(
         output_dir=root,
-        document_json=root / "document.json",
+        document_json=root / f"{input_path.stem}.json",
         normalized_json=root / "document.normalized.json",
         structured_json=root / "document.structured.json",
         translated_json=root / "document.translated.json",
@@ -715,12 +715,12 @@ def extract_docling_zip(zip_path: Path, output_json: Path, artifacts_dir: Path) 
             json_members = [
                 name
                 for name in archive.namelist()
-                if PurePosixPath(name).name == "document.json"
+                if PurePosixPath(name).suffix.lower() == ".json"
                 and not name.endswith("/")
             ]
             if len(json_members) != 1:
                 raise RuntimeError(
-                    "Docling zip response must contain exactly one document.json"
+                    "Docling zip response must contain exactly one JSON document"
                 )
             json_payload = archive.read(json_members[0])
             for member in archive.namelist():

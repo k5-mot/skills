@@ -12,10 +12,11 @@ Parse、Normalize、Render、Docx は工程単位で Resume する。Structure �
 
 出力:
 
-- `document.json`
+- `<stem>.json`
 - `artifacts/*.png`
 
 Parse Stage は Docling の文書モデルを可能な限りそのまま保存する。独自 Pydantic モデルへ全文コピーしない。
+Docling ZIP内の唯一のJSONを、入力ファイルと同じstemの `<stem>.json` として保存する。
 
 ## 02 Normalize
 

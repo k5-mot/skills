@@ -19,10 +19,10 @@ PDF/Word から Docling Serve で JSON/PNG を作り、JSON 上で表・コー�
 `.env` に Docling Serve と OpenAI 互換 API の環境変数を用意してから実行する。`.env` は `python-dotenv` 経由で読み込む。
 
 ```bash
-python skills/translate-ja-v2/scripts/translate.py \
+uv run python skills/translate-ja-v2/scripts/translate.py \
   --input ./docs/source/source.pdf \
   --output-dir ./outputs/source \
-  --template ./skills/translate-ja-v2/template.dotx
+  --template ./skills/translate-ja-v2/examples/template.dotx
 ```
 
 Word 変換を後回しにする場合だけ `--skip-docx` を使う。構造補正を明示的に止める検証では `--skip-vlm` を使う。
@@ -33,7 +33,7 @@ Docling 変換は常に `/v1/convert/file/async` を使い、polling ごとに p
 
 ```text
 outputs/<stem>/
-├── document.json
+├── <stem>.json
 ├── document.normalized.json
 ├── document.structured.json
 ├── document.translated.json
@@ -43,6 +43,8 @@ outputs/<stem>/
 ├── artifacts/
 └── manifest.json
 ```
+
+Docling ServeのZIP内にある唯一のJSONを、入力ファイルと同じstemの `<stem>.json` として保存する。
 
 ## 実装方針
 

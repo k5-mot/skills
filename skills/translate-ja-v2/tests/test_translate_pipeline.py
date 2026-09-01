@@ -261,17 +261,17 @@ def test_clean_text_preserves_url_and_compacts_noise() -> None:
     assert clean_text(text) == "See https://example.com/a---b ... ---"
 
 
-def test_build_stage_paths_uses_document_names(
+def test_build_stage_paths_uses_input_stem_for_raw_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """既定出力は outputs/<stem>/ 配下の document 固定名を使う。"""
+    """Raw JSONは入力stem名、後続成果物はdocument固定名を使う。"""
 
     monkeypatch.chdir(tmp_path)
 
     paths = build_stage_paths(tmp_path / "sample.pdf", None, None)
 
     assert paths.output_dir == tmp_path / "outputs" / "sample"
-    assert paths.document_json == paths.output_dir / "document.json"
+    assert paths.document_json == paths.output_dir / "sample.json"
     assert paths.normalized_json == paths.output_dir / "document.normalized.json"
     assert paths.structured_json == paths.output_dir / "document.structured.json"
     assert paths.translated_json == paths.output_dir / "document.translated.json"
@@ -1534,7 +1534,7 @@ def test_extract_docling_zip_preserves_document_and_artifact_paths(
     artifacts_dir.mkdir(parents=True)
     (artifacts_dir / "stale.png").write_bytes(b"stale")
     with zipfile.ZipFile(zip_path, "w") as archive:
-        archive.writestr("result/document.json", '{"texts": []}')
+        archive.writestr("sample2.json", '{"texts": []}')
         archive.writestr("result/artifacts/pages/page_000001.png", b"page")
 
     extract_docling_zip(zip_path, output_json, artifacts_dir)
@@ -2068,7 +2068,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         )
     )
 
-    assert paths.document_json == output_dir / "document.json"
+    assert paths.document_json == output_dir / "source.json"
     assert paths.document_json.exists()
     assert paths.normalized_json == output_dir / "document.normalized.json"
     assert paths.structured_json == output_dir / "document.structured.json"
