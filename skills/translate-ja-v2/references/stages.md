@@ -2,7 +2,7 @@
 
 この文書は `scripts/translate.py` の各 stage クラスを修正するときに読む。全体方針は `implementation-guide.md`、完全仕様は `spec-v2.md` を参照する。各クラスは、そのフェーズの変換、成果物保存、manifest 記録を担当する。
 
-Parse、Normalize、Render、Docx は工程単位で Resume する。Structure は成功したページ内のtext refと表セルref、Translate は本文・見出し・表タイトル・表セル、Review はレビュー対象の各 ID を manifest に記録し、通常の出力 JSON を部分成果物として未完了要素から Resume する。再利用時は入力・設定・出力 hash を必ず照合する。
+Parse、Normalize、Clean、Render、Docx は工程単位で Resume する。Structure は成功したページ内のtext refと表セルref、Translate は本文・見出し・表タイトル・表セル、Review はレビュー対象の各 ID を manifest に記録し、通常の出力 JSON を部分成果物として未完了要素から Resume する。再利用時は入力・設定・出力 hash を必ず照合する。
 
 ## 01 Parse
 
@@ -60,7 +60,15 @@ VLM に禁止する操作:
 
 VLM応答はJSON objectとして受け取り、`apply_structure_patches` で許可した操作だけを適用する。本文と誤認識されたコードは `set_label` でcodeへ変更し、前後の同一コードブロックは `merge_texts` で連結する。表セルの `set_table_cell_inline_code` は原文に完全一致するspanだけを `structure_ja_v2.inline_code_spans` へ保存する。requestのテキスト上限は `--context-chars`（既定50,000文字）を使い、各requestには対象ページの画像だけを添付する。
 
-## 04 Translate
+## 04 Clean
+
+実装クラス: `CleanStage`
+
+Structure済みJSONを複製し、本文と表セルの3文字以上連続する `.` を `...`、`・` を `・・・` へ縮める。2文字以下と3文字の連続は変更しない。見出し、コードブロック、`structure_ja_v2.inline_code_spans` に記録された表セル内コードは変更しない。
+
+外部APIを使わない決定論的工程として `document.cleaned.json` を保存する。manifestには工程単位の状態、入力・設定・出力hashだけを記録し、要素別進捗は持たない。
+
+## 05 Translate
 
 実装クラス: `TranslateStage`
 
@@ -90,7 +98,7 @@ VLM応答はJSON objectとして受け取り、`apply_structure_patches` で許�
 
 見出しと表タイトルは `英語 / 日本語` の render text を作る。本文は和訳のみを render text にする。コード、URL、path、identifier、command は原則として翻訳しない。
 
-## 05 Review
+## 06 Review
 
 実装クラス: `ReviewStage`
 
@@ -113,7 +121,7 @@ LLM には structured output や JSON 形式を要求せず、文書順に1要�
 
 `--skip-review` はこの工程だけを省略する。
 
-## 06 Render
+## 07 Render
 
 実装クラス: `RenderStage`
 
@@ -128,7 +136,7 @@ LLM には structured output や JSON 形式を要求せず、文書順に1要�
 
 コードブロックは fenced code block として保持し、翻訳しない。Markdown table が壊れる場合は、MVP 後に HTML table fallback を検討する。
 
-## 07 Docx
+## 08 Docx
 
 実装クラス: `DocxStage`
 

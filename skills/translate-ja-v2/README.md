@@ -78,6 +78,7 @@ CLI 引数解析
   -> ParseStage（Docling 非同期変換）
   -> NormalizeStage（座標による第1段階補正）
   -> StructureStage（VLMによる第2段階補正）
+  -> CleanStage（連続記号の決定論的校正）
   -> TranslateStage
   -> ReviewStage（翻訳レビュー）
   -> RenderStage（Markdown）
@@ -92,7 +93,8 @@ CLI 引数解析
 | `ParseStage` | 入力ファイル | Docling JSON |
 | `NormalizeStage` | Docling JSON | 座標補正済み JSON |
 | `StructureStage` | 座標補正済み JSON | VLM 構造補正済み JSON |
-| `TranslateStage` | 構造補正済み JSON | 翻訳 metadata 付き JSON |
+| `CleanStage` | VLM 構造補正済み JSON | 句読点校正済み JSON |
+| `TranslateStage` | 句読点校正済み JSON | 翻訳 metadata 付き JSON |
 | `ReviewStage` | 翻訳 metadata 付き JSON | レビュー済み JSON |
 | `RenderStage` | レビュー済み JSON | Markdown パス |
 | `DocxStage` | Markdown パス | docx パス |
@@ -126,7 +128,13 @@ Normalize で座標補正した Docling 要素をページごとに分け、`pag
 
 `--skip-vlm` はこの第2段階補正だけを省略します。Normalize の座標補正は常に実行されます。
 
-### 5. Translate
+### 5. Clean
+
+Structure後の本文と表セルについて、3文字以上連続する `.` を `...`、`・` を `・・・` へ縮め、`document.cleaned.json` に保存します。2文字以下および最初から3文字の連続は変更しません。見出し、コードブロック、Structureが `structure_ja_v2.inline_code_spans` に記録した表セル内コードは変更しません。
+
+Cleanは外部APIを使わない決定論的な工程です。manifestには要素別進捗を持たず、成果物とhashが一致する場合に工程単位でResumeします。
+
+### 6. Translate
 
 OpenAI 互換 API で texts と tables をバッチ翻訳し、原文を保持したまま `translate_ja_v2` metadata を追加します。見出しとその配下の下位見出し・本文を意味ブロックとして扱い、同じレベルまたは上位レベルの見出しで次のブロックを開始します。例えば、見出しレベル2、見出しレベル3、本文は同じブロックです。原文合計を `--batch-chars` の上限（既定1,500文字）以内に収めて、複数ブロックを1回のリクエストへまとめます。上限を超えるブロックは要素境界で分割し、単独要素が上限を超える場合だけ意味を壊す文字列分割を避けて単独送信します。
 
@@ -142,7 +150,7 @@ OpenAI 互換 API で texts と tables をバッチ翻訳し、原文を保持�
 
 結果は `document.translated.json` に保存します。
 
-### 6. Review
+### 7. Review
 
 翻訳済み JSON を近接要素とあわせて OpenAI 互換 API へ渡し、誤訳、用語集不一致、前後要素との表記ゆれ、文体の不自然なずれを保守的に修正します。レビューは `translate_ja_v2` metadata の訳文と render 用文字列だけを更新し、原文、Docling 構造、順序、label、表構造は変更しません。
 
@@ -150,7 +158,7 @@ OpenAI 互換 API で texts と tables をバッチ翻訳し、原文を保持�
 
 結果は `document.reviewed.json` に保存します。`--skip-review` を指定した場合はこの工程を省略し、`document.translated.json` から Markdown を生成します。
 
-### 7. Markdown と Word の生成
+### 8. Markdown と Word の生成
 
 レビュー済み JSON の texts、tables、pictures をページ順に並べ、見出し、fenced code block、Markdown 表、画像参照として `document.ja.md` へ書き出します。
 
@@ -167,6 +175,7 @@ outputs/sample/
 ├── sample.json
 ├── document.normalized.json
 ├── document.structured.json
+├── document.cleaned.json
 ├── document.translated.json
 ├── document.reviewed.json
 ├── document.ja.md
@@ -185,7 +194,7 @@ Markdown 内の `artifacts/...` 画像は、docx 変換時に出力ディレク�
 - Structure は VLM がページ単位で処理するため、成功したページ内のtext refと表セルrefを完了として記録し、未完了要素を含む最初のページから再開します。
 - Translate は本文、見出し、表タイトル、表セルの各 ID を記録し、未翻訳要素から再開します。
 - Review はレビュー対象の各 ID を記録し、未レビュー要素から再開します。
-- Parse、Normalize、Markdown、Docx は工程単位で完了状態を記録し、完了済み成果物を再利用します。
+- Parse、Normalize、Clean、Markdown、Docx は工程単位で完了状態を記録し、完了済み成果物を再利用します。
 
 処理中に停止した Structure、Translate、Review の部分成果物は、それぞれの通常の出力 JSON に atomic write されます。別のチェックポイントファイルは作りません。
 

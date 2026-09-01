@@ -27,7 +27,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
 
 Word 変換を後回しにする場合だけ `--skip-docx` を使う。構造補正を明示的に止める検証では `--skip-vlm` を使う。
 Docling 変換は常に `/v1/convert/file/async` を使い、polling ごとに poll 回数と status を logging する。
-同じコマンドを再実行した場合は manifest と成果物 hash を検証し、Structure、Translate、Review は要素別進捗から、その他は工程の完了状態から Resume する。`--force` は Parse を必ず再実行する。
+同じコマンドを再実行した場合は manifest と成果物 hash を検証し、Structure、Translate、Review は要素別進捗から、Parse、Normalize、Clean、Render、Docxは工程の完了状態から Resume する。`--force` は Parse を必ず再実行する。
 
 ## 出力
 
@@ -36,6 +36,7 @@ outputs/<stem>/
 ├── <stem>.json
 ├── document.normalized.json
 ├── document.structured.json
+├── document.cleaned.json
 ├── document.translated.json
 ├── document.reviewed.json
 ├── document.ja.md
@@ -55,9 +56,10 @@ Docling ServeのZIP内にある唯一のJSONを、入力ファイルと同じste
 5. コード、URL、パス、コマンド、識別子は翻訳せず保護する。
 6. Normalize で `prov[].page_no` と `prov[].bbox` を使って読み順を座標補正し、その後に VLM 補正を行う2段階構成にする。
 7. VLM には座標補正済みのDocling JSON要約、bbox、表セル、`pages[].image.uri` が指すpage PNGを渡す。本文と誤認識されたコードのlabel変更、隣接コード連結、表セル内インラインコードspanの特定を構造patchだけで行い、全文再生成はさせない。
-8. ファイル保存は一時ファイル、flush、fsync、`os.replace()` で行う。
-9. 外部 API を使う単体テストは fake client で検証する。
-10. `manifest.json` には工程ごとの入力・設定・出力 hash と状態を保存し、Structure、Translate、Review に限って要素 ID ごとの完了状態も保存する。
+8. Cleanでは本文と表セルの3文字以上連続する `.` と `・` を3文字へ縮める。コードブロックと表セル内インラインコードspanは変更しない。
+9. ファイル保存は一時ファイル、flush、fsync、`os.replace()` で行う。
+10. 外部 API を使う単体テストは fake client で検証する。
+11. `manifest.json` には工程ごとの入力・設定・出力 hash と状態を保存し、Structure、Translate、Review に限って要素 ID ごとの完了状態も保存する。
 
 ## 完了判断
 

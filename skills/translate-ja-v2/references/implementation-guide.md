@@ -10,7 +10,7 @@
 - `State`: job、stage、page の進捗、retry、artifact hash、error を持つ。文書本文を入れない。
 - `Patch`: normalizer や VLM が文書へ加えた差分と理由を持つ。
 
-Pipeline は `Artifact -> Stage -> Artifact` の連鎖として扱う。現行 v2 skill では `ParseStage`、`NormalizeStage`、`StructureStage`、`TranslateStage`、`RenderStage`、`DocxStage` の具体クラスが各境界を担当し、`run_pipeline()` が順番に `run()` を呼ぶ。共通基底クラス、factory、汎用 `StageRunner` は、差し替え可能な実装が必要になるまで追加しない。
+Pipeline は `Artifact -> Stage -> Artifact` の連鎖として扱う。現行 v2 skill では `ParseStage`、`NormalizeStage`、`StructureStage`、`CleanStage`、`TranslateStage`、`ReviewStage`、`RenderStage`、`DocxStage` の具体クラスが各境界を担当し、`run_pipeline()` が順番に `run()` を呼ぶ。共通基底クラス、factory、汎用 `StageRunner` は、差し替え可能な実装が必要になるまで追加しない。
 
 ## プロジェクト構成
 
@@ -36,6 +36,7 @@ outputs/<stem>/
 ├── <stem>.json
 ├── document.normalized.json
 ├── document.structured.json
+├── document.cleaned.json
 ├── document.translated.json
 ├── document.reviewed.json
 ├── document.ja.md
@@ -44,7 +45,7 @@ outputs/<stem>/
 └── manifest.json
 ```
 
-`<stem>.json` は Docling Serve 直後、`document.normalized.json` は座標による読み順補正後、`document.structured.json` は VLM patch 後、`document.translated.json` は `translate_ja_v2` 翻訳フィールド付与後の JSON とする。Docling ServeのZIP内にある唯一のJSONを、入力ファイルと同じstemで保存する。
+`<stem>.json` は Docling Serve 直後、`document.normalized.json` は座標による読み順補正後、`document.structured.json` は VLM patch 後、`document.cleaned.json` は連続記号校正後、`document.translated.json` は `translate_ja_v2` 翻訳フィールド付与後の JSON とする。Docling ServeのZIP内にある唯一のJSONを、入力ファイルと同じstemで保存する。
 
 ## State と Resume
 
@@ -53,7 +54,7 @@ outputs/<stem>/
 - `StructureStage`: 成功したページ内のtext refと表セルrefごとに完了状態を保存し、未完了要素を含む最初のページから再開する。
 - `TranslateStage`: 本文、見出し、表タイトル、表セルの ID ごとに完了状態を保存し、未完了要素から再開する。
 - `ReviewStage`: レビュー対象 ID ごとに完了状態を保存し、未完了要素から再開する。
-- `ParseStage`、`NormalizeStage`、`RenderStage`、`DocxStage`: 工程単位の完了状態だけを保存する。
+- `ParseStage`、`NormalizeStage`、`CleanStage`、`RenderStage`、`DocxStage`: 工程単位の完了状態だけを保存する。
 
 部分成果物は各工程の通常の出力 JSON に atomic write する。専用の checkpoint ファイルや状態データベースは追加しない。
 
@@ -78,9 +79,10 @@ JSON と artifact は直接本ファイルへ書かない。必ず一時ファ�
 1. Docling Serve で JSON と PNG artifacts を作る。
 2. JSON の `prov[].page_no` と `prov[].bbox` を使い、ページ順・上から下・左から右の読み順だけを決定論的に補正する。
 3. VLM/LLMに座標補正済みDocling JSONの要約、bbox、表セル、`pages[].image.uri` が指すpage PNGを渡す。本文と誤認識されたコードをcodeへ変更し、同じコードブロックに属する前後要素を連結する。表セルでは原文に完全一致するインラインコードspanをmetadataへ保存する。URIをファイル名から推測せず、URIや画像がない場合はテキストだけを渡す。
-4. JSON 各要素へ `translate_ja_v2` フィールドを追加する。
-5. 見出し・表タイトルは英日併記、本文は和訳のみで Markdown を作る。
-6. pandoc で Markdown を Word docx へ変換する。
+4. 本文と表セルの3文字以上連続する `.` と `・` を3文字へ縮める。コードブロックと表セル内インラインコードspanは保持する。
+5. JSON 各要素へ `translate_ja_v2` フィールドを追加する。
+6. 見出し・表タイトルは英日併記、本文は和訳のみで Markdown を作る。
+7. pandoc で Markdown を Word docx へ変換する。
 
 ## CLI
 

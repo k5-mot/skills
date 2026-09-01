@@ -21,6 +21,8 @@ from translate import (  # noqa: E402
     build_stage_paths,
     build_structure_messages,
     chat_text,
+    CleanStage,
+    clean_document,
     convert_markdown_to_docx,
     convert_with_docling,
     DoclingSettings,
@@ -265,6 +267,7 @@ def test_build_stage_paths_uses_input_stem_for_raw_json(
     assert paths.document_json == paths.output_dir / "sample.json"
     assert paths.normalized_json == paths.output_dir / "document.normalized.json"
     assert paths.structured_json == paths.output_dir / "document.structured.json"
+    assert paths.cleaned_json == paths.output_dir / "document.cleaned.json"
     assert paths.translated_json == paths.output_dir / "document.translated.json"
     assert paths.reviewed_json == paths.output_dir / "document.reviewed.json"
     assert paths.markdown == paths.output_dir / "document.ja.md"
@@ -366,6 +369,92 @@ def test_normalize_document_does_not_change_text_or_table_cells() -> None:
 
     assert normalized == data
     assert patches == []
+
+
+def test_clean_document_compacts_periods_and_middle_dots_outside_code() -> None:
+    """Cleanは本文と表セルだけを校正し、コード内の記号を保持する。
+
+    Returns:
+        なし。
+    """
+
+    data = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "paragraph",
+                "text": "Wait...... 次・・・・・・ end..",
+            },
+            {
+                "self_ref": "#/texts/1",
+                "label": "code",
+                "text": "print('......・・・・・・')",
+            },
+            {
+                "self_ref": "#/texts/2",
+                "label": "section_header",
+                "text": "Title......",
+            },
+        ],
+        "tables": [
+            {
+                "self_ref": "#/tables/0",
+                "data": {
+                    "grid": [
+                        [
+                            {
+                                "text": "Use api....call()...... or・・・・・・",
+                                "structure_ja_v2": {
+                                    "inline_code_spans": ["api....call()"]
+                                },
+                            },
+                            "Raw......",
+                        ]
+                    ]
+                },
+            }
+        ],
+    }
+
+    cleaned, patches = clean_document(data)
+
+    assert cleaned["texts"][0]["text"] == "Wait... 次・・・ end.."
+    assert cleaned["texts"][1]["text"] == "print('......・・・・・・')"
+    assert cleaned["texts"][2]["text"] == "Title......"
+    cell = cleaned["tables"][0]["data"]["grid"][0][0]
+    assert cell["text"] == "Use api....call()... or・・・"
+    assert cleaned["tables"][0]["data"]["grid"][0][1] == "Raw..."
+    assert [patch["ref"] for patch in patches] == [
+        "#/texts/0",
+        "#/tables/0/data/grid/0/0",
+        "#/tables/0/data/grid/0/1",
+    ]
+
+
+def test_clean_stage_resumes_as_completed_stage(tmp_path: Path) -> None:
+    """Cleanは要素別状態を持たず、完成成果物を工程単位で再利用する。
+
+    Args:
+        tmp_path: 一時成果物を保存するpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    paths = build_stage_paths(tmp_path / "source.pdf", tmp_path / "output", None)
+    document = {
+        "texts": [{"self_ref": "#/texts/0", "label": "paragraph", "text": "Wait......"}]
+    }
+    stage = CleanStage(paths=paths)
+
+    first = stage.run(document)
+    second = stage.run(document)
+
+    assert first == second
+    assert paths.cleaned_json.exists()
+    manifest = read_json(paths.manifest)
+    assert [event["stage"] for event in manifest["events"]] == ["clean"]
+    assert "elements" not in manifest["stages"]["clean"]
 
 
 @pytest.mark.parametrize(
@@ -2064,7 +2153,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
                     {
                         "self_ref": "#/texts/1",
                         "label": "paragraph",
-                        "text": "The force moves.",
+                        "text": "The force moves......",
                     },
                 ]
             },
@@ -2096,17 +2185,11 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             翻訳 metadata を追加した JSON。
         """
 
-        _ = (
-            data,
-            glossary,
-            translation_rules,
-            resume_data,
-            completed_ids,
-            on_progress,
-        )
+        _ = (glossary, translation_rules, resume_data, completed_ids, on_progress)
         stage_calls["translate"] += 1
         limits.update(context_chars=context_chars, batch_chars=batch_chars)
-        copied = read_json(output_dir / "document.structured.json")
+        copied = json.loads(json.dumps(data))
+        assert copied["texts"][1]["text"] == "The force moves..."
         copied["texts"][0]["translate_ja_v2"] = {"render_text": "Strategy / 戦略"}
         copied["texts"][1]["translate_ja_v2"] = {"render_text": "部隊が移動する。"}
         return copied
@@ -2180,12 +2263,14 @@ def test_run_pipeline_writes_json_markdown_and_docx(
     assert paths.document_json.exists()
     assert paths.normalized_json == output_dir / "document.normalized.json"
     assert paths.structured_json == output_dir / "document.structured.json"
+    assert paths.cleaned_json == output_dir / "document.cleaned.json"
     assert paths.translated_json == output_dir / "document.translated.json"
     assert paths.reviewed_json == output_dir / "document.reviewed.json"
     assert paths.markdown == output_dir / "document.ja.md"
     assert paths.docx == output_dir / "document.ja.docx"
     assert paths.normalized_json.exists()
     assert paths.structured_json.exists()
+    assert paths.cleaned_json.exists()
     assert paths.translated_json.exists()
     assert paths.reviewed_json.exists()
     assert paths.markdown.read_text(encoding="utf-8").startswith("## Strategy / 戦略")
@@ -2212,6 +2297,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         "parse",
         "normalize",
         "structure",
+        "clean",
         "translate",
         "review",
         "markdown",
@@ -2223,6 +2309,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         "parse",
         "normalize",
         "structure",
+        "clean",
         "translate",
         "review",
         "markdown",

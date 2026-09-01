@@ -45,6 +45,7 @@ PIPELINE_STAGES = (
     "parse",
     "normalize",
     "structure",
+    "clean",
     "translate",
     "review",
     "markdown",
@@ -121,6 +122,7 @@ class StagePaths(FrozenModel):
         document_json: Docling 変換直後の JSON。
         normalized_json: 決定論的整形後の JSON。
         structured_json: VLM 構造補正後の JSON。
+        cleaned_json: 句読点校正後の JSON。
         translated_json: 翻訳情報を付与した JSON。
         reviewed_json: レビュー済み翻訳情報を付与した JSON。
         markdown: 日本語 Markdown。
@@ -135,6 +137,7 @@ class StagePaths(FrozenModel):
     document_json: Path
     normalized_json: Path
     structured_json: Path
+    cleaned_json: Path
     translated_json: Path
     reviewed_json: Path
     markdown: Path
@@ -511,6 +514,7 @@ def build_stage_paths(
         document_json=root / f"{input_path.stem}.json",
         normalized_json=root / "document.normalized.json",
         structured_json=root / "document.structured.json",
+        cleaned_json=root / "document.cleaned.json",
         translated_json=root / "document.translated.json",
         reviewed_json=root / "document.reviewed.json",
         markdown=root / "document.ja.md",
@@ -1130,13 +1134,14 @@ def normalize_document(
 
 
 def iter_table_cells(
-    item: dict[str, Any], ref: str
+    item: dict[str, Any], ref: str, *, wrap_strings: bool = True
 ) -> list[tuple[str, dict[str, Any]]]:
     """Docling table item からセル dict を列挙する。
 
     Args:
         item: Docling table item。
         ref: table item の JSON pointer。
+        wrap_strings: grid内の文字列セルをdictへ変換するかどうか。
 
     Returns:
         セル参照とセル dict のタプル配列。
@@ -1173,7 +1178,7 @@ def iter_table_cells(
                         cast(dict[str, Any], cell),
                     )
                 )
-            elif isinstance(cell, str):
+            elif isinstance(cell, str) and wrap_strings:
                 wrapped = {"text": cell}
                 row[col_index] = wrapped
                 result.append((f"{ref}/data/grid/{row_index}/{col_index}", wrapped))
@@ -1846,6 +1851,159 @@ def inline_code_spans(cell: dict[str, Any]) -> list[str]:
     return list(
         dict.fromkeys(value for value in values if isinstance(value, str) and value)
     )
+
+
+def compact_unprotected_punctuation(value: str) -> str:
+    """保護対象を含まない文字列の過剰な連続記号を3文字へ縮める。
+
+    Args:
+        value: 校正対象文字列。
+
+    Returns:
+        3文字以上の連続するピリオドと中黒を3文字へ縮めた文字列。
+    """
+
+    return re.sub(r"・{3,}", "・・・", re.sub(r"\.{3,}", "...", value))
+
+
+def compact_repeated_punctuation(
+    value: str, protected_spans: list[str] | None = None
+) -> str:
+    """コードspanを保持して過剰な連続記号を3文字へ縮める。
+
+    Args:
+        value: 校正対象文字列。
+        protected_spans: 変更しない完全一致文字列。
+
+    Returns:
+        コードspan以外の連続するピリオドと中黒を校正した文字列。
+    """
+
+    spans = sorted(set(protected_spans or []), key=len, reverse=True)
+    if not spans:
+        return compact_unprotected_punctuation(value)
+    pattern = re.compile("|".join(re.escape(span) for span in spans if span))
+    if not pattern.pattern:
+        return compact_unprotected_punctuation(value)
+    result: list[str] = []
+    previous_end = 0
+    for match in pattern.finditer(value):
+        result.append(
+            compact_unprotected_punctuation(value[previous_end : match.start()])
+        )
+        result.append(match.group(0))
+        previous_end = match.end()
+    result.append(compact_unprotected_punctuation(value[previous_end:]))
+    return "".join(result)
+
+
+def replace_primary_text(item: dict[str, Any], value: str) -> None:
+    """Docling要素で表示に使われる第1テキストフィールドを置換する。
+
+    Args:
+        item: 更新対象のDocling要素。
+        value: 置換後文字列。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        itemのtext、orig、contentのうち最初の文字列フィールドを更新する。
+    """
+
+    for key in ("text", "orig", "content"):
+        if isinstance(item.get(key), str):
+            item[key] = value
+            return
+    item["text"] = value
+
+
+def clean_document(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """本文と表セルの過剰な連続記号を決定論的に校正する。
+
+    Args:
+        data: Structure済みDocling JSON。
+
+    Returns:
+        校正後JSONと変更patch配列。
+
+    Side Effects:
+        なし。入力JSONを複製してから処理する。
+    """
+
+    result = copy.deepcopy(data)
+    patches: list[dict[str, Any]] = []
+    texts = result.get("texts")
+    if isinstance(texts, list):
+        for index, value in enumerate(texts):
+            if not isinstance(value, dict):
+                continue
+            item = cast(dict[str, Any], value)
+            if is_heading(item) or is_code(item):
+                continue
+            before = text_of(item)
+            after = compact_repeated_punctuation(before)
+            if after == before:
+                continue
+            replace_primary_text(item, after)
+            patches.append(
+                {
+                    "rule": "compact_repeated_punctuation",
+                    "ref": self_ref(item, "texts", index),
+                    "before": before,
+                    "after": after,
+                }
+            )
+
+    tables = result.get("tables")
+    if isinstance(tables, list):
+        for table_index, value in enumerate(tables):
+            if not isinstance(value, dict):
+                continue
+            table = cast(dict[str, Any], value)
+            table_ref = self_ref(table, "tables", table_index)
+            for cell_ref, cell in iter_table_cells(
+                table, table_ref, wrap_strings=False
+            ):
+                before = text_of(cell)
+                after = compact_repeated_punctuation(before, inline_code_spans(cell))
+                if after == before:
+                    continue
+                replace_primary_text(cell, after)
+                patches.append(
+                    {
+                        "rule": "compact_repeated_punctuation",
+                        "ref": cell_ref,
+                        "before": before,
+                        "after": after,
+                    }
+                )
+            table_data = table.get("data")
+            grid = table_data.get("grid") if isinstance(table_data, dict) else None
+            if not isinstance(grid, list):
+                continue
+            for row_index, row in enumerate(grid):
+                if not isinstance(row, list):
+                    continue
+                row = cast(list[Any], row)
+                for col_index, cell in enumerate(row):
+                    if not isinstance(cell, str):
+                        continue
+                    after = compact_repeated_punctuation(cell)
+                    if after == cell:
+                        continue
+                    row[col_index] = after
+                    patches.append(
+                        {
+                            "rule": "compact_repeated_punctuation",
+                            "ref": f"{table_ref}/data/grid/{row_index}/{col_index}",
+                            "before": cell,
+                            "after": after,
+                        }
+                    )
+    return result, patches
 
 
 def pointer_target(data: dict[str, Any], pointer: str) -> tuple[Any, str | int]:
@@ -4163,6 +4321,64 @@ class StructureStage(FrozenModel):
         return structured
 
 
+class CleanStage(FrozenModel):
+    """本文と表セルの連続記号を決定論的に校正する。
+
+    Args:
+        paths: 各工程の成果物パス。
+
+    Returns:
+        工程単位Resumeに対応するClean工程。
+    """
+
+    paths: StagePaths
+
+    def run(self, document: dict[str, Any]) -> dict[str, Any]:
+        """Clean済み文書を返す。
+
+        Args:
+            document: Structure済みDocling JSON。
+
+        Returns:
+            連続記号を校正したDocling JSON。
+
+        Side Effects:
+            document.cleaned.jsonとmanifestの工程状態を更新する。
+        """
+
+        input_hash = sha256_json(document)
+        config_hash = sha256_json({"version": 1, "characters": [".", "・"]})
+        if stage_is_resumable(
+            self.paths.manifest,
+            "clean",
+            self.paths.cleaned_json,
+            input_hash,
+            config_hash,
+        ):
+            cleaned = read_json(self.paths.cleaned_json)
+            if not isinstance(cleaned, dict):
+                raise ValueError("Cleaned JSON root must be an object")
+            return cleaned
+        record_stage_start(
+            self.paths.manifest,
+            "clean",
+            self.paths.cleaned_json,
+            input_hash,
+            config_hash,
+        )
+        cleaned, patches = clean_document(document)
+        write_json(self.paths.cleaned_json, cleaned)
+        record_stage_completion(
+            self.paths.manifest,
+            "clean",
+            self.paths.cleaned_json,
+            input_hash,
+            config_hash,
+            details={"patches": len(patches)},
+        )
+        return cleaned
+
+
 class TranslateStage(FrozenModel):
     """文書要素を日本語へ翻訳する。"""
 
@@ -4488,13 +4704,14 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
         skip_vlm=args.skip_vlm,
         context_chars=args.context_chars,
     ).run(normalized)
+    cleaned = CleanStage(paths=paths).run(structured)
     translated = TranslateStage(
         paths=paths,
         glossary_path=args.glossary,
         translation_rules_path=args.translation_rules,
         context_chars=args.context_chars,
         batch_chars=args.batch_chars,
-    ).run(structured)
+    ).run(cleaned)
     if args.skip_review:
         record_stage_skipped(paths.manifest, "review", "--skip-review")
         render_source = translated
