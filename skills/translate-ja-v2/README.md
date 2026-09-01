@@ -28,7 +28,7 @@ OPENAI_MODEL=your-model
 
 Docling Serve の表構造、セル対応、コード、数式の認識は常に有効です。表構造の解析モードには `accurate` を使います。
 
-timeout、OCR、OpenAI retry、ログレベルは `translate.py` 内の固定値を使います。既定ログレベルは `DEBUG` です。ログ本文は英語で、DEBUGはcyan、INFOはgreen、WARNINGはyellow、ERRORはred、CRITICALはmagentaのANSI色付きレベル名を出力します。工程の開始・完了・省略・ResumeはINFO、polling、バッチ処理、要素単位の変更はDEBUGです。OpenAI request のテキスト上限は `--context-chars`、翻訳バッチの原文上限は `--batch-chars` で変更できます。バッチ翻訳はJSONモードと出力上限4,096トークンを指定します。429や一時的な5xxなどは最大6回、5秒から最大60秒までの指数バックオフで再試行します。バッチ翻訳の空応答や部分応答は同じ入力を再送せず、要素境界でバッチを二分して再実行します。
+timeout、OCR、OpenAI retry、ログレベルは `translate.py` 内の固定値を使います。アプリの既定ログレベルは `DEBUG`、依存ライブラリは `WARNING` 以上です。これによりOpenAI SDKやHTTP clientのrequest内部データは表示しません。ログ本文は英語で、DEBUGはcyan、INFOはgreen、WARNINGはyellow、ERRORはred、CRITICALはmagentaのANSI色付きレベル名を出力します。工程の開始・完了・省略・ResumeはINFO、polling、バッチ処理、要素単位の変更はDEBUGです。OpenAI request のテキスト上限は `--context-chars`、翻訳バッチの原文上限は `--batch-chars` で変更できます。バッチ翻訳はJSONモードと出力上限4,096トークンを指定します。429や一時的な5xxなどは最大6回、5秒から最大60秒までの指数バックオフで再試行します。バッチ翻訳の空応答や部分応答は同じ入力を再送せず、要素境界でバッチを二分して再実行します。
 
 ### ▶️ 3. 翻訳パイプラインを実行する
 

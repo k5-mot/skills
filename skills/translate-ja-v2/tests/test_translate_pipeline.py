@@ -270,14 +270,22 @@ def test_configure_logging_uses_debug_and_colored_levels(
     """
 
     basic_config = Mock()
+    app_logger = Mock()
+    app_logger.handlers = []
     monkeypatch.setattr(logging, "basicConfig", basic_config)
+    monkeypatch.setattr("translate.LOGGER", app_logger)
 
     configure_logging()
 
     kwargs = basic_config.call_args.kwargs
-    assert kwargs["level"] == logging.DEBUG
+    assert kwargs["level"] == logging.WARNING
     assert kwargs["force"] is True
-    formatter = kwargs["handlers"][0].formatter
+    assert kwargs["handlers"][0].level == logging.WARNING
+    app_logger.setLevel.assert_called_once_with(logging.DEBUG)
+    app_handler = app_logger.addHandler.call_args.args[0]
+    assert app_handler.level == logging.DEBUG
+    assert app_logger.propagate is False
+    formatter = app_handler.formatter
     assert isinstance(formatter, ColorFormatter)
     expected_colors = {
         logging.DEBUG: "\033[36mDEBUG\033[0m",

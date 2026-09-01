@@ -221,7 +221,7 @@ def configure_logging(level_name: str | None = None) -> None:
         なし。
 
     Side Effects:
-        root loggerの既存handlerを色付きStreamHandlerへ置き換える。
+        アプリloggerを指定レベル、外部loggerをWARNING以上に設定する。
     """
 
     level = getattr(
@@ -229,18 +229,25 @@ def configure_logging(level_name: str | None = None) -> None:
         (level_name or LOG_LEVEL).upper(),
         logging.DEBUG,
     )
-    handler = logging.StreamHandler()
-    handler.setFormatter(
-        ColorFormatter(
-            "%(asctime)s %(levelname)s %(name)s "
-            "file=%(pathname)s function=%(funcName)s line=%(lineno)d %(message)s"
-        )
+    formatter = ColorFormatter(
+        "%(asctime)s %(levelname)s %(name)s "
+        "file=%(pathname)s function=%(funcName)s line=%(lineno)d %(message)s"
     )
+    root_handler = logging.StreamHandler()
+    root_handler.setLevel(logging.WARNING)
+    root_handler.setFormatter(formatter)
     logging.basicConfig(
-        level=level,
-        handlers=[handler],
+        level=logging.WARNING,
+        handlers=[root_handler],
         force=True,
     )
+    app_handler = logging.StreamHandler()
+    app_handler.setLevel(level)
+    app_handler.setFormatter(formatter)
+    LOGGER.handlers.clear()
+    LOGGER.addHandler(app_handler)
+    LOGGER.setLevel(level)
+    LOGGER.propagate = False
 
 
 def load_dotenv_file(path: str | Path = ".env") -> None:
