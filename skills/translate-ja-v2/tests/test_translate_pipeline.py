@@ -45,11 +45,16 @@ from translate import (  # noqa: E402
     render_markdown,
     review_batch,
     review_document,
+    ReviewStage,
     run_pipeline,
+    stage_is_resumable,
+    record_stage_completion,
     structure_document,
+    StructureStage,
     translate_document,
     translate_batch,
     translate_text_item,
+    TranslateStage,
     write_json,
 )
 
@@ -275,6 +280,29 @@ def test_build_stage_paths_uses_document_names(
     assert paths.docx == paths.output_dir / "document.ja.docx"
 
 
+def test_stage_resume_rejects_corrupt_output_and_changed_config(tmp_path: Path) -> None:
+    """Resumeは成果物破損または設定変更を検出して再実行対象にする。
+
+    Args:
+        tmp_path: 一時成果物を保存するpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    manifest = tmp_path / "manifest.json"
+    output = tmp_path / "document.normalized.json"
+    write_json(output, {"texts": []})
+    record_stage_completion(manifest, "normalize", output, "input", "config")
+
+    assert stage_is_resumable(manifest, "normalize", output, "input", "config")
+    assert not stage_is_resumable(manifest, "normalize", output, "input", "changed")
+
+    output.write_text("corrupt", encoding="utf-8")
+
+    assert not stage_is_resumable(manifest, "normalize", output, "input", "config")
+
+
 def test_apply_reorder_texts_moves_selected_refs_first() -> None:
     """reorder_texts patch は指定 ref 順に texts を並べ替える。"""
 
@@ -498,6 +526,64 @@ def test_translate_document_passes_glossary_hits_and_rules(
     assert translated["texts"][0]["translate_ja_v2"]["glossary_terms"] == [
         "Strategic Command"
     ]
+
+
+def test_translate_resume_keeps_completed_heading_as_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Translate再開時も完了済み見出しを後続本文の文脈に使う。
+
+    Args:
+        monkeypatch: OpenAI clientをfakeへ置き換えるpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    client = RecordingClient()
+    monkeypatch.setattr(
+        "translate.require_openai_settings",
+        lambda context_chars: OpenAISettings(
+            base_url="http://example.test",
+            api_key="test",
+            model="fake",
+            timeout_seconds=1,
+            context_chars=context_chars,
+        ),
+    )
+    monkeypatch.setattr("translate.openai_client", lambda _settings: client)
+    source = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "section_header",
+                "text": "Strategy",
+            },
+            {
+                "self_ref": "#/texts/1",
+                "label": "paragraph",
+                "text": "The force moves.",
+            },
+        ]
+    }
+    checkpoint = json.loads(json.dumps(source))
+    checkpoint["texts"][0]["translate_ja_v2"] = {
+        "text_en": "Strategy",
+        "text_ja": "戦略",
+        "render_text": "Strategy / 戦略",
+        "translated": True,
+    }
+
+    translated = translate_document(
+        source,
+        resume_data=checkpoint,
+        completed_ids={"#/texts/0"},
+    )
+    prompt = client.completions.calls[0]["messages"][1]["content"]
+
+    assert '"context": "Strategy"' in prompt
+    assert translated["texts"][0]["translate_ja_v2"]["text_ja"] == "戦略"
+    assert translated["texts"][1]["translate_ja_v2"]["text_ja"] == "訳文"
 
 
 def test_pack_translation_blocks_keeps_sections_within_limit() -> None:
@@ -1523,6 +1609,269 @@ def test_convert_markdown_to_docx_runs_pandoc_from_markdown_directory(
     ]
 
 
+def test_structure_stage_resumes_from_completed_page_elements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Structureは完了text refを保持し、未完了ページから再開する。
+
+    Args:
+        tmp_path: 一時成果物を保存するpytest fixture。
+        monkeypatch: Structure処理をfakeへ置き換えるpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    paths = build_stage_paths(tmp_path / "source.pdf", tmp_path / "out", None)
+    paths.output_dir.mkdir(parents=True)
+    document = {
+        "texts": [
+            _text_item(0, "page 1", top=100, bottom=90, page=1),
+            _text_item(1, "page 2", top=100, bottom=90, page=2),
+        ]
+    }
+    calls: list[int | None] = []
+    fail_page_two = True
+    monkeypatch.setattr(
+        "translate.require_openai_settings",
+        lambda context_chars: OpenAISettings(
+            base_url="http://example.test",
+            api_key="test",
+            model="fake",
+            timeout_seconds=1,
+            context_chars=context_chars,
+        ),
+    )
+    monkeypatch.setattr("translate.openai_client", lambda _settings: object())
+
+    def fake_structure_page(
+        data: dict[str, Any],
+        page_no: int | None,
+        _client: object,
+        _settings: OpenAISettings,
+        _artifacts_dir: Path | None,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """ページ2の初回だけ失敗するStructure処理を模倣する。
+
+        Args:
+            data: 現在の部分成果物。
+            page_no: 処理対象ページ番号。
+            _client: fakeでは未使用のclient。
+            _settings: fakeでは未使用の設定。
+            _artifacts_dir: fakeでは未使用のartifactパス。
+
+        Returns:
+            処理済みページを記録した文書と空patch。
+        """
+
+        calls.append(page_no)
+        if page_no == 2 and fail_page_two:
+            raise RuntimeError("interrupted")
+        result = json.loads(json.dumps(data))
+        result.setdefault("processed_pages", []).append(page_no)
+        return result, []
+
+    monkeypatch.setattr("translate.structure_page_with_vlm", fake_structure_page)
+    stage = StructureStage(
+        paths=paths,
+        artifacts_dir=paths.output_dir / "artifacts",
+        skip_vlm=False,
+    )
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        stage.run(document)
+
+    manifest = read_json(paths.manifest)
+    assert manifest["stages"]["structure"]["status"] == "running"
+    assert manifest["stages"]["structure"]["elements"] == {
+        "#/texts/0": {"status": "completed"},
+        "#/texts/1": {"status": "pending"},
+    }
+
+    fail_page_two = False
+    structured = stage.run(document)
+
+    assert calls == [1, 2, 2]
+    assert structured["processed_pages"] == [1, 2]
+    assert read_json(paths.manifest)["stages"]["structure"]["status"] == "completed"
+
+
+def test_translate_stage_resumes_from_completed_element(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Translateは完了text refを再送せず次の要素から再開する。
+
+    Args:
+        tmp_path: 一時成果物を保存するpytest fixture。
+        monkeypatch: 翻訳APIをfakeへ置き換えるpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    paths = build_stage_paths(tmp_path / "source.pdf", tmp_path / "out", None)
+    paths.output_dir.mkdir(parents=True)
+    document = {
+        "texts": [
+            {"self_ref": "#/texts/0", "label": "section_header", "text": "A"},
+            {"self_ref": "#/texts/1", "label": "section_header", "text": "B"},
+        ]
+    }
+    calls: list[str] = []
+    fail_second = True
+    monkeypatch.setenv("OPENAI_MODEL", "fake")
+    monkeypatch.setattr(
+        "translate.require_openai_settings",
+        lambda context_chars: OpenAISettings(
+            base_url="http://example.test",
+            api_key="test",
+            model="fake",
+            timeout_seconds=1,
+            context_chars=context_chars,
+        ),
+    )
+    monkeypatch.setattr("translate.openai_client", lambda _settings: object())
+
+    def fake_chat(
+        _client: object,
+        _settings: OpenAISettings,
+        messages: list[dict[str, Any]],
+        **_kwargs: object,
+    ) -> str:
+        """2要素目の初回だけ失敗する翻訳応答を返す。
+
+        Args:
+            _client: fakeでは未使用のclient。
+            _settings: fakeでは未使用の設定。
+            messages: 翻訳対象IDを含むmessages。
+            **_kwargs: fakeでは未使用の追加引数。
+
+        Returns:
+            入力IDを維持した翻訳JSON。
+        """
+
+        nonlocal fail_second
+        content = str(messages[1]["content"])
+        item_id = "#/texts/0" if "#/texts/0" in content else "#/texts/1"
+        calls.append(item_id)
+        if item_id == "#/texts/1" and fail_second:
+            raise RuntimeError("interrupted")
+        return json.dumps(
+            {"translations": [{"id": item_id, "translated_text": f"訳{item_id[-1]}"}]}
+        )
+
+    monkeypatch.setattr("translate.chat_text", fake_chat)
+    stage = TranslateStage(paths=paths, batch_chars=1)
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        stage.run(document)
+
+    manifest = read_json(paths.manifest)
+    assert manifest["stages"]["translate"]["elements"] == {
+        "#/texts/0": {"status": "completed"},
+        "#/texts/1": {"status": "pending"},
+    }
+
+    fail_second = False
+    translated = stage.run(document)
+
+    assert calls == ["#/texts/0", "#/texts/1", "#/texts/1"]
+    assert translated["texts"][0]["translate_ja_v2"]["text_ja"] == "訳0"
+    assert translated["texts"][1]["translate_ja_v2"]["text_ja"] == "訳1"
+
+
+def test_review_stage_resumes_from_completed_element(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reviewは完了要素を再送せず次の対象から再開する。
+
+    Args:
+        tmp_path: 一時成果物を保存するpytest fixture。
+        monkeypatch: Review処理をfakeへ置き換えるpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    paths = build_stage_paths(tmp_path / "source.pdf", tmp_path / "out", None)
+    paths.output_dir.mkdir(parents=True)
+    document = {
+        "texts": [
+            {
+                "self_ref": f"#/texts/{index}",
+                "label": "paragraph",
+                "text": source,
+                "translate_ja_v2": {
+                    "kind": "body",
+                    "text_en": source,
+                    "text_ja": f"旧{index}",
+                    "render_text": f"旧{index}",
+                    "translated": True,
+                },
+            }
+            for index, source in enumerate(("A", "B"))
+        ]
+    }
+    calls: list[str] = []
+    fail_second = True
+    monkeypatch.setenv("OPENAI_MODEL", "fake")
+    monkeypatch.setattr(
+        "translate.require_openai_settings",
+        lambda context_chars: OpenAISettings(
+            base_url="http://example.test",
+            api_key="test",
+            model="fake",
+            timeout_seconds=1,
+            context_chars=context_chars,
+        ),
+    )
+    monkeypatch.setattr("translate.openai_client", lambda _settings: object())
+
+    def fake_review_batch(
+        _client: object,
+        _settings: OpenAISettings,
+        items: list[dict[str, Any]],
+        translation_rules: str,
+    ) -> dict[str, str]:
+        """2要素目の初回だけ失敗するレビュー応答を返す。
+
+        Args:
+            _client: fakeでは未使用のclient。
+            _settings: fakeでは未使用の設定。
+            items: 1件のレビュー対象。
+            translation_rules: fakeでは未使用の翻訳ルール。
+
+        Returns:
+            対象IDとレビュー後訳文の対応。
+        """
+
+        _ = translation_rules
+        item_id = str(items[0]["id"])
+        calls.append(item_id)
+        if item_id == "#/texts/1" and fail_second:
+            raise RuntimeError("interrupted")
+        return {item_id: f"新{item_id[-1]}"}
+
+    monkeypatch.setattr("translate.review_batch", fake_review_batch)
+    stage = ReviewStage(paths=paths)
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        stage.run(document)
+
+    manifest = read_json(paths.manifest)
+    assert manifest["stages"]["review"]["elements"] == {
+        "#/texts/0": {"status": "completed"},
+        "#/texts/1": {"status": "pending"},
+    }
+
+    fail_second = False
+    reviewed = stage.run(document)
+
+    assert calls == ["#/texts/0", "#/texts/1", "#/texts/1"]
+    assert reviewed["texts"][0]["translate_ja_v2"]["text_ja"] == "新0"
+    assert reviewed["texts"][1]["translate_ja_v2"]["text_ja"] == "新1"
+
+
 def test_run_pipeline_writes_json_markdown_and_docx(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1532,6 +1881,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
     input_path.write_bytes(b"%PDF-1.4")
     output_dir = tmp_path / "out"
     limits: dict[str, int] = {}
+    stage_calls = {"parse": 0, "translate": 0, "review": 0, "docx": 0}
 
     def fake_docling(
         _input_path: Path,
@@ -1549,6 +1899,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             なし。
         """
 
+        stage_calls["parse"] += 1
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         (artifacts_dir / "page_000001.png").write_bytes(b"png")
         write_json(
@@ -1576,6 +1927,9 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         translation_rules: str = "",
         context_chars: int = 0,
         batch_chars: int = 0,
+        resume_data: dict[str, object] | None = None,
+        completed_ids: set[str] | None = None,
+        on_progress: object | None = None,
     ) -> dict[str, object]:
         """OpenAI 翻訳の代わりに render 用 metadata を追加する。
 
@@ -1583,12 +1937,25 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             data: 構造補正済み JSON。
             glossary: fake では未使用。
             translation_rules: fake では未使用。
+            context_chars: fakeで記録するcontext上限。
+            batch_chars: fakeで記録するbatch上限。
+            resume_data: fakeでは未使用の部分成果物。
+            completed_ids: fakeでは未使用の完了ID。
+            on_progress: fakeでは未使用のcallback。
 
         Returns:
             翻訳 metadata を追加した JSON。
         """
 
-        _ = (data, glossary, translation_rules)
+        _ = (
+            data,
+            glossary,
+            translation_rules,
+            resume_data,
+            completed_ids,
+            on_progress,
+        )
+        stage_calls["translate"] += 1
         limits.update(context_chars=context_chars, batch_chars=batch_chars)
         copied = read_json(output_dir / "document.structured.json")
         copied["texts"][0]["translate_ja_v2"] = {"render_text": "Strategy / 戦略"}
@@ -1609,6 +1976,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             なし。
         """
 
+        stage_calls["docx"] += 1
         assert markdown_path.exists()
         assert template_path is None
         docx_path.write_bytes(b"docx")
@@ -1617,10 +1985,26 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         data: dict[str, object],
         translation_rules: str = "",
         context_chars: int = 0,
+        resume_data: dict[str, object] | None = None,
+        completed_ids: set[str] | None = None,
+        on_progress: object | None = None,
     ) -> tuple[dict[str, object], int]:
-        """OpenAI レビューの代わりに入力をそのまま返す。"""
+        """OpenAI レビューの代わりに入力をそのまま返す。
 
-        _ = translation_rules
+        Args:
+            data: レビュー対象JSON。
+            translation_rules: fakeでは未使用の翻訳ルール。
+            context_chars: fakeで記録するcontext上限。
+            resume_data: fakeでは未使用の部分成果物。
+            completed_ids: fakeでは未使用の完了ID。
+            on_progress: fakeでは未使用のcallback。
+
+        Returns:
+            入力JSONと変更件数0。
+        """
+
+        _ = (translation_rules, resume_data, completed_ids, on_progress)
+        stage_calls["review"] += 1
         limits["review_context_chars"] = context_chars
         return data, 0
 
@@ -1663,14 +2047,36 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         "batch_chars": 800,
         "review_context_chars": 32000,
     }
+    run_pipeline(
+        PipelineOptions(
+            input=input_path,
+            output_dir=output_dir,
+            skip_vlm=True,
+            context_chars=32000,
+            batch_chars=800,
+        )
+    )
+    assert stage_calls == {"parse": 1, "translate": 1, "review": 1, "docx": 1}
     manifest = read_json(paths.manifest)
     assert [event["stage"] for event in manifest["events"]] == [
         "start",
-        "docling",
+        "parse",
         "normalize",
         "structure",
         "translate",
         "review",
         "markdown",
         "docx",
+        "start",
     ]
+    assert manifest["schema_version"] == 2
+    assert set(manifest["stages"]) == {
+        "parse",
+        "normalize",
+        "structure",
+        "translate",
+        "review",
+        "markdown",
+        "docx",
+    }
+    assert all(state["status"] == "completed" for state in manifest["stages"].values())

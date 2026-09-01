@@ -21,7 +21,7 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from time import perf_counter
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Callable, cast
 from urllib.parse import unquote, urlsplit
 
 import typer
@@ -41,6 +41,15 @@ OPENAI_RETRY_MAX_SECONDS = 60.0
 OPENAI_CONTEXT_LIMIT_CHARS = 50000
 OPENAI_MAX_OUTPUT_TOKENS = 4096
 TRANSLATION_BATCH_MAX_CHARS = 1500
+PIPELINE_STAGES = (
+    "parse",
+    "normalize",
+    "structure",
+    "translate",
+    "review",
+    "markdown",
+    "docx",
+)
 DEFAULT_TRANSLATION_RULES = """\
 - 原文にない説明、要約、事実追加は禁止。
 - 固有名詞、製品名、API名、コード、URL、パス、識別子、コマンドは英語のまま保持する。
@@ -419,6 +428,66 @@ def sha256_file(path: str | Path) -> str:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def sha256_json(value: Any) -> str:
+    """JSON値を正規化してSHA-256を返す。
+
+    Args:
+        value: JSON serializableな値。
+
+    Returns:
+        canonical JSONのSHA-256 digest。
+    """
+
+    import hashlib
+
+    content = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(content).hexdigest()
+
+
+def sha256_directory(path: Path) -> str:
+    """ディレクトリ内の相対パスとファイル内容からSHA-256を返す。
+
+    Args:
+        path: digest対象のディレクトリ。
+
+    Returns:
+        ディレクトリ内容のSHA-256 digest。
+
+    Raises:
+        FileNotFoundError: ディレクトリが存在しない場合。
+    """
+
+    import hashlib
+
+    if not path.is_dir():
+        raise FileNotFoundError(f"directory not found: {path}")
+    digest = hashlib.sha256()
+    for item in sorted(
+        candidate for candidate in path.rglob("*") if candidate.is_file()
+    ):
+        digest.update(item.relative_to(path).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        with item.open("rb") as file:
+            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sha256_path(path: Path) -> str:
+    """ファイルまたはディレクトリのSHA-256を返す。
+
+    Args:
+        path: digest対象のパス。
+
+    Returns:
+        対象内容のSHA-256 digest。
+    """
+
+    return sha256_directory(path) if path.is_dir() else sha256_file(path)
 
 
 def build_stage_paths(
@@ -2058,6 +2127,9 @@ def structure_document(
     skip_vlm: bool,
     artifacts_dir: Path | None = None,
     context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS,
+    resume_data: dict[str, Any] | None = None,
+    completed_ids: set[str] | None = None,
+    on_progress: Callable[[dict[str, Any], list[str]], None] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """VLM/LLM で見出し・本文の構造を補正する。
 
@@ -2066,22 +2138,35 @@ def structure_document(
         skip_vlm: VLM 呼び出しをスキップするかどうか。
         artifacts_dir: Docling PNG artifacts のディレクトリ。
         context_chars: OpenAI request の最大テキスト文字数。
+        resume_data: 前回checkpointの部分成果物。
+        completed_ids: 処理済みの入力text ref。
+        on_progress: ページ完了時に部分成果物と完了refを通知するcallback。
 
     Returns:
         補正後 JSON と patch 適用結果。
     """
 
+    source_units = collect_structure_units(data)
     if skip_vlm:
-        return copy.deepcopy(data), []
+        result = copy.deepcopy(data)
+        if on_progress:
+            on_progress(result, [str(unit["ref"]) for unit in source_units])
+        return result, []
     settings = require_openai_settings(context_chars)
     client = openai_client(settings)
-    result = copy.deepcopy(data)
+    result = copy.deepcopy(resume_data if resume_data is not None else data)
+    completed = completed_ids if completed_ids is not None else set()
     applied: list[dict[str, Any]] = []
-    for page_no in structure_page_numbers(result):
+    for page_no in structure_page_numbers(data):
+        page_ids = [str(unit["ref"]) for unit in page_structure_units(data, page_no)]
+        if page_ids and all(element_id in completed for element_id in page_ids):
+            continue
         result, page_applied = structure_page_with_vlm(
             result, page_no, client, settings, artifacts_dir
         )
         applied.extend(page_applied)
+        if on_progress:
+            on_progress(result, page_ids)
     return result, applied
 
 
@@ -2396,6 +2481,8 @@ def translate_text_items(
     glossary: list[dict[str, str]],
     translation_rules: str,
     batch_chars: int = TRANSLATION_BATCH_MAX_CHARS,
+    completed_ids: set[str] | None = None,
+    on_progress: Callable[[list[str]], None] | None = None,
 ) -> None:
     """見出し階層と後続本文を意味ブロック化して一括翻訳する。
 
@@ -2406,6 +2493,8 @@ def translate_text_items(
         glossary: CSV から読み込んだ用語集。
         translation_rules: LLM に渡す翻訳ルール。
         batch_chars: 翻訳バッチの最大原文文字数。
+        completed_ids: checkpointで完了済みのtext ref。
+        on_progress: 要素完了時にref配列を通知するcallback。
 
     Returns:
         なし。
@@ -2418,17 +2507,24 @@ def translate_text_items(
     block: list[dict[str, Any]] = []
     block_root_level: int | None = None
     heading_stack: list[tuple[int, str]] = []
+    immediate_completed: list[str] = []
+    completed = completed_ids if completed_ids is not None else set()
     for index, value in enumerate(values):
         if not isinstance(value, dict):
             continue
         item = cast(dict[str, Any], value)
+        ref = self_ref(item, "texts", index)
         text = text_of(item).strip()
         if not text:
+            if ref not in completed:
+                immediate_completed.append(ref)
             continue
         if is_code(item):
-            item.setdefault("translate_ja_v2", {}).update(
-                {"kind": "code", "render_text": text, "translated": False}
-            )
+            if ref not in completed:
+                item.setdefault("translate_ja_v2", {}).update(
+                    {"kind": "code", "render_text": text, "translated": False}
+                )
+                immediate_completed.append(ref)
             continue
         if is_heading(item):
             level = heading_level(item)
@@ -2439,13 +2535,15 @@ def translate_text_items(
             while heading_stack and heading_stack[-1][0] >= level:
                 heading_stack.pop()
             heading_stack.append((level, text))
-            if block_root_level is None:
+            if ref not in completed and block_root_level is None:
                 block_root_level = level
+        if ref in completed:
+            continue
         section_context = " > ".join(title for _level, title in heading_stack)
         terms = glossary_hits(text, glossary)
         block.append(
             {
-                "id": self_ref(item, "texts", index),
+                "id": ref,
                 "text": text,
                 "style": "見出し" if is_heading(item) else "本文",
                 "context": section_context,
@@ -2456,6 +2554,8 @@ def translate_text_items(
         )
     if block:
         blocks.append(block)
+    if immediate_completed and on_progress:
+        on_progress(immediate_completed)
 
     for batch in pack_translation_blocks(blocks, max_chars=batch_chars):
         translations = translate_batch(
@@ -2470,6 +2570,8 @@ def translate_text_items(
                 translations[str(target["id"])],
                 cast(list[dict[str, str]], target["terms"]),
             )
+        if on_progress:
+            on_progress([str(target["id"]) for target in batch])
 
 
 def translate_document(
@@ -2478,6 +2580,9 @@ def translate_document(
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
     context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS,
     batch_chars: int = TRANSLATION_BATCH_MAX_CHARS,
+    resume_data: dict[str, Any] | None = None,
+    completed_ids: set[str] | None = None,
+    on_progress: Callable[[dict[str, Any], list[str]], None] | None = None,
 ) -> dict[str, Any]:
     """Docling JSON の各要素へ日本語翻訳フィールドを追加する。
 
@@ -2487,15 +2592,34 @@ def translate_document(
         translation_rules: 翻訳ルール本文。
         context_chars: OpenAI request の最大テキスト文字数。
         batch_chars: 翻訳バッチの最大原文文字数。
+        resume_data: 前回checkpointの部分成果物。
+        completed_ids: checkpointで完了済みの要素ID。
+        on_progress: 要素完了時に部分成果物とID配列を通知するcallback。
 
     Returns:
         翻訳フィールドを追加した JSON。
     """
 
-    result = copy.deepcopy(data)
+    result = copy.deepcopy(resume_data if resume_data is not None else data)
     settings = require_openai_settings(context_chars)
     client = openai_client(settings)
     glossary_entries = glossary or []
+    completed = completed_ids if completed_ids is not None else set()
+
+    def notify(element_ids: list[str]) -> None:
+        """完了IDを蓄積し、現在の部分成果物を通知する。
+
+        Args:
+            element_ids: 新たに完了した要素ID。
+
+        Returns:
+            なし。
+        """
+
+        completed.update(element_ids)
+        if on_progress:
+            on_progress(result, element_ids)
+
     texts = result.get("texts")
     if isinstance(texts, list):
         translate_text_items(
@@ -2505,6 +2629,8 @@ def translate_document(
             glossary_entries,
             translation_rules,
             batch_chars,
+            completed,
+            notify,
         )
     tables = result.get("tables")
     if isinstance(tables, list):
@@ -2520,8 +2646,41 @@ def translate_document(
                 glossary_entries,
                 translation_rules,
                 batch_chars,
+                completed,
+                notify,
             )
     return result
+
+
+def translation_element_ids(data: dict[str, Any]) -> set[str]:
+    """Translate工程で状態管理する全要素IDを返す。
+
+    Args:
+        data: 構造補正済みDocling JSON。
+
+    Returns:
+        text、表タイトル、表セルのID集合。
+    """
+
+    element_ids: set[str] = set()
+    texts = data.get("texts")
+    if isinstance(texts, list):
+        for index, item in enumerate(texts):
+            if isinstance(item, dict):
+                element_ids.add(self_ref(cast(dict[str, Any], item), "texts", index))
+    tables = data.get("tables")
+    if isinstance(tables, list):
+        for index, item in enumerate(tables):
+            if not isinstance(item, dict):
+                continue
+            table = cast(dict[str, Any], item)
+            ref = self_ref(table, "tables", index)
+            if str(table.get("caption") or table.get("title") or "").strip():
+                element_ids.add(f"{ref}/caption")
+            element_ids.update(
+                cell_ref for cell_ref, _cell in iter_table_cells(table, ref)
+            )
+    return element_ids
 
 
 def translate_text_item(
@@ -2603,6 +2762,8 @@ def translate_table_item(
     glossary: list[dict[str, str]] | None = None,
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
     batch_chars: int = TRANSLATION_BATCH_MAX_CHARS,
+    completed_ids: set[str] | None = None,
+    on_progress: Callable[[list[str]], None] | None = None,
 ) -> None:
     """Docling table item のタイトルとセルへ翻訳フィールドを追加する。
 
@@ -2614,6 +2775,8 @@ def translate_table_item(
         glossary: CSV から読み込んだ用語集。
         translation_rules: 翻訳ルール本文。
         batch_chars: 翻訳バッチの最大原文文字数。
+        completed_ids: checkpointで完了済みの表要素ID。
+        on_progress: 要素完了時にID配列を通知するcallback。
 
     Returns:
         なし。
@@ -2623,12 +2786,15 @@ def translate_table_item(
     """
 
     targets: list[dict[str, Any]] = []
+    immediate_completed: list[str] = []
+    completed = completed_ids if completed_ids is not None else set()
     caption = str(item.get("caption") or item.get("title") or "").strip()
-    if caption:
+    caption_ref = f"{ref}/caption"
+    if caption and caption_ref not in completed:
         terms = glossary_hits(caption, glossary or [])
         targets.append(
             {
-                "id": f"{ref}/caption",
+                "id": caption_ref,
                 "text": caption,
                 "style": "表タイトル",
                 "context": caption,
@@ -2639,14 +2805,18 @@ def translate_table_item(
             }
         )
     for cell_ref, cell in iter_table_cells(item, ref):
+        if cell_ref in completed:
+            continue
         source = str(cell.get("text") or cell.get("content") or "").strip()
         cell_meta = cell.setdefault("translate_ja_v2", {})
         if not source:
+            immediate_completed.append(cell_ref)
             continue
         if looks_protected(source):
             cell_meta.update(
                 {"text_en": source, "render_text": source, "translated": False}
             )
+            immediate_completed.append(cell_ref)
             continue
         terms = glossary_hits(source, glossary or [])
         targets.append(
@@ -2662,6 +2832,8 @@ def translate_table_item(
             }
         )
 
+    if immediate_completed and on_progress:
+        on_progress(immediate_completed)
     for batch in pack_translation_blocks([targets], max_chars=batch_chars):
         translations = translate_batch(
             client,
@@ -2693,12 +2865,17 @@ def translate_table_item(
                     "glossary_terms": [term["english"] for term in terms],
                 }
             )
+        if on_progress:
+            on_progress([str(target["id"]) for target in batch])
 
 
 def review_document(
     data: dict[str, Any],
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
     context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS,
+    resume_data: dict[str, Any] | None = None,
+    completed_ids: set[str] | None = None,
+    on_progress: Callable[[dict[str, Any], list[str]], None] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """翻訳済み metadata を近接要素と照合して校正する。
 
@@ -2706,20 +2883,27 @@ def review_document(
         data: 翻訳 metadata 付き Docling JSON。
         translation_rules: LLM に渡す翻訳ルール。
         context_chars: OpenAI request の最大テキスト文字数。
+        resume_data: 前回checkpointの部分成果物。
+        completed_ids: checkpointで完了済みのレビュー対象ID。
+        on_progress: 要素完了時に部分成果物とID配列を通知するcallback。
 
     Returns:
         レビュー済み JSON と変更件数。
     """
 
-    result = copy.deepcopy(data)
+    result = copy.deepcopy(resume_data if resume_data is not None else data)
     targets = collect_review_targets(result)
     if not targets:
         return result, 0
     settings = require_openai_settings(context_chars)
     client = openai_client(settings)
+    completed = completed_ids if completed_ids is not None else set()
     changes = 0
+    add_review_neighbors(targets)
     for target in targets:
-        add_review_neighbors(targets)
+        target_id = str(target["id"])
+        if target_id in completed:
+            continue
         reviewed = review_batch(
             client,
             settings,
@@ -2727,6 +2911,9 @@ def review_document(
             translation_rules=translation_rules,
         )
         changes += apply_review_results([target], reviewed)
+        completed.add(target_id)
+        if on_progress:
+            on_progress(result, [target_id])
     return result, changes
 
 
@@ -3242,7 +3429,7 @@ def convert_markdown_to_docx(
 
 
 def update_manifest(path: Path, event: dict[str, Any]) -> None:
-    """簡易 manifest に stage event を追記する。
+    """manifest にstage状態と監査eventを保存する。
 
     Args:
         path: manifest path。
@@ -3252,20 +3439,357 @@ def update_manifest(path: Path, event: dict[str, Any]) -> None:
         なし。
 
     Side Effects:
-        manifest JSON を作成または更新する。
+        manifest JSONのstage状態とeventsを作成または更新する。
     """
 
     manifest = (
         read_json(path)
         if path.exists()
-        else {"schema_version": 1, "run_id": str(uuid.uuid4()), "events": []}
+        else {
+            "schema_version": 2,
+            "run_id": str(uuid.uuid4()),
+            "stages": {},
+            "events": [],
+        }
     )
+    manifest["schema_version"] = 2
+    stages = manifest.setdefault("stages", {})
+    created_at = manifest.setdefault("created_at", utc_now_iso())
     events = manifest.setdefault("events", [])
-    if isinstance(events, list):
-        event.setdefault("timestamp", utc_now_iso())
-        events.append(event)
+    stored_event = copy.deepcopy(event)
+    stored_event.setdefault("timestamp", utc_now_iso())
+    if isinstance(events, list) and (
+        stored_event.get("stage") == "start"
+        or stored_event.get("status") in {"completed", "skipped"}
+    ):
+        events.append(
+            {key: value for key, value in stored_event.items() if key != "elements"}
+        )
+    stage = stored_event.get("stage")
+    if isinstance(stages, dict) and isinstance(stage, str) and stage != "start":
+        stages[stage] = stored_event
+    if stage == "start":
+        if isinstance(stages, dict):
+            for stage_name in PIPELINE_STAGES:
+                stages.setdefault(
+                    stage_name,
+                    {
+                        "stage": stage_name,
+                        "status": "pending",
+                        "updated_at": created_at,
+                    },
+                )
+        manifest["source"] = {
+            "path": stored_event.get("input"),
+            "sha256": stored_event.get("input_sha256"),
+        }
     manifest["updated_at"] = utc_now_iso()
     write_json(path, manifest)
+
+
+def stage_is_resumable(
+    manifest_path: Path,
+    stage: str,
+    output_path: Path,
+    input_hash: str,
+    config_hash: str,
+    extra_outputs: dict[str, Path] | None = None,
+) -> bool:
+    """完了済みstageの入力・設定・成果物hashが有効か検証する。
+
+    Args:
+        manifest_path: stage状態を保持するmanifest。
+        stage: 検証するstage名。
+        output_path: stageの主成果物。
+        input_hash: 現在の入力hash。
+        config_hash: 現在の設定hash。
+        extra_outputs: 追加成果物名とパス。Parseのartifactsなどに使う。
+
+    Returns:
+        既存成果物を再利用できる場合はTrue。
+    """
+
+    if not manifest_path.is_file() or not output_path.is_file():
+        return False
+    manifest = read_json(manifest_path)
+    stages = manifest.get("stages") if isinstance(manifest, dict) else None
+    state = stages.get(stage) if isinstance(stages, dict) else None
+    if not isinstance(state, dict) or state.get("status") != "completed":
+        return False
+    if (
+        state.get("input_sha256") != input_hash
+        or state.get("config_sha256") != config_hash
+    ):
+        return False
+    try:
+        if state.get("output_sha256") != sha256_file(output_path):
+            LOGGER.warning(
+                "Stage output hash mismatch stage=%s output=%s", stage, output_path
+            )
+            return False
+        for name, path in (extra_outputs or {}).items():
+            if state.get(f"{name}_sha256") != sha256_path(path):
+                LOGGER.warning(
+                    "Stage output hash mismatch stage=%s output=%s", stage, path
+                )
+                return False
+    except (FileNotFoundError, OSError):
+        return False
+    LOGGER.info("Resuming completed stage stage=%s output=%s", stage, output_path)
+    return True
+
+
+def load_stage_checkpoint(
+    manifest_path: Path,
+    stage: str,
+    output_path: Path,
+    input_hash: str,
+    config_hash: str,
+) -> tuple[dict[str, Any], set[str]] | None:
+    """実行途中stageのJSON checkpointと完了要素IDを読み込む。
+
+    Args:
+        manifest_path: stage状態を保持するmanifest。
+        stage: 読み込むstage名。
+        output_path: 部分成果物JSON。
+        input_hash: 現在の入力hash。
+        config_hash: 現在の設定hash。
+
+    Returns:
+        部分成果物と完了要素ID。再利用できない場合はNone。
+    """
+
+    if not manifest_path.is_file() or not output_path.is_file():
+        return None
+    manifest = read_json(manifest_path)
+    stages = manifest.get("stages") if isinstance(manifest, dict) else None
+    state = stages.get(stage) if isinstance(stages, dict) else None
+    if not isinstance(state, dict) or state.get("status") != "running":
+        return None
+    if (
+        state.get("input_sha256") != input_hash
+        or state.get("config_sha256") != config_hash
+    ):
+        return None
+    try:
+        if state.get("output_sha256") != sha256_file(output_path):
+            LOGGER.warning(
+                "Stage checkpoint hash mismatch stage=%s output=%s", stage, output_path
+            )
+            return None
+        document = read_json(output_path)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    elements = state.get("elements")
+    completed: set[str] = set()
+    if isinstance(elements, dict):
+        completed = {
+            str(element_id)
+            for element_id, element_state in elements.items()
+            if isinstance(element_state, dict)
+            and element_state.get("status") == "completed"
+        }
+    LOGGER.info(
+        "Resuming stage checkpoint stage=%s completed_elements=%s",
+        stage,
+        len(completed),
+    )
+    return document, completed
+
+
+def write_stage_checkpoint(
+    manifest_path: Path,
+    stage: str,
+    output_path: Path,
+    document: dict[str, Any],
+    input_hash: str,
+    config_hash: str,
+    element_ids: set[str],
+    completed_ids: set[str],
+) -> None:
+    """部分成果物と要素別進捗をatomic保存する。
+
+    Args:
+        manifest_path: stage状態を保持するmanifest。
+        stage: checkpoint対象のstage名。
+        output_path: 部分成果物JSONの保存先。
+        document: 現在までの処理結果。
+        input_hash: stage入力のhash。
+        config_hash: stage設定のhash。
+        element_ids: stageが管理する全要素ID。
+        completed_ids: 完了した要素ID。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        部分成果物とmanifestをatomic更新する。
+    """
+
+    write_json(output_path, document)
+    manifest = (
+        read_json(manifest_path)
+        if manifest_path.exists()
+        else {
+            "schema_version": 2,
+            "run_id": str(uuid.uuid4()),
+            "stages": {},
+            "events": [],
+        }
+    )
+    manifest["schema_version"] = 2
+    stages = manifest.setdefault("stages", {})
+    if isinstance(stages, dict):
+        stages[stage] = {
+            "stage": stage,
+            "status": "running",
+            "input_sha256": input_hash,
+            "config_sha256": config_hash,
+            "output": str(output_path),
+            "output_sha256": sha256_file(output_path),
+            "elements": {
+                element_id: {
+                    "status": (
+                        "completed" if element_id in completed_ids else "pending"
+                    )
+                }
+                for element_id in sorted(element_ids)
+            },
+            "updated_at": utc_now_iso(),
+        }
+    manifest["updated_at"] = utc_now_iso()
+    write_json(manifest_path, manifest)
+
+
+def record_stage_start(
+    manifest_path: Path,
+    stage: str,
+    output_path: Path,
+    input_hash: str,
+    config_hash: str,
+    element_ids: set[str] | None = None,
+) -> None:
+    """未完了stageをrunningとしてmanifestへ記録する。
+
+    Args:
+        manifest_path: 保存するmanifest。
+        stage: 開始するstage名。
+        output_path: stageの主成果物予定パス。
+        input_hash: stage入力のhash。
+        config_hash: stage設定のhash。
+        element_ids: 要素別管理をするstageの全要素ID。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        manifestをatomic更新する。
+    """
+
+    details: dict[str, Any] = {}
+    if element_ids is not None:
+        details["elements"] = {
+            element_id: {"status": "pending"} for element_id in sorted(element_ids)
+        }
+    update_manifest(
+        manifest_path,
+        {
+            "stage": stage,
+            "status": "running",
+            "input_sha256": input_hash,
+            "config_sha256": config_hash,
+            "output": str(output_path),
+            **details,
+        },
+    )
+
+
+def record_stage_skipped(manifest_path: Path, stage: str, reason: str) -> None:
+    """省略されたstageをmanifestへ記録する。
+
+    Args:
+        manifest_path: 保存するmanifest。
+        stage: 省略したstage名。
+        reason: 省略理由。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        manifestをatomic更新する。
+    """
+
+    update_manifest(
+        manifest_path,
+        {"stage": stage, "status": "skipped", "reason": reason},
+    )
+
+
+def element_progress(
+    element_ids: set[str], completed_ids: set[str]
+) -> dict[str, dict[str, str]]:
+    """全対象IDのpending/completed状態を組み立てる。
+
+    Args:
+        element_ids: stageが管理する全要素ID。
+        completed_ids: 完了した要素ID。
+
+    Returns:
+        要素IDをキーにした状態map。
+    """
+
+    return {
+        element_id: {
+            "status": "completed" if element_id in completed_ids else "pending"
+        }
+        for element_id in sorted(element_ids)
+    }
+
+
+def record_stage_completion(
+    manifest_path: Path,
+    stage: str,
+    output_path: Path,
+    input_hash: str,
+    config_hash: str,
+    *,
+    extra_outputs: dict[str, Path] | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """完了stageの入力・設定・成果物hashをmanifestへ記録する。
+
+    Args:
+        manifest_path: 保存するmanifest。
+        stage: 完了したstage名。
+        output_path: stageの主成果物。
+        input_hash: stage入力のhash。
+        config_hash: stage設定のhash。
+        extra_outputs: 追加成果物名とパス。
+        details: patch数などstage固有の記録。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        manifestをatomic更新する。
+    """
+
+    event: dict[str, Any] = {
+        "stage": stage,
+        "status": "completed",
+        "input_sha256": input_hash,
+        "config_sha256": config_hash,
+        "output": str(output_path),
+        "output_sha256": sha256_file(output_path),
+    }
+    for name, path in (extra_outputs or {}).items():
+        event[name] = str(path)
+        event[f"{name}_sha256"] = sha256_path(path)
+    if details:
+        event.update(details)
+    update_manifest(manifest_path, event)
 
 
 class ParseStage(FrozenModel):
@@ -3279,20 +3803,39 @@ class ParseStage(FrozenModel):
     def run(self) -> dict[str, Any]:
         """Docling JSON を返す。"""
 
-        if self.force or not self.paths.document_json.exists():
+        input_hash = sha256_file(self.input_path)
+        config_hash = sha256_json(
+            {"version": 1, "payload": docling_form_payload(DOCLING_TIMEOUT_SECONDS)}
+        )
+        can_resume = not self.force and stage_is_resumable(
+            self.paths.manifest,
+            "parse",
+            self.paths.document_json,
+            input_hash,
+            config_hash,
+            {"artifacts": self.artifacts_dir},
+        )
+        if not can_resume:
+            record_stage_start(
+                self.paths.manifest,
+                "parse",
+                self.paths.document_json,
+                input_hash,
+                config_hash,
+            )
             LOGGER.info("Starting Docling conversion input=%s", self.input_path)
             convert_with_docling(
                 self.input_path,
                 self.paths.document_json,
                 self.artifacts_dir,
             )
-            update_manifest(
+            record_stage_completion(
                 self.paths.manifest,
-                {
-                    "stage": "docling",
-                    "output": str(self.paths.document_json),
-                    "sha256": sha256_file(self.paths.document_json),
-                },
+                "parse",
+                self.paths.document_json,
+                input_hash,
+                config_hash,
+                extra_outputs={"artifacts": self.artifacts_dir},
             )
         document = read_json(self.paths.document_json)
         if not isinstance(document, dict):
@@ -3308,13 +3851,35 @@ class NormalizeStage(FrozenModel):
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
         """正規化済み文書を返す。"""
 
+        input_hash = sha256_json(document)
+        config_hash = sha256_json({"version": 1})
+        if stage_is_resumable(
+            self.paths.manifest,
+            "normalize",
+            self.paths.normalized_json,
+            input_hash,
+            config_hash,
+        ):
+            normalized = read_json(self.paths.normalized_json)
+            if not isinstance(normalized, dict):
+                raise ValueError("Normalized JSON root must be an object")
+            return normalized
+        record_stage_start(
+            self.paths.manifest,
+            "normalize",
+            self.paths.normalized_json,
+            input_hash,
+            config_hash,
+        )
         normalized, patches = normalize_document(document)
         write_json(self.paths.normalized_json, normalized)
-        update_manifest(
+        record_stage_completion(
             self.paths.manifest,
-            {
-                "stage": "normalize",
-                "output": str(self.paths.normalized_json),
+            "normalize",
+            self.paths.normalized_json,
+            input_hash,
+            config_hash,
+            details={
                 "patches": len(patches),
                 "coordinate_patches": sum(
                     patch.get("rule") == "bbox_reading_order" for patch in patches
@@ -3335,19 +3900,99 @@ class StructureStage(FrozenModel):
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
         """構造補正済み文書を返す。"""
 
+        input_hash = sha256_json(
+            {
+                "document": document,
+                "artifacts_sha256": (
+                    sha256_directory(self.artifacts_dir)
+                    if self.artifacts_dir.is_dir() and not self.skip_vlm
+                    else None
+                ),
+            }
+        )
+        config_hash = sha256_json(
+            {
+                "version": 3,
+                "skip_vlm": self.skip_vlm,
+                "context_chars": self.context_chars,
+                "model": None if self.skip_vlm else os.environ.get("OPENAI_MODEL"),
+            }
+        )
+        if stage_is_resumable(
+            self.paths.manifest,
+            "structure",
+            self.paths.structured_json,
+            input_hash,
+            config_hash,
+        ):
+            structured = read_json(self.paths.structured_json)
+            if not isinstance(structured, dict):
+                raise ValueError("Structured JSON root must be an object")
+            return structured
+        checkpoint = load_stage_checkpoint(
+            self.paths.manifest,
+            "structure",
+            self.paths.structured_json,
+            input_hash,
+            config_hash,
+        )
+        resume_data, completed_ids = checkpoint or (None, set())
+        element_ids = {str(unit["ref"]) for unit in collect_structure_units(document)}
+        if checkpoint is None:
+            record_stage_start(
+                self.paths.manifest,
+                "structure",
+                self.paths.structured_json,
+                input_hash,
+                config_hash,
+                element_ids,
+            )
+
+        def save_progress(
+            current: dict[str, Any], newly_completed_ids: list[str]
+        ) -> None:
+            """Structure部分成果物と完了text refを保存する。
+
+            Args:
+                current: 現在の構造補正結果。
+                newly_completed_ids: 新たに完了した入力text ref。
+
+            Returns:
+                なし。
+            """
+
+            completed_ids.update(newly_completed_ids)
+            write_stage_checkpoint(
+                self.paths.manifest,
+                "structure",
+                self.paths.structured_json,
+                current,
+                input_hash,
+                config_hash,
+                element_ids,
+                completed_ids,
+            )
+
         structured, patches = structure_document(
             document,
             skip_vlm=self.skip_vlm,
             artifacts_dir=self.artifacts_dir,
             context_chars=self.context_chars,
+            resume_data=resume_data,
+            completed_ids=completed_ids,
+            on_progress=save_progress,
         )
+        completed_ids.update(element_ids)
         write_json(self.paths.structured_json, structured)
-        update_manifest(
+        record_stage_completion(
             self.paths.manifest,
-            {
-                "stage": "structure",
-                "output": str(self.paths.structured_json),
+            "structure",
+            self.paths.structured_json,
+            input_hash,
+            config_hash,
+            details={
                 "patches": len(patches),
+                "elements": element_progress(element_ids, completed_ids),
             },
         )
         return structured
@@ -3365,21 +4010,93 @@ class TranslateStage(FrozenModel):
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
         """翻訳 metadata を付与した文書を返す。"""
 
+        glossary = read_glossary_csv(self.glossary_path)
+        translation_rules = read_translation_rules(self.translation_rules_path)
+        input_hash = sha256_json(document)
+        config_hash = sha256_json(
+            {
+                "version": 2,
+                "model": os.environ.get("OPENAI_MODEL"),
+                "context_chars": self.context_chars,
+                "batch_chars": self.batch_chars,
+                "glossary": glossary,
+                "translation_rules": translation_rules,
+            }
+        )
+        if stage_is_resumable(
+            self.paths.manifest,
+            "translate",
+            self.paths.translated_json,
+            input_hash,
+            config_hash,
+        ):
+            translated = read_json(self.paths.translated_json)
+            if not isinstance(translated, dict):
+                raise ValueError("Translated JSON root must be an object")
+            return translated
+        checkpoint = load_stage_checkpoint(
+            self.paths.manifest,
+            "translate",
+            self.paths.translated_json,
+            input_hash,
+            config_hash,
+        )
+        resume_data, completed_ids = checkpoint or (None, set())
+        element_ids = translation_element_ids(document)
+        if checkpoint is None:
+            record_stage_start(
+                self.paths.manifest,
+                "translate",
+                self.paths.translated_json,
+                input_hash,
+                config_hash,
+                element_ids,
+            )
+
+        def save_progress(
+            current: dict[str, Any], newly_completed_ids: list[str]
+        ) -> None:
+            """Translate部分成果物と完了要素IDを保存する。
+
+            Args:
+                current: 現在の翻訳結果。
+                newly_completed_ids: 新たに完了した要素ID。
+
+            Returns:
+                なし。
+            """
+
+            completed_ids.update(newly_completed_ids)
+            write_stage_checkpoint(
+                self.paths.manifest,
+                "translate",
+                self.paths.translated_json,
+                current,
+                input_hash,
+                config_hash,
+                element_ids,
+                completed_ids,
+            )
+
         translated = translate_document(
             document,
-            glossary=read_glossary_csv(self.glossary_path),
-            translation_rules=read_translation_rules(self.translation_rules_path),
+            glossary=glossary,
+            translation_rules=translation_rules,
             context_chars=self.context_chars,
             batch_chars=self.batch_chars,
+            resume_data=resume_data,
+            completed_ids=completed_ids,
+            on_progress=save_progress,
         )
+        completed_ids.update(element_ids)
         write_json(self.paths.translated_json, translated)
-        update_manifest(
+        record_stage_completion(
             self.paths.manifest,
-            {
-                "stage": "translate",
-                "output": str(self.paths.translated_json),
-                "sha256": sha256_file(self.paths.translated_json),
-            },
+            "translate",
+            self.paths.translated_json,
+            input_hash,
+            config_hash,
+            details={"elements": element_progress(element_ids, completed_ids)},
         )
         return translated
 
@@ -3394,19 +4111,90 @@ class ReviewStage(FrozenModel):
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
         """レビュー済み文書を返す。"""
 
+        translation_rules = read_translation_rules(self.translation_rules_path)
+        input_hash = sha256_json(document)
+        config_hash = sha256_json(
+            {
+                "version": 2,
+                "model": os.environ.get("OPENAI_MODEL"),
+                "context_chars": self.context_chars,
+                "translation_rules": translation_rules,
+            }
+        )
+        if stage_is_resumable(
+            self.paths.manifest,
+            "review",
+            self.paths.reviewed_json,
+            input_hash,
+            config_hash,
+        ):
+            reviewed = read_json(self.paths.reviewed_json)
+            if not isinstance(reviewed, dict):
+                raise ValueError("Reviewed JSON root must be an object")
+            return reviewed
+        checkpoint = load_stage_checkpoint(
+            self.paths.manifest,
+            "review",
+            self.paths.reviewed_json,
+            input_hash,
+            config_hash,
+        )
+        resume_data, completed_ids = checkpoint or (None, set())
+        element_ids = {str(target["id"]) for target in collect_review_targets(document)}
+        if checkpoint is None:
+            record_stage_start(
+                self.paths.manifest,
+                "review",
+                self.paths.reviewed_json,
+                input_hash,
+                config_hash,
+                element_ids,
+            )
+
+        def save_progress(
+            current: dict[str, Any], newly_completed_ids: list[str]
+        ) -> None:
+            """Review部分成果物と完了対象IDを保存する。
+
+            Args:
+                current: 現在のレビュー結果。
+                newly_completed_ids: 新たに完了したレビュー対象ID。
+
+            Returns:
+                なし。
+            """
+
+            completed_ids.update(newly_completed_ids)
+            write_stage_checkpoint(
+                self.paths.manifest,
+                "review",
+                self.paths.reviewed_json,
+                current,
+                input_hash,
+                config_hash,
+                element_ids,
+                completed_ids,
+            )
+
         reviewed, changes = review_document(
             document,
-            translation_rules=read_translation_rules(self.translation_rules_path),
+            translation_rules=translation_rules,
             context_chars=self.context_chars,
+            resume_data=resume_data,
+            completed_ids=completed_ids,
+            on_progress=save_progress,
         )
+        completed_ids.update(element_ids)
         write_json(self.paths.reviewed_json, reviewed)
-        update_manifest(
+        record_stage_completion(
             self.paths.manifest,
-            {
-                "stage": "review",
-                "output": str(self.paths.reviewed_json),
+            "review",
+            self.paths.reviewed_json,
+            input_hash,
+            config_hash,
+            details={
                 "changes": changes,
-                "sha256": sha256_file(self.paths.reviewed_json),
+                "elements": element_progress(element_ids, completed_ids),
             },
         )
         return reviewed
@@ -3420,15 +4208,31 @@ class RenderStage(FrozenModel):
     def run(self, document: dict[str, Any]) -> Path:
         """生成した Markdown のパスを返す。"""
 
+        input_hash = sha256_json(document)
+        config_hash = sha256_json({"version": 1})
+        if stage_is_resumable(
+            self.paths.manifest,
+            "markdown",
+            self.paths.markdown,
+            input_hash,
+            config_hash,
+        ):
+            return self.paths.markdown
+        record_stage_start(
+            self.paths.manifest,
+            "markdown",
+            self.paths.markdown,
+            input_hash,
+            config_hash,
+        )
         markdown = render_markdown(document)
         atomic_write_bytes(self.paths.markdown, markdown.encode("utf-8"))
-        update_manifest(
+        record_stage_completion(
             self.paths.manifest,
-            {
-                "stage": "markdown",
-                "output": str(self.paths.markdown),
-                "sha256": sha256_file(self.paths.markdown),
-            },
+            "markdown",
+            self.paths.markdown,
+            input_hash,
+            config_hash,
         )
         return self.paths.markdown
 
@@ -3442,14 +4246,37 @@ class DocxStage(FrozenModel):
     def run(self, markdown_path: Path) -> Path:
         """生成した docx のパスを返す。"""
 
-        convert_markdown_to_docx(markdown_path, self.paths.docx, self.template)
-        update_manifest(
-            self.paths.manifest,
+        input_hash = sha256_file(markdown_path)
+        config_hash = sha256_json(
             {
-                "stage": "docx",
-                "output": str(self.paths.docx),
-                "sha256": sha256_file(self.paths.docx),
-            },
+                "version": 1,
+                "template_sha256": (
+                    sha256_file(self.template) if self.template is not None else None
+                ),
+            }
+        )
+        if stage_is_resumable(
+            self.paths.manifest,
+            "docx",
+            self.paths.docx,
+            input_hash,
+            config_hash,
+        ):
+            return self.paths.docx
+        record_stage_start(
+            self.paths.manifest,
+            "docx",
+            self.paths.docx,
+            input_hash,
+            config_hash,
+        )
+        convert_markdown_to_docx(markdown_path, self.paths.docx, self.template)
+        record_stage_completion(
+            self.paths.manifest,
+            "docx",
+            self.paths.docx,
+            input_hash,
+            config_hash,
         )
         return self.paths.docx
 
@@ -3503,21 +4330,23 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
         context_chars=args.context_chars,
         batch_chars=args.batch_chars,
     ).run(structured)
-    render_source = (
-        translated
-        if args.skip_review
-        else ReviewStage(
+    if args.skip_review:
+        record_stage_skipped(paths.manifest, "review", "--skip-review")
+        render_source = translated
+    else:
+        render_source = ReviewStage(
             paths=paths,
             translation_rules_path=args.translation_rules,
             context_chars=args.context_chars,
         ).run(translated)
-    )
     markdown_path = RenderStage(paths=paths).run(render_source)
     if not args.skip_docx:
         DocxStage(
             paths=paths,
             template=args.template.resolve() if args.template else None,
         ).run(markdown_path)
+    else:
+        record_stage_skipped(paths.manifest, "docx", "--skip-docx")
     return paths
 
 

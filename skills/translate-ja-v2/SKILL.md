@@ -27,6 +27,7 @@ python skills/translate-ja-v2/scripts/translate.py \
 
 Word 変換を後回しにする場合だけ `--skip-docx` を使う。構造補正を明示的に止める検証では `--skip-vlm` を使う。
 Docling 変換は常に `/v1/convert/file/async` を使い、polling ごとに poll 回数と status を logging する。
+同じコマンドを再実行した場合は manifest と成果物 hash を検証し、Structure、Translate、Review は要素別進捗から、その他は工程の完了状態から Resume する。`--force` は Parse を必ず再実行する。
 
 ## 出力
 
@@ -54,6 +55,7 @@ outputs/<stem>/
 7. VLM には座標補正済みの Docling JSON 要約、bbox、`pages[].image.uri` が指す page PNG を渡し、全文再生成をさせず、`set_label`、`set_level`、`reorder_texts` のような構造 patch だけを返させる。
 8. ファイル保存は一時ファイル、flush、fsync、`os.replace()` で行う。
 9. 外部 API を使う単体テストは fake client で検証する。
+10. `manifest.json` には工程ごとの入力・設定・出力 hash と状態を保存し、Structure、Translate、Review に限って要素 ID ごとの完了状態も保存する。
 
 ## 完了判断
 

@@ -69,7 +69,7 @@ Docling Serve への PDF/Word 変換は常に `/v1/convert/file/async` を使い
 
 ## 🔄 `translate.py` の処理フロー
 
-`scripts/translate.py` は、入力文書を次の順序で処理します。各ステージの実行結果は `manifest.json` に追記されます。
+`scripts/translate.py` は、入力文書を次の順序で処理します。`manifest.json` には各工程の状態、入力・設定・出力の SHA-256、要素別の進捗を記録します。
 
 ```text
 CLI 引数解析
@@ -110,7 +110,7 @@ Typer で CLI 引数を解析し、`--env` で指定された `.env` を `python
 3. polling ごとに `poll_count`、task status、HTTP status をログへ出力します。
 4. 完了後に `/v1/result/{task_id}` から zip を取得し、Docling JSON と `artifacts/` 内の画像を atomic write で保存します。
 
-既存の `document.json` を再利用する場合、この変換を省略します。
+入力ファイル、`document.json`、`artifacts/` の各 SHA-256 が manifest の完了記録と一致する場合、この変換を省略します。単に `document.json` が存在するだけでは再利用しません。
 
 ### 3. Normalize
 
@@ -177,6 +177,17 @@ outputs/sample/
 
 `--skip-docx` を指定した場合、`document.ja.docx` は生成されません。
 Markdown 内の `artifacts/...` 画像は、docx 変換時に出力ディレクトリ基準で解決されます。
+
+## ⏯️ Resume
+
+同じコマンドを再実行すると、`manifest.json` と成果物の SHA-256 を照合し、完了済みの工程を再利用します。入力、工程設定、成果物のいずれかが変わった工程は再実行され、以降の工程も新しい入力から処理されます。`--force` は Parse から強制的にやり直します。
+
+- Structure は VLM がページ単位で処理するため、成功したページ内の text ref を完了として記録し、未完了要素を含む最初のページから再開します。
+- Translate は本文、見出し、表タイトル、表セルの各 ID を記録し、未翻訳要素から再開します。
+- Review はレビュー対象の各 ID を記録し、未レビュー要素から再開します。
+- Parse、Normalize、Markdown、Docx は工程単位で完了状態を記録し、完了済み成果物を再利用します。
+
+処理中に停止した Structure、Translate、Review の部分成果物は、それぞれの通常の出力 JSON に atomic write されます。別のチェックポイントファイルは作りません。
 
 ## 🧪 Verification
 

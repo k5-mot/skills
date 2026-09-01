@@ -48,6 +48,15 @@ outputs/<stem>/
 
 ## State と Resume
 
+`manifest.json` を進捗の正本とし、各工程について状態、入力 hash、設定 hash、出力 hash を保存する。既存成果物は hash が完了記録と一致するときだけ再利用する。入力や設定が変化した工程は再実行し、その成果物を入力にする後続工程も自然に再実行される。
+
+- `StructureStage`: 成功したページ内の text ref ごとに完了状態を保存し、未完了要素を含む最初のページから再開する。
+- `TranslateStage`: 本文、見出し、表タイトル、表セルの ID ごとに完了状態を保存し、未完了要素から再開する。
+- `ReviewStage`: レビュー対象 ID ごとに完了状態を保存し、未完了要素から再開する。
+- `ParseStage`、`NormalizeStage`、`RenderStage`、`DocxStage`: 工程単位の完了状態だけを保存する。
+
+部分成果物は各工程の通常の出力 JSON に atomic write する。専用の checkpoint ファイルや状態データベースは追加しない。
+
 ## .env
 
 `.env` は `python-dotenv` で読み込む。主な環境変数は次の通り。
