@@ -22,27 +22,14 @@ Docling ZIP内の唯一のJSONを、入力ファイルと同じstemの `<stem>.j
 
 実装クラス: `NormalizeStage`
 
-決定論的ルールで PDF 解析結果のノイズを補正する。現行実装では `normalize_document`、`normalize_text_item`、`normalize_table_item` を中心に、入力 JSON copy と patch 配列を返す。
+`normalize_document` が入力JSONを複製し、座標に基づくtextsの読み順だけを補正する。
 
 実装済みの主な処理:
 
 - `prov[].page_no` と `prov[].bbox` による texts の読み順補正
 - `BOTTOMLEFT` / `TOPLEFT` の座標原点の差を吸収した、ページ順・上から下・左から右の安定ソート
 - texts の並べ替えに伴う `self_ref`、`$ref`、body/group children の参照更新
-- URL 保護付きの過剰記号・空白縮約
-- table cell の空白・改行整形
-- code/program_listing の翻訳対象外 metadata 付与
-
-追加候補:
-
-- Fragment Merge Rule
-- Log Block Rule
-- Hyphenation 高度化
-- Stack Trace Detector 高度化
-- Report Detector
-- ASCII Table Detector
-
-補正は必ず patch として追跡する。patch には最低限、operation、target、before/after または根拠、reason、rule_version を含める。
+Normalizeでは本文、label、表セル、コードmetadataを変更しない。座標による並べ替えはpatchとして追跡する。
 
 ## 03 Structure
 

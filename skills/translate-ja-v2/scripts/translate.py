@@ -1111,50 +1111,10 @@ def heading_level(item: dict[str, Any]) -> int:
     return 1 if label_of(item) == "title" else 2
 
 
-def clean_text(value: str) -> str:
-    """URL を保護しながら余分な空白・記号を整形する。
-
-    Args:
-        value: 原文テキスト。
-
-    Returns:
-        整形後テキスト。
-    """
-
-    urls: list[str] = []
-    protected = URL_RE.sub(lambda match: stash_url(match, urls), value)
-    protected = re.sub(r"\.{4,}", "...", protected)
-    protected = re.sub(r"[‐‑‒–—―-]{4,}", "---", protected)
-    protected = re.sub(r"([_=~*])\1{5,}", r"\1\1\1", protected)
-    protected = re.sub(r"[ \t\f\v]+", " ", protected)
-    protected = re.sub(r"\n{3,}", "\n\n", protected)
-    for index, url in enumerate(urls):
-        protected = protected.replace(f"__TRANSLATE_JA_V2_URL_{index}__", url)
-    return protected.strip()
-
-
-def stash_url(match: re.Match[str], urls: list[str]) -> str:
-    """正規化中に URL を壊さないため一時退避する。
-
-    Args:
-        match: URL の正規表現 match。
-        urls: 退避先の URL 配列。
-
-    Returns:
-        後で復元する placeholder。
-
-    Side Effects:
-        urls に URL 文字列を追加する。
-    """
-
-    urls.append(match.group(0))
-    return f"__TRANSLATE_JA_V2_URL_{len(urls) - 1}__"
-
-
 def normalize_document(
     data: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Docling JSON の本文・表・コードブロックを保守的に整形する。
+    """Docling JSONのtextsを座標順へ並べ替える。
 
     Args:
         data: Docling JSON object。
@@ -1166,92 +1126,7 @@ def normalize_document(
     result = copy.deepcopy(data)
     patches: list[dict[str, Any]] = []
     normalize_coordinate_order(result, patches)
-    for group in ("texts", "tables"):
-        values = result.get(group)
-        if not isinstance(values, list):
-            continue
-        for index, item in enumerate(values):
-            if not isinstance(item, dict):
-                continue
-            item = cast(dict[str, Any], item)
-            ref = self_ref(item, group, index)
-            if group == "texts":
-                normalize_text_item(item, ref, patches)
-            if group == "tables":
-                normalize_table_item(item, ref, patches)
     return result, patches
-
-
-def normalize_text_item(
-    item: dict[str, Any], ref: str, patches: list[dict[str, Any]]
-) -> None:
-    """Docling text item を整形し、変更を patch として記録する。
-
-    Args:
-        item: Docling text item。
-        ref: item の JSON pointer。
-        patches: 変更記録の追加先。
-
-    Returns:
-        なし。
-
-    Side Effects:
-        item と patches を更新する。
-    """
-
-    text = text_of(item)
-    if not text or is_code(item):
-        if is_code(item):
-            item.setdefault("translate_ja_v2", {})["kind"] = "code"
-        return
-    cleaned = clean_text(text)
-    if cleaned != text:
-        item["text"] = cleaned
-        patches.append(
-            {
-                "op": "set_text",
-                "ref": ref,
-                "reason": "normalize text noise",
-                "before": text,
-                "after": cleaned,
-            }
-        )
-
-
-def normalize_table_item(
-    item: dict[str, Any], ref: str, patches: list[dict[str, Any]]
-) -> None:
-    """Docling table item のセル改行と空白を整形する。
-
-    Args:
-        item: Docling table item。
-        ref: item の JSON pointer。
-        patches: 変更記録の追加先。
-
-    Returns:
-        なし。
-
-    Side Effects:
-        table cell の text と patches を更新する。
-    """
-
-    for cell_ref, cell in iter_table_cells(item, ref):
-        before = str(cell.get("text") or cell.get("content") or "")
-        after = clean_text(before)
-        if before != after:
-            if "text" in cell:
-                cell["text"] = after
-            else:
-                cell["content"] = after
-            patches.append(
-                {
-                    "op": "set_table_cell_text",
-                    "ref": cell_ref,
-                    "reason": "normalize table cell",
-                    "before": before,
-                    "after": after,
-                }
-            )
 
 
 def iter_table_cells(
@@ -3879,7 +3754,7 @@ class NormalizeStage(FrozenModel):
         """正規化済み文書を返す。"""
 
         input_hash = sha256_json(document)
-        config_hash = sha256_json({"version": 1})
+        config_hash = sha256_json({"version": 2})
         if stage_is_resumable(
             self.paths.manifest,
             "normalize",

@@ -116,7 +116,7 @@ Typer で CLI 引数を解析し、`--env` で指定された `.env` を `python
 
 Docling JSON を複製し、まず各 text の `prov[].page_no` と `prov[].bbox` を使って読み順を補正します。`BOTTOMLEFT` と `TOPLEFT` の座標原点を判別し、ページ順、上から下、同じ高さでは左から右の順に並べます。座標がない要素は元の位置を保ちます。
 
-並べ替え時は texts 配列だけでなく、`self_ref`、`$ref`、body/group の children 参照も更新し、Docling JSON の参照整合性を保ちます。その後、URL を保護しながら本文と表セルの過剰な記号、空白、改行を決定論的に整形します。コード要素には翻訳対象外の metadata を付与し、各変更を patch として記録したうえで `document.normalized.json` を保存します。
+並べ替え時は texts 配列だけでなく、`self_ref`、`$ref`、body/group の children 参照も更新し、Docling JSON の参照整合性を保ちます。Normalizeでは本文、label、表セルを変更せず、座標順の変更だけをpatchとして記録して `document.normalized.json` を保存します。
 
 ### 4. Structure
 

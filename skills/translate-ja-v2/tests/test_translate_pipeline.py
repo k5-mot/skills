@@ -21,7 +21,6 @@ from translate import (  # noqa: E402
     build_stage_paths,
     build_structure_messages,
     chat_text,
-    clean_text,
     convert_markdown_to_docx,
     convert_with_docling,
     DoclingSettings,
@@ -253,14 +252,6 @@ def _text_item(
     return item
 
 
-def test_clean_text_preserves_url_and_compacts_noise() -> None:
-    """URL を壊さずに過剰な記号と空白を縮約する。"""
-
-    text = "See   https://example.com/a---b .... ----"
-
-    assert clean_text(text) == "See https://example.com/a---b ... ---"
-
-
 def test_build_stage_paths_uses_input_stem_for_raw_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -360,8 +351,12 @@ def test_apply_merge_texts_accepts_refs_in_reverse_document_order() -> None:
     assert applied[0]["status"] == "success"
 
 
-def test_normalize_document_marks_code_and_cleans_table_cells() -> None:
-    """normalize はコードを翻訳対象外にし、表セルを整形する。"""
+def test_normalize_document_does_not_change_text_or_table_cells() -> None:
+    """Normalizeは座標補正以外の本文・表セル変更を行わない。
+
+    Returns:
+        なし。
+    """
 
     data = {
         "texts": [{"self_ref": "#/texts/0", "label": "code", "text": "print('x')"}],
@@ -369,10 +364,8 @@ def test_normalize_document_marks_code_and_cleans_table_cells() -> None:
     }
     normalized, patches = normalize_document(data)
 
-    assert normalized["texts"][0]["translate_ja_v2"]["kind"] == "code"
-    assert normalized["tables"][0]["data"]["grid"][0][0]["text"] == "A B"
-    assert normalized["tables"][0]["data"]["grid"][0][1]["text"] == "C..."
-    assert len(patches) == 2
+    assert normalized == data
+    assert patches == []
 
 
 @pytest.mark.parametrize(
