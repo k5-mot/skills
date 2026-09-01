@@ -108,7 +108,7 @@ Typer で CLI 引数を解析し、`--env` で指定された `.env` を `python
 1. `/v1/convert/file/async` へ PDF/Word と変換設定を multipart 送信します。
 2. 応答の `task_id` を使って `/v1/status/poll/{task_id}` を 10 秒間隔で polling します。
 3. polling ごとに `poll_count`、task status、HTTP status をログへ出力します。
-4. 完了後に `/v1/result/{task_id}` から zip を取得し、Docling JSON と `artifacts/` 内の画像を atomic write で保存します。
+4. 完了後に `/v1/result/{task_id}` から zip を取得し、Docling JSON を atomic write で保存します。`artifacts/` は一時ディレクトリへ展開してからディレクトリ単位で置換するため、以前の変換で作られた不要画像は残りません。
 
 入力ファイル、`document.json`、`artifacts/` の各 SHA-256 が manifest の完了記録と一致する場合、この変換を省略します。単に `document.json` が存在するだけでは再利用しません。
 

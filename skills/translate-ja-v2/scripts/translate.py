@@ -696,33 +696,57 @@ def extract_docling_zip(zip_path: Path, output_json: Path, artifacts_dir: Path) 
 
     Raises:
         RuntimeError: zip 内に JSON がない場合。
+
+    Side Effects:
+        JSONをatomic保存し、artifactsディレクトリ全体を新しい内容へ置換する。
     """
 
-    with zipfile.ZipFile(zip_path, "r") as archive:
-        json_members = [
-            name
-            for name in archive.namelist()
-            if PurePosixPath(name).name == "document.json" and not name.endswith("/")
-        ]
-        if len(json_members) != 1:
-            raise RuntimeError(
-                "Docling zip response must contain exactly one document.json"
-            )
-        json_member = json_members[0]
-        with archive.open(json_member) as source:
-            atomic_write_bytes(output_json, source.read())
-        for member in archive.namelist():
-            if member.endswith("/"):
-                continue
-            parts = PurePosixPath(member).parts
-            if "artifacts" not in parts:
-                continue
-            relative_parts = parts[parts.index("artifacts") + 1 :]
-            if not relative_parts or ".." in relative_parts:
-                continue
-            target = artifacts_dir.joinpath(*relative_parts)
-            with archive.open(member) as source:
-                atomic_write_bytes(target, source.read())
+    artifacts_dir.parent.mkdir(parents=True, exist_ok=True)
+    temp_artifacts = Path(
+        tempfile.mkdtemp(
+            prefix=f".{artifacts_dir.name}.", dir=str(artifacts_dir.parent)
+        )
+    )
+    backup_artifacts = artifacts_dir.with_name(
+        f".{artifacts_dir.name}.backup-{uuid.uuid4().hex}"
+    )
+    try:
+        with zipfile.ZipFile(zip_path, "r") as archive:
+            json_members = [
+                name
+                for name in archive.namelist()
+                if PurePosixPath(name).name == "document.json"
+                and not name.endswith("/")
+            ]
+            if len(json_members) != 1:
+                raise RuntimeError(
+                    "Docling zip response must contain exactly one document.json"
+                )
+            json_payload = archive.read(json_members[0])
+            for member in archive.namelist():
+                if member.endswith("/"):
+                    continue
+                parts = PurePosixPath(member).parts
+                if "artifacts" not in parts:
+                    continue
+                relative_parts = parts[parts.index("artifacts") + 1 :]
+                if not relative_parts or ".." in relative_parts:
+                    continue
+                target = temp_artifacts.joinpath(*relative_parts)
+                atomic_write_bytes(target, archive.read(member))
+        atomic_write_bytes(output_json, json_payload)
+        if artifacts_dir.exists():
+            os.replace(artifacts_dir, backup_artifacts)
+        os.replace(temp_artifacts, artifacts_dir)
+    except Exception:
+        if backup_artifacts.exists() and not artifacts_dir.exists():
+            os.replace(backup_artifacts, artifacts_dir)
+        raise
+    finally:
+        if temp_artifacts.exists():
+            shutil.rmtree(temp_artifacts)
+        if backup_artifacts.exists():
+            shutil.rmtree(backup_artifacts)
 
 
 def label_of(item: dict[str, Any]) -> str:

@@ -1519,11 +1519,20 @@ def test_poll_docling_task_logs_poll_count_each_time(
 def test_extract_docling_zip_preserves_document_and_artifact_paths(
     tmp_path: Path,
 ) -> None:
-    """Docling ZIP の document.json と artifact 階層をそのまま展開する。"""
+    """Docling ZIPのartifact階層を保ち、以前の不要物を残さず展開する。
+
+    Args:
+        tmp_path: 一時ZIPと成果物を保存するpytest fixture。
+
+    Returns:
+        なし。
+    """
 
     zip_path = tmp_path / "result.zip"
     output_json = tmp_path / "output" / "document.json"
     artifacts_dir = output_json.parent / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    (artifacts_dir / "stale.png").write_bytes(b"stale")
     with zipfile.ZipFile(zip_path, "w") as archive:
         archive.writestr("result/document.json", '{"texts": []}')
         archive.writestr("result/artifacts/pages/page_000001.png", b"page")
@@ -1532,6 +1541,7 @@ def test_extract_docling_zip_preserves_document_and_artifact_paths(
 
     assert read_json(output_json) == {"texts": []}
     assert (artifacts_dir / "pages" / "page_000001.png").read_bytes() == b"page"
+    assert not (artifacts_dir / "stale.png").exists()
 
 
 def test_main_returns_error_for_pipeline_failure(
