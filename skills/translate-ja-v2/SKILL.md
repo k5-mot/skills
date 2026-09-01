@@ -21,7 +21,7 @@ PDF/Word から Docling Serve で JSON/PNG を作り、JSON 上で表・コー�
 ```bash
 python skills/translate-ja-v2/scripts/translate.py \
   --input ./docs/source/source.pdf \
-  --output-dir ./docs/source/output-v2 \
+  --output-dir ./outputs/source \
   --template ./skills/translate-ja-v2/template.dotx
 ```
 
@@ -31,13 +31,14 @@ Docling 変換は常に `/v1/convert/file/async` を使い、polling ごとに p
 ## 出力
 
 ```text
-output-v2/
-├── <stem>.docling.json
-├── <stem>.normalized.json
-├── <stem>.structured.json
-├── <stem>.translated.json
-├── <stem>.ja.md
-├── <stem>.ja.docx
+outputs/<stem>/
+├── document.json
+├── document.normalized.json
+├── document.structured.json
+├── document.translated.json
+├── document.reviewed.json
+├── document.ja.md
+├── document.ja.docx
 ├── artifacts/
 └── manifest.json
 ```

@@ -109,7 +109,7 @@ class StagePaths(FrozenModel):
 
     Args:
         output_dir: 成果物の親ディレクトリ。
-        docling_json: Docling 変換直後の JSON。
+        document_json: Docling 変換直後の JSON。
         normalized_json: 決定論的整形後の JSON。
         structured_json: VLM 構造補正後の JSON。
         translated_json: 翻訳情報を付与した JSON。
@@ -123,7 +123,7 @@ class StagePaths(FrozenModel):
     """
 
     output_dir: Path
-    docling_json: Path
+    document_json: Path
     normalized_json: Path
     structured_json: Path
     translated_json: Path
@@ -428,24 +428,23 @@ def build_stage_paths(
 
     Args:
         input_path: 入力 PDF/Word パス。
-        output_dir: 明示された成果物ディレクトリ。None の場合は入力横の output-v2。
+        output_dir: 明示された成果物ディレクトリ。None の場合は outputs/<stem>。
         output_docx: 明示された docx 出力パス。None の場合は output_dir 内。
 
     Returns:
         StagePaths。
     """
 
-    root = output_dir or input_path.parent / "output-v2"
-    stem = input_path.stem
-    docx = output_docx or root / f"{stem}.ja.docx"
+    root = output_dir or Path.cwd() / "outputs" / input_path.stem
+    docx = output_docx or root / "document.ja.docx"
     return StagePaths(
         output_dir=root,
-        docling_json=root / f"{stem}.docling.json",
-        normalized_json=root / f"{stem}.normalized.json",
-        structured_json=root / f"{stem}.structured.json",
-        translated_json=root / f"{stem}.translated.json",
-        reviewed_json=root / f"{stem}.reviewed.json",
-        markdown=root / f"{stem}.ja.md",
+        document_json=root / "document.json",
+        normalized_json=root / "document.normalized.json",
+        structured_json=root / "document.structured.json",
+        translated_json=root / "document.translated.json",
+        reviewed_json=root / "document.reviewed.json",
+        markdown=root / "document.ja.md",
         docx=docx,
         manifest=root / "manifest.json",
     )
@@ -634,19 +633,25 @@ def extract_docling_zip(zip_path: Path, output_json: Path, artifacts_dir: Path) 
         json_members = [
             name
             for name in archive.namelist()
-            if name.lower().endswith(".json") and not name.endswith("/")
+            if PurePosixPath(name).name == "document.json" and not name.endswith("/")
         ]
-        if not json_members:
-            raise RuntimeError("Docling zip response did not contain JSON")
-        json_member = sorted(json_members, key=lambda name: ("/" in name, name))[0]
+        if len(json_members) != 1:
+            raise RuntimeError(
+                "Docling zip response must contain exactly one document.json"
+            )
+        json_member = json_members[0]
         with archive.open(json_member) as source:
             atomic_write_bytes(output_json, source.read())
         for member in archive.namelist():
             if member.endswith("/"):
                 continue
-            if not member.startswith("artifacts/") and "/artifacts/" not in member:
+            parts = PurePosixPath(member).parts
+            if "artifacts" not in parts:
                 continue
-            target = artifacts_dir / Path(member).name
+            relative_parts = parts[parts.index("artifacts") + 1 :]
+            if not relative_parts or ".." in relative_parts:
+                continue
+            target = artifacts_dir.joinpath(*relative_parts)
             with archive.open(member) as source:
                 atomic_write_bytes(target, source.read())
 
@@ -3274,22 +3279,22 @@ class ParseStage(FrozenModel):
     def run(self) -> dict[str, Any]:
         """Docling JSON を返す。"""
 
-        if self.force or not self.paths.docling_json.exists():
+        if self.force or not self.paths.document_json.exists():
             LOGGER.info("Starting Docling conversion input=%s", self.input_path)
             convert_with_docling(
                 self.input_path,
-                self.paths.docling_json,
+                self.paths.document_json,
                 self.artifacts_dir,
             )
             update_manifest(
                 self.paths.manifest,
                 {
                     "stage": "docling",
-                    "output": str(self.paths.docling_json),
-                    "sha256": sha256_file(self.paths.docling_json),
+                    "output": str(self.paths.document_json),
+                    "sha256": sha256_file(self.paths.document_json),
                 },
             )
-        document = read_json(self.paths.docling_json)
+        document = read_json(self.paths.document_json)
         if not isinstance(document, dict):
             raise ValueError("Docling JSON root must be an object")
         return document

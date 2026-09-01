@@ -10,7 +10,7 @@
 
 出力:
 
-- `<stem>.docling.json`
+- `document.json`
 - `artifacts/*.png`
 
 Parse Stage は Docling の文書モデルを可能な限りそのまま保存する。独自 Pydantic モデルへ全文コピーしない。

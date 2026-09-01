@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from translate import (  # noqa: E402
     apply_reorder_texts,
     apply_structure_patches,
+    build_stage_paths,
     build_structure_messages,
     chat_text,
     clean_text,
@@ -25,6 +27,7 @@ from translate import (  # noqa: E402
     DoclingSettings,
     docling_form_payload,
     apply_review_results,
+    extract_docling_zip,
     load_dotenv_file,
     main,
     message_text_chars,
@@ -251,6 +254,25 @@ def test_clean_text_preserves_url_and_compacts_noise() -> None:
     text = "See   https://example.com/a---b .... ----"
 
     assert clean_text(text) == "See https://example.com/a---b ... ---"
+
+
+def test_build_stage_paths_uses_document_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """既定出力は outputs/<stem>/ 配下の document 固定名を使う。"""
+
+    monkeypatch.chdir(tmp_path)
+
+    paths = build_stage_paths(tmp_path / "sample.pdf", None, None)
+
+    assert paths.output_dir == tmp_path / "outputs" / "sample"
+    assert paths.document_json == paths.output_dir / "document.json"
+    assert paths.normalized_json == paths.output_dir / "document.normalized.json"
+    assert paths.structured_json == paths.output_dir / "document.structured.json"
+    assert paths.translated_json == paths.output_dir / "document.translated.json"
+    assert paths.reviewed_json == paths.output_dir / "document.reviewed.json"
+    assert paths.markdown == paths.output_dir / "document.ja.md"
+    assert paths.docx == paths.output_dir / "document.ja.docx"
 
 
 def test_apply_reorder_texts_moves_selected_refs_first() -> None:
@@ -1289,7 +1311,7 @@ def test_convert_with_docling_uses_async_endpoint(
     """Docling 変換は async endpoint を使う。"""
 
     input_path = tmp_path / "source.pdf"
-    output_json = tmp_path / "source.docling.json"
+    output_json = tmp_path / "document.json"
     artifacts_dir = tmp_path / "artifacts"
     input_path.write_bytes(b"%PDF-1.4")
     endpoints: list[str] = []
@@ -1375,6 +1397,24 @@ def test_poll_docling_task_logs_poll_count_each_time(
     assert output_zip.read_bytes() == b"zip-bytes"
     assert "poll_count=1 status=processing" in caplog.text
     assert "poll_count=2 status=success" in caplog.text
+
+
+def test_extract_docling_zip_preserves_document_and_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    """Docling ZIP の document.json と artifact 階層をそのまま展開する。"""
+
+    zip_path = tmp_path / "result.zip"
+    output_json = tmp_path / "output" / "document.json"
+    artifacts_dir = output_json.parent / "artifacts"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("result/document.json", '{"texts": []}')
+        archive.writestr("result/artifacts/pages/page_000001.png", b"page")
+
+    extract_docling_zip(zip_path, output_json, artifacts_dir)
+
+    assert read_json(output_json) == {"texts": []}
+    assert (artifacts_dir / "pages" / "page_000001.png").read_bytes() == b"page"
 
 
 def test_main_returns_error_for_pipeline_failure(
@@ -1550,7 +1590,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
 
         _ = (data, glossary, translation_rules)
         limits.update(context_chars=context_chars, batch_chars=batch_chars)
-        copied = read_json(output_dir / "source.structured.json")
+        copied = read_json(output_dir / "document.structured.json")
         copied["texts"][0]["translate_ja_v2"] = {"render_text": "Strategy / 戦略"}
         copied["texts"][1]["translate_ja_v2"] = {"render_text": "部隊が移動する。"}
         return copied
@@ -1603,7 +1643,14 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         )
     )
 
-    assert paths.docling_json.exists()
+    assert paths.document_json == output_dir / "document.json"
+    assert paths.document_json.exists()
+    assert paths.normalized_json == output_dir / "document.normalized.json"
+    assert paths.structured_json == output_dir / "document.structured.json"
+    assert paths.translated_json == output_dir / "document.translated.json"
+    assert paths.reviewed_json == output_dir / "document.reviewed.json"
+    assert paths.markdown == output_dir / "document.ja.md"
+    assert paths.docx == output_dir / "document.ja.docx"
     assert paths.normalized_json.exists()
     assert paths.structured_json.exists()
     assert paths.translated_json.exists()

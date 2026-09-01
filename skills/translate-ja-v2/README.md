@@ -50,7 +50,7 @@ VLM 構造補正や docx 生成を省いて軽く検証する場合は次のよ�
 ```bash
 uv run python skills/translate-ja-v2/scripts/translate.py \
   --input ./sample.pdf \
-  --output-dir ./output-v2/sample \
+  --output-dir ./outputs/sample \
   --skip-vlm \
   --skip-docx
 ```
@@ -103,26 +103,26 @@ Typer で CLI 引数を解析し、`--env` で指定された `.env` を `python
 
 ### 2. Docling 非同期変換
 
-`<stem>.docling.json` がない場合、または `--force` 指定時に Docling Serve を呼び出します。
+`document.json` がない場合、または `--force` 指定時に Docling Serve を呼び出します。
 
 1. `/v1/convert/file/async` へ PDF/Word と変換設定を multipart 送信します。
 2. 応答の `task_id` を使って `/v1/status/poll/{task_id}` を 10 秒間隔で polling します。
 3. polling ごとに `poll_count`、task status、HTTP status をログへ出力します。
 4. 完了後に `/v1/result/{task_id}` から zip を取得し、Docling JSON と `artifacts/` 内の画像を atomic write で保存します。
 
-既存の `<stem>.docling.json` を再利用する場合、この変換だけを省略し、以降のステージは毎回実行します。
+既存の `document.json` を再利用する場合、この変換を省略します。
 
 ### 3. Normalize
 
 Docling JSON を複製し、まず各 text の `prov[].page_no` と `prov[].bbox` を使って読み順を補正します。`BOTTOMLEFT` と `TOPLEFT` の座標原点を判別し、ページ順、上から下、同じ高さでは左から右の順に並べます。座標がない要素は元の位置を保ちます。
 
-並べ替え時は texts 配列だけでなく、`self_ref`、`$ref`、body/group の children 参照も更新し、Docling JSON の参照整合性を保ちます。その後、URL を保護しながら本文と表セルの過剰な記号、空白、改行を決定論的に整形します。コード要素には翻訳対象外の metadata を付与し、各変更を patch として記録したうえで `<stem>.normalized.json` を保存します。
+並べ替え時は texts 配列だけでなく、`self_ref`、`$ref`、body/group の children 参照も更新し、Docling JSON の参照整合性を保ちます。その後、URL を保護しながら本文と表セルの過剰な記号、空白、改行を決定論的に整形します。コード要素には翻訳対象外の metadata を付与し、各変更を patch として記録したうえで `document.normalized.json` を保存します。
 
 ### 4. Structure
 
 Normalize で座標補正した Docling 要素をページごとに分け、`pages[].image.uri` が指す1ページ画像とそのページの text JSON を OpenAI 互換 API へ渡します。URIや画像ファイルがない場合は無関係な画像を推測せず、テキストだけを渡します。VLM は段組みなど座標だけでは曖昧な箇所を判断し、見出し、レベル、本文順序、分割検出された表・コード・段落の結合を patch だけで返します。
 
-1ページ分の text context が `--context-chars` の上限（既定50,000文字）を超える場合は、同じページ内で隣接する2要素を比較して `merge_texts` の要否を判断します。その後、同じページ内の2要素を総当たりで比較し、順序が明らかに逆の場合だけ `swap_texts` を適用します。許可された `set_label`、`set_level`、`set_text`、`reorder_texts`、`merge_texts`、`swap_texts` だけを適用し、`<stem>.structured.json` を保存します。
+1ページ分の text context が `--context-chars` の上限（既定50,000文字）を超える場合は、同じページ内で隣接する2要素を比較して `merge_texts` の要否を判断します。その後、同じページ内の2要素を総当たりで比較し、順序が明らかに逆の場合だけ `swap_texts` を適用します。許可された `set_label`、`set_level`、`set_text`、`reorder_texts`、`merge_texts`、`swap_texts` だけを適用し、`document.structured.json` を保存します。
 
 `--skip-vlm` はこの第2段階補正だけを省略します。Normalize の座標補正は常に実行されます。
 
@@ -140,7 +140,7 @@ OpenAI 互換 API で texts と tables をバッチ翻訳し、原文を保持�
 - 表セル: 日本語訳。コード、URL、パス、識別子は原文のまま
 - コードブロック: 翻訳せず原文を保持
 
-結果は `<stem>.translated.json` に保存します。
+結果は `document.translated.json` に保存します。
 
 ### 6. Review
 
@@ -148,13 +148,13 @@ OpenAI 互換 API で texts と tables をバッチ翻訳し、原文を保持�
 
 レビュー対象は翻訳済みの本文、見出し、表タイトル、表セルです。コード、URL、パス、識別子など翻訳対象外の要素は含めません。ローカルLLMとの互換性を優先し、structured output や JSON 形式を要求せず、文書順に1要素ずつレビュー後の日本語訳だけを受け取ります。各要素の直前に前後の最新訳文を参照するため、先に補正した表記も後続要素のレビューへ反映されます。応答が空の場合は、その要素だけ元の訳文を使って継続します。訳文を変更した場合は、対象IDと変更文字数をINFOログへ出力します。
 
-結果は `<stem>.reviewed.json` に保存します。`--skip-review` を指定した場合はこの工程を省略し、`<stem>.translated.json` から Markdown を生成します。
+結果は `document.reviewed.json` に保存します。`--skip-review` を指定した場合はこの工程を省略し、`document.translated.json` から Markdown を生成します。
 
 ### 7. Markdown と Word の生成
 
-レビュー済み JSON の texts、tables、pictures をページ順に並べ、見出し、fenced code block、Markdown 表、画像参照として `<stem>.ja.md` へ書き出します。
+レビュー済み JSON の texts、tables、pictures をページ順に並べ、見出し、fenced code block、Markdown 表、画像参照として `document.ja.md` へ書き出します。
 
-`--skip-docx` がなければ pandoc を呼び出し、`--template` の dotx/docx を reference document にして `<stem>.ja.docx` を生成します。pandoc がない環境で docx 生成を指定するとエラーになるため、pandoc を導入するか `--skip-docx` を指定してください。
+`--skip-docx` がなければ pandoc を呼び出し、`--template` の dotx/docx を reference document にして `document.ja.docx` を生成します。pandoc がない環境で docx 生成を指定するとエラーになるため、pandoc を導入するか `--skip-docx` を指定してください。
 
 各 JSON、Markdown、Docling zip 内の artifact は、一時ファイルへ書き込んだ後に flush、`fsync`、`os.replace()` の順で置き換えます。例外発生時は stack trace をログへ出力して終了コード `1`、中断時は `130` を返します。
 
@@ -163,19 +163,19 @@ OpenAI 互換 API で texts と tables をバッチ翻訳し、原文を保持�
 出力先には次のファイルが作られます。
 
 ```text
-output-v2/sample/
-├── sample.docling.json
-├── sample.normalized.json
-├── sample.structured.json
-├── sample.translated.json
-├── sample.reviewed.json
-├── sample.ja.md
-├── sample.ja.docx
+outputs/sample/
+├── document.json
+├── document.normalized.json
+├── document.structured.json
+├── document.translated.json
+├── document.reviewed.json
+├── document.ja.md
+├── document.ja.docx
 ├── artifacts/
 └── manifest.json
 ```
 
-`--skip-docx` を指定した場合、`sample.ja.docx` は生成されません。
+`--skip-docx` を指定した場合、`document.ja.docx` は生成されません。
 Markdown 内の `artifacts/...` 画像は、docx 変換時に出力ディレクトリ基準で解決されます。
 
 ## 🧪 Verification

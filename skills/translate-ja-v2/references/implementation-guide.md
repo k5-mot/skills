@@ -32,18 +32,19 @@ skills/translate-ja-v2/
 PDF/Word ごとに出力ディレクトリを作り、次のように保存する。
 
 ```text
-output-v2/
-├── <stem>.docling.json
-├── <stem>.normalized.json
-├── <stem>.structured.json
-├── <stem>.translated.json
-├── <stem>.ja.md
-├── <stem>.ja.docx
+outputs/<stem>/
+├── document.json
+├── document.normalized.json
+├── document.structured.json
+├── document.translated.json
+├── document.reviewed.json
+├── document.ja.md
+├── document.ja.docx
 ├── artifacts/
 └── manifest.json
 ```
 
-`.docling.json` は Docling Serve 直後、`.normalized.json` は座標による読み順補正と表・コード整形後、`.structured.json` は VLM patch 後、`.translated.json` は `translate_ja_v2` 翻訳フィールド付与後の JSON とする。
+`document.json` は Docling Serve 直後、`document.normalized.json` は座標による読み順補正と表・コード整形後、`document.structured.json` は VLM patch 後、`document.translated.json` は `translate_ja_v2` 翻訳フィールド付与後の JSON とする。
 
 ## State と Resume
 
@@ -77,7 +78,7 @@ JSON と artifact は直接本ファイルへ書かない。必ず一時ファ�
 ```bash
 python skills/translate-ja-v2/scripts/translate.py \
   --input ./docs/source/source.pdf \
-  --output-dir ./docs/source/output-v2 \
+  --output-dir ./outputs/source \
   --template ./skills/translate-ja-v2/template.dotx
 ```
 
