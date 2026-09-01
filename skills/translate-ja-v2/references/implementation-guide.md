@@ -68,7 +68,7 @@ outputs/<stem>/
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 
-timeout、OCR、OpenAI retry、ログレベルは `scripts/translate.py` 内の固定値とする。
+timeout、OCR、OpenAI retry、ログレベルは `scripts/translate.py` 内の固定値とする。既定ログレベルはDEBUGとし、英語本文とANSI色付きレベル名を出力する。工程の開始・完了・省略・ResumeはINFO、pollingやバッチ単位の進捗はDEBUGにする。
 
 ## Atomic Write
 

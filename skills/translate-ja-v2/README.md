@@ -28,7 +28,7 @@ OPENAI_MODEL=your-model
 
 Docling Serve の表構造、セル対応、コード、数式の認識は常に有効です。表構造の解析モードには `accurate` を使います。
 
-timeout、OCR、OpenAI retry、ログレベルは `translate.py` 内の固定値を使います。OpenAI request のテキスト上限は `--context-chars`、翻訳バッチの原文上限は `--batch-chars` で変更できます。バッチ翻訳はJSONモードと出力上限4,096トークンを指定します。429や一時的な5xxなどは最大6回、5秒から最大60秒までの指数バックオフで再試行します。バッチ翻訳の空応答や部分応答は同じ入力を再送せず、要素境界でバッチを二分して再実行します。
+timeout、OCR、OpenAI retry、ログレベルは `translate.py` 内の固定値を使います。既定ログレベルは `DEBUG` です。ログ本文は英語で、DEBUGはcyan、INFOはgreen、WARNINGはyellow、ERRORはred、CRITICALはmagentaのANSI色付きレベル名を出力します。工程の開始・完了・省略・ResumeはINFO、polling、バッチ処理、要素単位の変更はDEBUGです。OpenAI request のテキスト上限は `--context-chars`、翻訳バッチの原文上限は `--batch-chars` で変更できます。バッチ翻訳はJSONモードと出力上限4,096トークンを指定します。429や一時的な5xxなどは最大6回、5秒から最大60秒までの指数バックオフで再試行します。バッチ翻訳の空応答や部分応答は同じ入力を再送せず、要素境界でバッチを二分して再実行します。
 
 ### ▶️ 3. 翻訳パイプラインを実行する
 
@@ -65,7 +65,7 @@ CLI オプションを確認する場合は `--help` を使います。
 uv run python skills/translate-ja-v2/scripts/translate.py --help
 ```
 
-Docling Serve への PDF/Word 変換は常に `/v1/convert/file/async` を使います。変換完了待ちでは polling ごとに `poll_count` と status をログへ出力します。
+Docling Serve への PDF/Word 変換は常に `/v1/convert/file/async` を使います。変換完了待ちでは polling ごとに `poll_count` と status をDEBUGログへ出力します。
 
 ## 🔄 `translate.py` の処理フロー
 
@@ -109,7 +109,7 @@ Typer で CLI 引数を解析し、`--env` で指定された `.env` を `python
 
 1. `/v1/convert/file/async` へ PDF/Word と変換設定を multipart 送信します。
 2. 応答の `task_id` を使って `/v1/status/poll/{task_id}` を 10 秒間隔で polling します。
-3. polling ごとに `poll_count`、task status、HTTP status をログへ出力します。
+3. polling ごとに `poll_count`、task status、HTTP status をDEBUGログへ出力します。
 4. 完了後に `/v1/result/{task_id}` から zip を取得します。ZIP内の唯一のJSONを `<入力stem>.json` として atomic write で保存します。`artifacts/` は一時ディレクトリへ展開してからディレクトリ単位で置換するため、以前の変換で作られた不要画像は残りません。
 
 入力ファイル、`<入力stem>.json`、`artifacts/` の各 SHA-256 が manifest の完了記録と一致する場合、この変換を省略します。単にJSONが存在するだけでは再利用しません。
@@ -154,7 +154,7 @@ OpenAI 互換 API で texts と tables をバッチ翻訳し、原文を保持�
 
 翻訳済み JSON を近接要素とあわせて OpenAI 互換 API へ渡し、誤訳、用語集不一致、前後要素との表記ゆれ、文体の不自然なずれを保守的に修正します。レビューは `translate_ja_v2` metadata の訳文と render 用文字列だけを更新し、原文、Docling 構造、順序、label、表構造は変更しません。
 
-レビュー対象は翻訳済みの本文、見出し、表タイトル、表セルです。コード、URL、パス、識別子など翻訳対象外の要素は含めません。ローカルLLMとの互換性を優先し、structured output や JSON 形式を要求せず、文書順に1要素ずつレビュー後の日本語訳だけを受け取ります。各要素の直前に前後の最新訳文を参照するため、先に補正した表記も後続要素のレビューへ反映されます。応答が空の場合は、その要素だけ元の訳文を使って継続します。訳文を変更した場合は、対象IDと変更文字数をINFOログへ出力します。
+レビュー対象は翻訳済みの本文、見出し、表タイトル、表セルです。コード、URL、パス、識別子など翻訳対象外の要素は含めません。ローカルLLMとの互換性を優先し、structured output や JSON 形式を要求せず、文書順に1要素ずつレビュー後の日本語訳だけを受け取ります。各要素の直前に前後の最新訳文を参照するため、先に補正した表記も後続要素のレビューへ反映されます。応答が空の場合は、その要素だけ元の訳文を使って継続します。訳文を変更した場合は、対象IDと変更文字数をDEBUGログへ出力します。
 
 結果は `document.reviewed.json` に保存します。`--skip-review` を指定した場合はこの工程を省略し、`document.translated.json` から Markdown を生成します。
 

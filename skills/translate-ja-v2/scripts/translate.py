@@ -32,7 +32,7 @@ LOGGER = logging.getLogger("translate-ja-v2")
 HEADING_LABELS = {"title", "section_header", "heading", "header"}
 CODE_LABELS = {"code", "program_listing"}
 URL_RE = re.compile(r"https?://[^\s)>\"]+")
-LOG_LEVEL = "INFO"
+LOG_LEVEL = "DEBUG"
 DOCLING_TIMEOUT_SECONDS = 21600
 OPENAI_TIMEOUT_SECONDS = 1800
 OPENAI_MAX_ATTEMPTS = 6
@@ -61,6 +61,35 @@ DEFAULT_TRANSLATION_RULES = """\
 
 class OpenAIEmptyResponseError(RuntimeError):
     """OpenAI 互換 API が本文を返さなかったことを表す。"""
+
+
+class ColorFormatter(logging.Formatter):
+    """ログレベル名へANSI色を付けるFormatter。"""
+
+    COLORS = {
+        logging.DEBUG: "\033[36m",
+        logging.INFO: "\033[32m",
+        logging.WARNING: "\033[33m",
+        logging.ERROR: "\033[31m",
+        logging.CRITICAL: "\033[35m",
+    }
+    RESET = "\033[0m"
+
+    def format(self, record: logging.LogRecord) -> str:
+        """色付きレベル名を持つログ文字列を作る。
+
+        Args:
+            record: loggingが生成したログレコード。
+
+        Returns:
+            レベル名へANSI色を付けたログ文字列。
+        """
+
+        colored_record = copy.copy(record)
+        color = self.COLORS.get(record.levelno, "")
+        if color:
+            colored_record.levelname = f"{color}{record.levelname}{self.RESET}"
+        return super().format(colored_record)
 
 
 class FrozenModel(BaseModel):
@@ -186,26 +215,31 @@ def configure_logging(level_name: str | None = None) -> None:
     """標準 logging を translate-ja-v2 用に設定する。
 
     Args:
-        level_name: 明示するログレベル。None の場合は INFO を使う。
+        level_name: 明示するログレベル。None の場合はDEBUGを使う。
 
     Returns:
         なし。
 
     Side Effects:
-        root logger の basicConfig を設定する。
+        root loggerの既存handlerを色付きStreamHandlerへ置き換える。
     """
 
     level = getattr(
         logging,
         (level_name or LOG_LEVEL).upper(),
-        logging.INFO,
+        logging.DEBUG,
+    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        ColorFormatter(
+            "%(asctime)s %(levelname)s %(name)s "
+            "file=%(pathname)s function=%(funcName)s line=%(lineno)d %(message)s"
+        )
     )
     logging.basicConfig(
         level=level,
-        format=(
-            "%(asctime)s %(levelname)s %(name)s "
-            "file=%(pathname)s function=%(funcName)s line=%(lineno)d %(message)s"
-        ),
+        handlers=[handler],
+        force=True,
     )
 
 
@@ -623,7 +657,7 @@ def poll_docling_task(
             )
         payload = response.json()
         status = str(payload.get("status") or payload.get("task_status") or "").lower()
-        LOGGER.info(
+        LOGGER.debug(
             "Polled Docling conversion task_id=%s poll_count=%s status=%s http_status=%s",
             task_id,
             poll_count,
@@ -1044,7 +1078,7 @@ def normalize_coordinate_order(
         "confidence": 0.9,
     }
     patches.append(patch)
-    LOGGER.info(
+    LOGGER.debug(
         "Applied coordinate normalization rule=%s text_count=%s",
         patch["rule"],
         len(after_refs),
@@ -2279,7 +2313,7 @@ def structure_page_with_vlm(
     if message_text_chars(messages) <= settings.context_chars:
         response = chat_text(client, settings, messages)
         return apply_structure_patches(data, parse_structure_response(response))
-    LOGGER.info(
+    LOGGER.debug(
         "Falling back to pairwise structure page=%s units=%s", page_no, len(units)
     )
     current, applied = structure_page_pairwise(
@@ -2710,7 +2744,7 @@ IDの追加、削除、変更、重複は禁止です。styleとcontextは訳文
                 f"missing={missing} unknown={unknown}"
             )
         )
-    LOGGER.info(
+    LOGGER.debug(
         "Translated batch items=%s source_chars=%s",
         len(items),
         sum(len(item["text"]) for item in request_items),
@@ -3410,7 +3444,7 @@ def review_batch(
             )
             reviewed_text = str(item["translated_text"])
         result[str(item["id"])] = reviewed_text
-    LOGGER.info("Reviewed batch items=%s", len(items))
+    LOGGER.debug("Reviewed batch items=%s", len(items))
     return result
 
 
@@ -3443,7 +3477,7 @@ def apply_review_results(
             ).get_opcodes()
             if tag != "equal"
         )
-        LOGGER.info("Review changed id=%s changed_chars=%s", item_id, changed_chars)
+        LOGGER.debug("Review changed id=%s changed_chars=%s", item_id, changed_chars)
         meta[text_field] = reviewed
         target["translated_text"] = reviewed
         target["text"] = f"{target['source_text']}\n{reviewed}"
@@ -4023,6 +4057,7 @@ def record_stage_start(
             **details,
         },
     )
+    LOGGER.info("Stage started stage=%s output=%s", stage, output_path)
 
 
 def record_stage_skipped(manifest_path: Path, stage: str, reason: str) -> None:
@@ -4044,6 +4079,7 @@ def record_stage_skipped(manifest_path: Path, stage: str, reason: str) -> None:
         manifest_path,
         {"stage": stage, "status": "skipped", "reason": reason},
     )
+    LOGGER.info("Stage skipped stage=%s reason=%s", stage, reason)
 
 
 def element_progress(
@@ -4109,6 +4145,7 @@ def record_stage_completion(
     if details:
         event.update(details)
     update_manifest(manifest_path, event)
+    LOGGER.info("Stage completed stage=%s output=%s", stage, output_path)
 
 
 class ParseStage(FrozenModel):
@@ -4142,7 +4179,6 @@ class ParseStage(FrozenModel):
                 input_hash,
                 config_hash,
             )
-            LOGGER.info("Starting Docling conversion input=%s", self.input_path)
             convert_with_docling(
                 self.input_path,
                 self.paths.document_json,
@@ -4852,5 +4888,5 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     started_at = perf_counter()
     exit_code = main()
-    LOGGER.info("Elapsed time %.3f seconds", perf_counter() - started_at)
+    LOGGER.debug("Elapsed time %.3f seconds", perf_counter() - started_at)
     sys.exit(exit_code)

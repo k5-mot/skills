@@ -26,7 +26,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
 ```
 
 Word 変換を後回しにする場合だけ `--skip-docx` を使う。構造補正を明示的に止める検証では `--skip-vlm` を使う。
-Docling 変換は常に `/v1/convert/file/async` を使い、polling ごとに poll 回数と status を logging する。
+Docling 変換は常に `/v1/convert/file/async` を使い、polling ごとに poll 回数と status をDEBUG loggingする。ログ本文は英語、既定レベルはDEBUGとし、各レベル名をANSI色付きで表示する。工程の開始・完了・省略・ResumeはINFOにする。
 同じコマンドを再実行した場合は manifest と成果物 hash を検証し、Structure、Translate、Review は要素別進捗から、Parse、Normalize、Clean、Render、Docxは工程の完了状態から Resume する。`--force` は Parse を必ず再実行する。
 
 ## 出力

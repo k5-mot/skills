@@ -9,6 +9,7 @@ import sys
 import zipfile
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -23,6 +24,8 @@ from translate import (  # noqa: E402
     chat_text,
     CleanStage,
     clean_document,
+    ColorFormatter,
+    configure_logging,
     convert_markdown_to_docx,
     convert_with_docling,
     DoclingSettings,
@@ -254,6 +257,41 @@ def _text_item(
     return item
 
 
+def test_configure_logging_uses_debug_and_colored_levels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """既定ログレベルと各レベル名のANSI色を検証する。
+
+    Args:
+        monkeypatch: logging設定を記録するpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    basic_config = Mock()
+    monkeypatch.setattr(logging, "basicConfig", basic_config)
+
+    configure_logging()
+
+    kwargs = basic_config.call_args.kwargs
+    assert kwargs["level"] == logging.DEBUG
+    assert kwargs["force"] is True
+    formatter = kwargs["handlers"][0].formatter
+    assert isinstance(formatter, ColorFormatter)
+    expected_colors = {
+        logging.DEBUG: "\033[36mDEBUG\033[0m",
+        logging.INFO: "\033[32mINFO\033[0m",
+        logging.WARNING: "\033[33mWARNING\033[0m",
+        logging.ERROR: "\033[31mERROR\033[0m",
+        logging.CRITICAL: "\033[35mCRITICAL\033[0m",
+    }
+    for level, colored_name in expected_colors.items():
+        record = logging.LogRecord("test", level, __file__, 1, "message", (), None)
+        assert colored_name in formatter.format(record)
+        assert "\033[" not in record.levelname
+
+
 def test_build_stage_paths_uses_input_stem_for_raw_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -274,11 +312,14 @@ def test_build_stage_paths_uses_input_stem_for_raw_json(
     assert paths.docx == paths.output_dir / "document.ja.docx"
 
 
-def test_stage_resume_rejects_corrupt_output_and_changed_config(tmp_path: Path) -> None:
+def test_stage_resume_rejects_corrupt_output_and_changed_config(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """Resumeは成果物破損または設定変更を検出して再実行対象にする。
 
     Args:
         tmp_path: 一時成果物を保存するpytest fixture。
+        caplog: ログを検証するpytest fixture。
 
     Returns:
         なし。
@@ -287,8 +328,10 @@ def test_stage_resume_rejects_corrupt_output_and_changed_config(tmp_path: Path) 
     manifest = tmp_path / "manifest.json"
     output = tmp_path / "document.normalized.json"
     write_json(output, {"texts": []})
+    caplog.set_level(logging.INFO, logger="translate-ja-v2")
     record_stage_completion(manifest, "normalize", output, "input", "config")
 
+    assert "Stage completed stage=normalize" in caplog.text
     assert stage_is_resumable(manifest, "normalize", output, "input", "config")
     assert not stage_is_resumable(manifest, "normalize", output, "input", "changed")
 
@@ -1202,7 +1245,7 @@ def test_apply_review_results_updates_bilingual_render_text(
 
     heading_meta = {"text_ja": "作戦", "render_text": "Strategy / 作戦"}
     caption_meta = {"caption_ja": "用語", "caption_render": "Terms / 用語"}
-    caplog.set_level(logging.INFO, logger="translate-ja-v2")
+    caplog.set_level(logging.DEBUG, logger="translate-ja-v2")
 
     changes = apply_review_results(
         [
@@ -1704,7 +1747,7 @@ def test_poll_docling_task_logs_poll_count_each_time(
 
     monkeypatch.setitem(sys.modules, "httpx", FakeHttpx)
     monkeypatch.setattr("translate.time.sleep", lambda _seconds: None)
-    caplog.set_level(logging.INFO, logger="translate-ja-v2")
+    caplog.set_level(logging.DEBUG, logger="translate-ja-v2")
 
     poll_docling_task("task-1", output_zip, settings)
 
