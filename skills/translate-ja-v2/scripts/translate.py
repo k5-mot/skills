@@ -1942,13 +1942,16 @@ def apply_merge_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, 
     wanted_set = set(wanted)
     new_texts: list[Any] = []
     ref_mapping: dict[str, str] = {}
+    merged_ref = (
+        f"#/texts/{sum(ref not in wanted_set for ref in current_refs[:first_index])}"
+    )
     for old_ref, item in zip(current_refs, texts, strict=True):
         if old_ref == wanted[0]:
-            ref_mapping[old_ref] = f"#/texts/{len(new_texts)}"
+            ref_mapping[old_ref] = merged_ref
             new_texts.append(merged)
             continue
         if old_ref in wanted_set:
-            ref_mapping[old_ref] = ref_mapping[wanted[0]]
+            ref_mapping[old_ref] = merged_ref
             continue
         ref_mapping[old_ref] = f"#/texts/{len(new_texts)}"
         new_texts.append(item)

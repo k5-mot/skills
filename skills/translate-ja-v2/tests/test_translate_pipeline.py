@@ -329,6 +329,37 @@ def test_apply_reorder_texts_moves_selected_refs_first() -> None:
     ]
 
 
+def test_apply_merge_texts_accepts_refs_in_reverse_document_order() -> None:
+    """merge_textsはrefsが文書順と逆でも参照を安全に統合する。
+
+    Returns:
+        なし。
+    """
+
+    data = {
+        "body": {"children": [{"$ref": "#/texts/0"}, {"$ref": "#/texts/1"}]},
+        "texts": [
+            {"self_ref": "#/texts/0", "text": "first"},
+            {"self_ref": "#/texts/1", "text": "second"},
+        ],
+    }
+
+    result, applied = apply_structure_patches(
+        data,
+        [
+            {
+                "op": "merge_texts",
+                "refs": ["#/texts/1", "#/texts/0"],
+                "text": "second first",
+            }
+        ],
+    )
+
+    assert result["texts"] == [{"self_ref": "#/texts/0", "text": "second first"}]
+    assert result["body"]["children"] == [{"$ref": "#/texts/0"}]
+    assert applied[0]["status"] == "success"
+
+
 def test_normalize_document_marks_code_and_cleans_table_cells() -> None:
     """normalize はコードを翻訳対象外にし、表セルを整形する。"""
 
