@@ -19,9 +19,10 @@ import time
 import uuid
 import zipfile
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from time import perf_counter
 from typing import Annotated, Any, cast
+from urllib.parse import unquote, urlsplit
 
 import typer
 from pydantic import BaseModel, ConfigDict, Field
@@ -40,7 +41,6 @@ OPENAI_RETRY_MAX_SECONDS = 60.0
 OPENAI_CONTEXT_LIMIT_CHARS = 50000
 OPENAI_MAX_OUTPUT_TOKENS = 4096
 TRANSLATION_BATCH_MAX_CHARS = 1500
-MAX_VLM_IMAGES = 12
 DEFAULT_TRANSLATION_RULES = """\
 - 原文にない説明、要約、事実追加は禁止。
 - 固有名詞、製品名、API名、コード、URL、パス、識別子、コマンドは英語のまま保持する。
@@ -1396,18 +1396,19 @@ def build_structure_messages(
 
     units = collect_structure_units(data)
     page_no = units[0]["page"][0] if units and units[0]["page"] else None
-    return build_page_structure_messages(page_no, units, artifacts_dir)
+    image_path = page_image_path(data, artifacts_dir, page_no)
+    return build_page_structure_messages(page_no, units, image_path)
 
 
 def build_page_structure_messages(
-    page_no: int | None, units: list[dict[str, Any]], artifacts_dir: Path | None = None
+    page_no: int | None, units: list[dict[str, Any]], image_path: Path | None = None
 ) -> list[dict[str, Any]]:
     """1ページ分の VLM/LLM 構造補正用 messages を作る。
 
     Args:
         page_no: 対象ページ番号。
         units: 対象ページの text unit。
-        artifacts_dir: Docling が出力した PNG artifacts のディレクトリ。
+        image_path: Docling JSON の URI から解決したページ画像パス。
 
     Returns:
         Chat messages。
@@ -1439,79 +1440,81 @@ def build_page_structure_messages(
 
 補正不要なら {{"patches":[]}} を返してください。
 """
-    content = build_multimodal_content(user, artifacts_dir, page_no=page_no)
+    content = build_multimodal_content(user, image_path)
     return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
 
 def build_multimodal_content(
-    prompt: str, artifacts_dir: Path | None, *, page_no: int | None = None
+    prompt: str, image_path: Path | None
 ) -> str | list[dict[str, Any]]:
     """VLM へ渡す text とページ画像 content を作る。
 
     Args:
         prompt: 構造補正プロンプト本文。
-        artifacts_dir: Docling PNG artifacts のディレクトリ。None なら text のみ返す。
-        page_no: 指定時は該当ページらしい PNG だけを添付する。
+        image_path: 添付するページ画像。None なら text のみ返す。
 
     Returns:
         OpenAI Chat Completions content。画像がなければ文字列、あれば multimodal content 配列。
     """
 
-    image_paths = (
-        [path]
-        if page_no is not None
-        and (path := page_image_path(artifacts_dir, page_no)) is not None
-        else collect_page_image_paths(artifacts_dir)
-    )
-    if not image_paths:
+    if image_path is None:
         return prompt
+    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-    for path in image_paths:
-        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-        content.append(
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{encoded}"},
-            }
-        )
+    content.append(
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+        }
+    )
     return content
 
 
-def collect_page_image_paths(artifacts_dir: Path | None) -> list[Path]:
-    """Docling artifacts から VLM に添付する PNG を選ぶ。
+def page_image_path(
+    data: dict[str, Any], artifacts_dir: Path | None, page_no: int | None
+) -> Path | None:
+    """Docling JSON の URI から指定ページの画像パスを解決する。
 
     Args:
-        artifacts_dir: Docling PNG artifacts のディレクトリ。None または未存在なら空配列。
-
-    Returns:
-        ページ画像らしい PNG パスの昇順配列。
-    """
-
-    if artifacts_dir is None or not artifacts_dir.exists():
-        return []
-    pngs = sorted(path for path in artifacts_dir.glob("*.png") if path.is_file())
-    page_pngs = [path for path in pngs if "page" in path.name.lower()]
-    return (page_pngs or pngs)[:MAX_VLM_IMAGES]
-
-
-def page_image_path(artifacts_dir: Path | None, page_no: int) -> Path | None:
-    """指定ページに対応する PNG path を推定する。
-
-    Args:
+        data: Docling JSON。
         artifacts_dir: Docling PNG artifacts のディレクトリ。
-        page_no: Docling の 1-origin page number。
+        page_no: Docling の 1-origin page number。None なら画像を解決しない。
 
     Returns:
-        見つかった PNG path。見つからない場合は None。
+        URI が指す既存画像パス。解決できない場合は None。
     """
 
-    for path in collect_page_image_paths(artifacts_dir):
-        numbers = [int(match) for match in re.findall(r"\d+", path.stem)]
-        if page_no in numbers:
-            return path
-    paths = collect_page_image_paths(artifacts_dir)
-    index = page_no - 1
-    return paths[index] if 0 <= index < len(paths) else None
+    if artifacts_dir is None or page_no is None:
+        return None
+    pages = data.get("pages")
+    page = (
+        pages.get(str(page_no), pages.get(page_no)) if isinstance(pages, dict) else None
+    )
+    image = page.get("image") if isinstance(page, dict) else None
+    uri = image.get("uri") if isinstance(image, dict) else None
+    if not isinstance(uri, str) or not uri.strip():
+        LOGGER.warning("Page image URI is missing page=%s", page_no)
+        return None
+
+    parsed = urlsplit(uri)
+    relative = PurePosixPath(unquote(parsed.path))
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or relative.is_absolute()
+        or ".." in relative.parts
+    ):
+        LOGGER.warning(
+            "Page image URI is not a safe relative path page=%s uri=%s", page_no, uri
+        )
+        return None
+
+    export_root = artifacts_dir.parent.resolve()
+    path = (export_root / Path(*relative.parts)).resolve()
+    if not path.is_relative_to(export_root) or not path.is_file():
+        LOGGER.warning("Page image file is missing page=%s uri=%s", page_no, uri)
+        return None
+    return path
 
 
 def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1596,7 +1599,7 @@ def build_merge_messages(
     page_no: int | None,
     left: dict[str, Any],
     right: dict[str, Any],
-    artifacts_dir: Path | None,
+    image_path: Path | None,
 ) -> list[dict[str, Any]]:
     """隣接 2 要素の merge 判定 messages を作る。
 
@@ -1604,7 +1607,7 @@ def build_merge_messages(
         page_no: 対象ページ番号。
         left: 前方要素 unit。
         right: 後方要素 unit。
-        artifacts_dir: Docling artifacts directory。
+        image_path: Docling JSON の URI から解決したページ画像パス。
 
     Returns:
         Chat messages。
@@ -1630,7 +1633,7 @@ def build_merge_messages(
 
 結合不要なら {{"patches":[]}} を返してください。
 """
-    content = build_multimodal_content(user, artifacts_dir, page_no=page_no)
+    content = build_multimodal_content(user, image_path)
     return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
 
@@ -1638,7 +1641,7 @@ def build_swap_messages(
     page_no: int | None,
     left: dict[str, Any],
     right: dict[str, Any],
-    artifacts_dir: Path | None,
+    image_path: Path | None,
 ) -> list[dict[str, Any]]:
     """2 要素の順序入れ替え判定 messages を作る。
 
@@ -1646,7 +1649,7 @@ def build_swap_messages(
         page_no: 対象ページ番号。
         left: 現在前にある要素 unit。
         right: 現在後ろにある要素 unit。
-        artifacts_dir: Docling artifacts directory。
+        image_path: Docling JSON の URI から解決したページ画像パス。
 
     Returns:
         Chat messages。
@@ -1672,7 +1675,7 @@ def build_swap_messages(
 
 入れ替え不要なら {{"patches":[]}} を返してください。
 """
-    content = build_multimodal_content(user, artifacts_dir, page_no=page_no)
+    content = build_multimodal_content(user, image_path)
     return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
 
@@ -1972,14 +1975,15 @@ def structure_page_with_vlm(
     units = page_structure_units(data, page_no)
     if not units:
         return data, []
-    messages = build_page_structure_messages(page_no, units, artifacts_dir)
+    image_path = page_image_path(data, artifacts_dir, page_no)
+    messages = build_page_structure_messages(page_no, units, image_path)
     if message_text_chars(messages) <= settings.context_chars:
         response = chat_text(client, settings, messages)
         return apply_structure_patches(data, parse_structure_response(response))
     LOGGER.info(
         "Falling back to pairwise structure page=%s units=%s", page_no, len(units)
     )
-    return structure_page_pairwise(data, page_no, client, settings, artifacts_dir)
+    return structure_page_pairwise(data, page_no, client, settings, image_path)
 
 
 def structure_page_pairwise(
@@ -1987,7 +1991,7 @@ def structure_page_pairwise(
     page_no: int | None,
     client: Any,
     settings: OpenAISettings,
-    artifacts_dir: Path | None,
+    image_path: Path | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """隣接 merge 後、総当たり swap で1ページを補正する。
 
@@ -1996,7 +2000,7 @@ def structure_page_pairwise(
         page_no: 対象ページ番号。
         client: OpenAI client。
         settings: OpenAI settings。
-        artifacts_dir: Docling artifacts directory。
+        image_path: Docling JSON の URI から解決したページ画像パス。
 
     Returns:
         補正後 JSON と適用 patch 配列。
@@ -2009,7 +2013,7 @@ def structure_page_pairwise(
     while index < len(page_structure_units(current, page_no)) - 1:
         units = page_structure_units(current, page_no)
         messages = build_merge_messages(
-            page_no, units[index], units[index + 1], artifacts_dir
+            page_no, units[index], units[index + 1], image_path
         )
         if message_text_chars(messages) > settings.context_chars:
             raise ValueError("merge comparison exceeds OpenAI context limit")
@@ -2030,7 +2034,7 @@ def structure_page_pairwise(
         while right_index < len(page_structure_units(current, page_no)):
             units = page_structure_units(current, page_no)
             messages = build_swap_messages(
-                page_no, units[left_index], units[right_index], artifacts_dir
+                page_no, units[left_index], units[right_index], image_path
             )
             if message_text_chars(messages) > settings.context_chars:
                 raise ValueError("swap comparison exceeds OpenAI context limit")

@@ -19,7 +19,6 @@ from translate import (  # noqa: E402
     apply_structure_patches,
     build_structure_messages,
     chat_text,
-    collect_page_image_paths,
     clean_text,
     convert_markdown_to_docx,
     convert_with_docling,
@@ -1101,12 +1100,22 @@ def test_apply_structure_patches_merge_reindexes_references_once() -> None:
 
 
 def test_build_structure_messages_attaches_docling_page_png(tmp_path: Path) -> None:
-    """構造補正 prompt は Docling のページ PNG を VLM content として添付する。"""
+    """構造補正 prompt は Docling JSON の URI が指す PNG を添付する。"""
 
     artifacts_dir = tmp_path / "artifacts"
     artifacts_dir.mkdir()
     (artifacts_dir / "page_000001.png").write_bytes(b"png-bytes")
-    data = {"texts": [{"self_ref": "#/texts/0", "label": "paragraph", "text": "Title"}]}
+    data = {
+        "pages": {"1": {"image": {"uri": "artifacts/page_000001.png"}}},
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "paragraph",
+                "text": "Title",
+                "prov": [{"page_no": 1}],
+            }
+        ],
+    }
 
     messages = build_structure_messages(data, artifacts_dir)
     content = messages[1]["content"]
@@ -1118,16 +1127,41 @@ def test_build_structure_messages_attaches_docling_page_png(tmp_path: Path) -> N
 
 
 def test_page_image_path_matches_page_number(tmp_path: Path) -> None:
-    """ページ番号に対応する PNG を選ぶ。"""
+    """ページ画像はファイル名を推測せず Docling JSON の URI から解決する。"""
 
     artifacts_dir = tmp_path / "artifacts"
     artifacts_dir.mkdir()
-    page1 = artifacts_dir / "page_000001.png"
-    page2 = artifacts_dir / "page_000002.png"
-    page1.write_bytes(b"page1")
-    page2.write_bytes(b"page2")
+    for page_no in range(1, 13):
+        (artifacts_dir / f"page_{page_no:06d}_118.png").write_bytes(b"unrelated")
+    expected = artifacts_dir / "page_000118_correct.png"
+    expected.write_bytes(b"page118")
+    data = {"pages": {"118": {"image": {"uri": "artifacts/page_000118_correct.png"}}}}
 
-    assert page_image_path(artifacts_dir, 2) == page2
+    assert page_image_path(data, artifacts_dir, 118) == expected
+
+
+def test_build_structure_messages_does_not_fallback_to_unrelated_png(
+    tmp_path: Path,
+) -> None:
+    """ページ URI がなければ無関係な artifact を VLM に添付しない。"""
+
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "page_000001.png").write_bytes(b"unrelated")
+    data = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "paragraph",
+                "text": "Title",
+                "prov": [{"page_no": 118}],
+            }
+        ]
+    }
+
+    content = build_structure_messages(data, artifacts_dir)[1]["content"]
+
+    assert isinstance(content, str)
 
 
 def test_structure_document_falls_back_to_pairwise_when_page_prompt_is_large(
@@ -1139,6 +1173,7 @@ def test_structure_document_falls_back_to_pairwise_when_page_prompt_is_large(
     artifacts_dir.mkdir()
     (artifacts_dir / "page_000001.png").write_bytes(b"png")
     data = {
+        "pages": {"1": {"image": {"uri": "artifacts/page_000001.png"}}},
         "texts": [
             _text_item(
                 index,
@@ -1147,7 +1182,7 @@ def test_structure_document_falls_back_to_pairwise_when_page_prompt_is_large(
                 bottom=690 - index,
             )
             for index in range(8)
-        ]
+        ],
     }
     calls: list[list[dict[str, Any]]] = []
 
@@ -1204,19 +1239,6 @@ def test_structure_document_falls_back_to_pairwise_when_page_prompt_is_large(
     assert any(patch["op"] == "merge_texts" for patch in patches)
     assert any("2つのDocling text要素" in str(call[1]["content"]) for call in calls)
     assert all(message_text_chars(call) <= 3800 for call in calls)
-
-
-def test_collect_page_image_paths_prefers_page_png(tmp_path: Path) -> None:
-    """VLM に添付する画像は page PNG を優先する。"""
-
-    artifacts_dir = tmp_path / "artifacts"
-    artifacts_dir.mkdir()
-    figure = artifacts_dir / "image_000001.png"
-    page = artifacts_dir / "page_000001.png"
-    figure.write_bytes(b"figure")
-    page.write_bytes(b"page")
-
-    assert collect_page_image_paths(artifacts_dir) == [page]
 
 
 def test_load_dotenv_file_uses_python_dotenv(

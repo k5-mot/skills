@@ -57,7 +57,7 @@ output-v2/
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 
-timeout、OCR、OpenAI retry、VLM 添付画像数、ログレベルは `scripts/translate.py` 内の固定値とする。
+timeout、OCR、OpenAI retry、ログレベルは `scripts/translate.py` 内の固定値とする。
 
 ## Atomic Write
 
@@ -67,7 +67,7 @@ JSON と artifact は直接本ファイルへ書かない。必ず一時ファ�
 
 1. Docling Serve で JSON と PNG artifacts を作る。
 2. JSON の `prov[].page_no` と `prov[].bbox` を使い、ページ順・上から下・左から右の読み順へ決定論的に補正する。同時に表セル、過剰記号、コードブロックを整形する。
-3. VLM/LLM に座標補正済み Docling JSON の要約、bbox、`artifacts/` の page PNG を渡し、`set_label`、`set_level`、`reorder_texts` patch だけを返させて、段組みなど座標だけでは曖昧な見出しと本文の位置を補正する。
+3. VLM/LLM に座標補正済み Docling JSON の要約、bbox、`pages[].image.uri` が指す page PNG を渡し、`set_label`、`set_level`、`reorder_texts` patch だけを返させて、段組みなど座標だけでは曖昧な見出しと本文の位置を補正する。URIをファイル名から推測せず、URIや画像がない場合はテキストだけを渡す。
 4. JSON 各要素へ `translate_ja_v2` フィールドを追加する。
 5. 見出し・表タイトルは英日併記、本文は和訳のみで Markdown を作る。
 6. pandoc で Markdown を Word docx へ変換する。

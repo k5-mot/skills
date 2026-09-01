@@ -45,7 +45,7 @@ Parse Stage は Docling の文書モデルを可能な限りそのまま保存�
 
 実装クラス: `StructureStage`
 
-構造と reading order を第2段階で補正する。現行実装では、Normalize の座標補正済み JSON を入力に、`collect_structure_units` が text 要素と bbox を要約する。`build_multimodal_content` が `artifacts/` 内の page PNG を添付し、VLM/LLM に段組みなど座標だけでは曖昧な構造の patch を返させる。
+構造と reading order を第2段階で補正する。現行実装では、Normalize の座標補正済み JSON を入力に、`collect_structure_units` が text 要素と bbox を要約する。`build_multimodal_content` が `pages[].image.uri` から解決した page PNG を1枚だけ添付し、VLM/LLM に段組みなど座標だけでは曖昧な構造の patch を返させる。URIや画像ファイルがない場合は、別の画像へフォールバックせずテキストだけを渡す。
 
 補正順序は必ず次のとおりとする。
 
@@ -69,7 +69,7 @@ VLM に禁止する操作:
 - 翻訳
 - validation 不能な任意 JSON の返却
 
-VLM 応答は JSON object として受け取り、`apply_structure_patches` で `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用する。request のテキスト上限は `--context-chars`（既定50,000文字）を使う。添付画像数は先頭12枚に制限する。
+VLM 応答は JSON object として受け取り、`apply_structure_patches` で `set_label`、`set_level`、`set_text`、`reorder_texts` だけを適用する。request のテキスト上限は `--context-chars`（既定50,000文字）を使う。各requestには対象ページの画像だけを添付する。
 
 ## 04 Translate
 

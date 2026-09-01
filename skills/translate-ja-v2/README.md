@@ -28,7 +28,7 @@ OPENAI_MODEL=your-model
 
 Docling Serve の表構造、セル対応、コード、数式の認識は常に有効です。表構造の解析モードには `accurate` を使います。
 
-timeout、OCR、OpenAI retry、VLM 添付画像数、ログレベルは `translate.py` 内の固定値を使います。OpenAI request のテキスト上限は `--context-chars`、翻訳バッチの原文上限は `--batch-chars` で変更できます。バッチ翻訳はJSONモードと出力上限4,096トークンを指定します。429や一時的な5xxなどは最大6回、5秒から最大60秒までの指数バックオフで再試行します。バッチ翻訳の空応答や部分応答は同じ入力を再送せず、要素境界でバッチを二分して再実行します。
+timeout、OCR、OpenAI retry、ログレベルは `translate.py` 内の固定値を使います。OpenAI request のテキスト上限は `--context-chars`、翻訳バッチの原文上限は `--batch-chars` で変更できます。バッチ翻訳はJSONモードと出力上限4,096トークンを指定します。429や一時的な5xxなどは最大6回、5秒から最大60秒までの指数バックオフで再試行します。バッチ翻訳の空応答や部分応答は同じ入力を再送せず、要素境界でバッチを二分して再実行します。
 
 ### ▶️ 3. 翻訳パイプラインを実行する
 
@@ -120,7 +120,7 @@ Docling JSON を複製し、まず各 text の `prov[].page_no` と `prov[].bbox
 
 ### 4. Structure
 
-Normalize で座標補正した Docling 要素をページごとに分け、1ページ画像とそのページの text JSON を OpenAI 互換 API へ渡します。VLM は段組みなど座標だけでは曖昧な箇所を判断し、見出し、レベル、本文順序、分割検出された表・コード・段落の結合を patch だけで返します。
+Normalize で座標補正した Docling 要素をページごとに分け、`pages[].image.uri` が指す1ページ画像とそのページの text JSON を OpenAI 互換 API へ渡します。URIや画像ファイルがない場合は無関係な画像を推測せず、テキストだけを渡します。VLM は段組みなど座標だけでは曖昧な箇所を判断し、見出し、レベル、本文順序、分割検出された表・コード・段落の結合を patch だけで返します。
 
 1ページ分の text context が `--context-chars` の上限（既定50,000文字）を超える場合は、同じページ内で隣接する2要素を比較して `merge_texts` の要否を判断します。その後、同じページ内の2要素を総当たりで比較し、順序が明らかに逆の場合だけ `swap_texts` を適用します。許可された `set_label`、`set_level`、`set_text`、`reorder_texts`、`merge_texts`、`swap_texts` だけを適用し、`<stem>.structured.json` を保存します。
 
