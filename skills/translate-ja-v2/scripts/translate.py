@@ -3503,17 +3503,65 @@ def add_review_target(targets: list[dict[str, Any]], target: dict[str, Any]) -> 
 
 
 def add_review_neighbors(targets: list[dict[str, Any]]) -> None:
-    """レビュー対象に前後の訳文を添える。"""
+    """レビュー対象に前後の原文と訳文を添える。
+
+    Args:
+        targets: 文書順に並んだレビュー対象。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        各対象へ前後要素の原文と訳文を追加する。
+    """
 
     for index, target in enumerate(targets):
+        target["previous_source_text"] = (
+            str(targets[index - 1]["source_text"]) if index > 0 else ""
+        )
         target["previous_text_ja"] = (
             str(targets[index - 1]["translated_text"]) if index > 0 else ""
+        )
+        target["next_source_text"] = (
+            str(targets[index + 1]["source_text"]) if index + 1 < len(targets) else ""
         )
         target["next_text_ja"] = (
             str(targets[index + 1]["translated_text"])
             if index + 1 < len(targets)
             else ""
         )
+
+
+def review_rejection_reason(item: dict[str, Any], reviewed_text: str) -> str | None:
+    """隣接要素の誤コピーや異常な長文化を検出する。
+
+    Args:
+        item: 原文、原訳、前後要素を持つレビュー対象。
+        reviewed_text: APIが返したレビュー後の訳文。
+
+    Returns:
+        採用できない理由。採用可能な場合はNone。
+    """
+
+    current = str(item["translated_text"]).strip()
+    reviewed = reviewed_text.strip()
+    if len(reviewed) > max(200, len(current) * 1.5):
+        return "review response is disproportionately longer than current translation"
+    source = str(item["source_text"]).strip()
+    for position in ("previous", "next"):
+        neighbor_source = str(item.get(f"{position}_source_text") or "").strip()
+        neighbor_translation = str(item.get(f"{position}_text_ja") or "").strip()
+        if not neighbor_source or not neighbor_translation or neighbor_source == source:
+            continue
+        neighbor_similarity = SequenceMatcher(
+            None, reviewed, neighbor_translation, autojunk=False
+        ).ratio()
+        current_similarity = SequenceMatcher(
+            None, reviewed, current, autojunk=False
+        ).ratio()
+        if neighbor_similarity >= 0.95 and current_similarity < 0.8:
+            return f"review response matches {position} element"
+    return None
 
 
 def review_batch(
@@ -3585,6 +3633,14 @@ def review_batch(
             )
             if not reviewed_text:
                 raise OpenAIEmptyResponseError("OpenAI response content is empty")
+            rejection_reason = review_rejection_reason(item, reviewed_text)
+            if rejection_reason:
+                LOGGER.warning(
+                    "Keeping original translation after invalid review id=%s error=%s",
+                    item["id"],
+                    rejection_reason,
+                )
+                reviewed_text = str(item["translated_text"])
         except OpenAIEmptyResponseError as exc:
             LOGGER.warning(
                 "Keeping original translation after empty review id=%s error=%s",

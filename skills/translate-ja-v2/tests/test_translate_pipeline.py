@@ -53,6 +53,7 @@ from translate import (  # noqa: E402
     render_markdown,
     review_batch,
     review_document,
+    review_rejection_reason,
     ReviewStage,
     run_pipeline,
     stage_is_resumable,
@@ -1339,6 +1340,43 @@ def test_review_batch_uses_plain_text_without_structured_output(
     assert len(calls) == 2
     assert all("json_response" not in kwargs for _messages, kwargs in calls)
     assert all("返却JSON" not in str(messages[-1]["content"]) for messages, _ in calls)
+
+
+@pytest.mark.parametrize(
+    ("reviewed_text", "reason"),
+    [
+        ("隣接要素の訳文", "matches next element"),
+        ("あ" * 201, "disproportionately longer"),
+    ],
+)
+def test_review_rejects_neighbor_copy_and_disproportionate_length(
+    reviewed_text: str,
+    reason: str,
+) -> None:
+    """隣接訳の誤コピーと異常に長い応答を採用しない。
+
+    Args:
+        reviewed_text: 検証対象のレビュー応答。
+        reason: 期待する拒否理由の一部。
+
+    Returns:
+        なし。
+    """
+
+    item = {
+        "source_text": "Target source",
+        "translated_text": "対象の訳文",
+        "next_source_text": "Different source",
+        "next_text_ja": "隣接要素の訳文",
+    }
+
+    assert reason in str(review_rejection_reason(item, reviewed_text))
+    assert "disproportionately longer" in str(
+        review_rejection_reason(
+            {**item, "translated_text": "い" * 150},
+            "あ" * 226,
+        )
+    )
 
 
 def test_review_batch_keeps_original_after_empty_single_response(
