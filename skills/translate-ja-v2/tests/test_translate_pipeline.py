@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
+import pypdfium2 as pdfium
 import pytest
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
@@ -46,6 +47,7 @@ from translate import (  # noqa: E402
     read_json,
     read_glossary_csv,
     read_translation_rules,
+    render_pdf_page_images,
     render_markdown,
     review_batch,
     review_document,
@@ -1670,6 +1672,16 @@ def test_docling_payload_enables_document_enrichment() -> None:
     assert payload["do_formula_enrichment"] == "true"
 
 
+def test_docling_payload_disables_remote_page_images() -> None:
+    """Doclingではページ画像を生成せず、画像scaleを1.0に固定する。"""
+
+    payload = docling_form_payload(120)
+
+    assert payload["include_images"] == "true"
+    assert payload["include_page_images"] == "false"
+    assert payload["images_scale"] == "1.0"
+
+
 def test_convert_with_docling_uses_async_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1717,14 +1729,67 @@ def test_convert_with_docling_uses_async_endpoint(
         target_artifacts_dir.mkdir(parents=True, exist_ok=True)
         write_json(target_json, {"texts": []})
 
+    rendered: list[Path] = []
+
+    def fake_render(
+        source_path: Path, target_json: Path, target_artifacts_dir: Path
+    ) -> None:
+        """ローカルページ画像生成の呼び出しを記録する。"""
+
+        assert target_json == output_json
+        assert target_artifacts_dir == artifacts_dir
+        rendered.append(source_path)
+
     monkeypatch.setattr("translate.request_docling_convert", fake_request)
     monkeypatch.setattr("translate.poll_docling_task", fake_poll)
     monkeypatch.setattr("translate.extract_docling_zip", fake_extract)
+    monkeypatch.setattr("translate.render_pdf_page_images", fake_render)
 
     convert_with_docling(input_path, output_json, artifacts_dir)
 
     assert endpoints == ["http://docling.test/v1/convert/file/async"]
+    assert rendered == [input_path]
     assert output_json.exists()
+
+
+def test_render_pdf_page_images_updates_docling_uris(tmp_path: Path) -> None:
+    """ローカル生成した各ページPNGのURIをDocling JSONへ保存する。"""
+
+    input_path = tmp_path / "source.pdf"
+    output_json = tmp_path / "document.json"
+    artifacts_dir = tmp_path / "artifacts"
+    with pdfium.PdfDocument.new() as pdf:
+        pdf.new_page(200, 300)
+        pdf.new_page(400, 500)
+        pdf.save(input_path)
+    write_json(
+        output_json,
+        {
+            "pages": {
+                "1": {"page_no": 1, "size": {"width": 200, "height": 300}},
+                "2": {"page_no": 2, "size": {"width": 400, "height": 500}},
+            }
+        },
+    )
+
+    render_pdf_page_images(input_path, output_json, artifacts_dir)
+
+    document = read_json(output_json)
+    first = document["pages"]["1"]["image"]
+    second = document["pages"]["2"]["image"]
+    assert first == {
+        "mimetype": "image/png",
+        "dpi": 72,
+        "size": {"width": 200.0, "height": 300.0},
+        "uri": "artifacts/page_000001.png",
+    }
+    assert second["uri"] == "artifacts/page_000002.png"
+    assert (
+        (artifacts_dir / "page_000001.png")
+        .read_bytes()
+        .startswith(b"\x89PNG\r\n\x1a\n")
+    )
+    assert (artifacts_dir / "page_000002.png").is_file()
 
 
 def test_poll_docling_task_logs_poll_count_each_time(

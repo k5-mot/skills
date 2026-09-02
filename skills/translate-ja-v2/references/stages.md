@@ -8,12 +8,14 @@ Parse、Normalize、Clean、Render、Docx は工程単位で Resume する。Str
 
 実装クラス: `ParseStage`
 
-入力 PDF/Word を Docling Serve で解析し、Docling JSON、ページ PNG、figure/image artifact を保存する。接続設定は `python-dotenv` で読み込んだ `.env` の `DOCLING_SERVER_URL` / `DOCLING_API_KEY` 系を使う。
+入力 PDF/Word を Docling Serve で解析し、Docling JSONとfigure/image artifactを保存する。Doclingには`images_scale=1.0`、`include_page_images=false`を指定する。PDFのページPNGは変換後にpypdfium2で1ページずつローカル生成し、`pages[].image.uri`へ`artifacts/`からの相対パスを設定する。接続設定は `python-dotenv` で読み込んだ `.env` の `DOCLING_SERVER_URL` / `DOCLING_API_KEY` 系を使う。
 
 出力:
 
 - `<stem>.json`
 - `artifacts/*.png`
+
+ローカルページ画像はscale 1.0（72 DPI）で生成する。ページ、bitmap、Pillow imageは各ページの保存後に明示的に閉じ、全ページ分をメモリへ保持しない。`include_images=true`は維持し、Doclingが抽出する図などの要素画像は引き続き取得する。
 
 Parse Stage は Docling の文書モデルを可能な限りそのまま保存する。独自 Pydantic モデルへ全文コピーしない。
 Docling ZIP内の唯一のJSONを、入力ファイルと同じstemの `<stem>.json` として保存する。
@@ -35,7 +37,7 @@ Normalizeでは本文、label、表セル、コードmetadataを変更しない�
 
 実装クラス: `StructureStage`
 
-構造を第2段階で補正する。Normalizeの座標補正済みJSONを入力に、text要素、bbox、表セルをページごとに要約する。`build_multimodal_content` が `pages[].image.uri` から解決したpage PNGを1枚だけ添付し、VLM/LLMにコード判定と構造patchを返させる。URIや画像ファイルがない場合は、別の画像へフォールバックせずテキストだけを渡す。
+構造を第2段階で補正する。Normalizeの座標補正済みJSONを入力に、text要素、bbox、表セルをページごとに要約する。`build_multimodal_content` が `pages[].image.uri` から解決したローカルpage PNGを1枚だけ添付し、VLM/LLMにコード判定と構造patchを返させる。URIや画像ファイルがない場合は、別の画像へフォールバックせずテキストだけを渡す。
 
 補正順序は必ず次のとおりとする。
 

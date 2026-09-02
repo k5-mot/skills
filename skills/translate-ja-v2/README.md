@@ -26,7 +26,7 @@ OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=your-model
 ```
 
-Docling Serve の表構造、セル対応、コード、数式の認識は常に有効です。表構造の解析モードには `accurate` を使います。
+Docling Serve の表構造、セル対応、コード、数式の認識は常に有効です。表構造の解析モードには `accurate` を使います。画像scaleは`1.0`、`include_page_images`は`false`に固定し、PDFのページ画像はpypdfium2でローカル生成します。`include_images`は`true`のままなので、Doclingが抽出した図などの要素画像は引き続き取得します。
 
 timeout、OCR、OpenAI retry、ログレベルは `translate.py` 内の固定値を使います。アプリの既定ログレベルは `DEBUG`、依存ライブラリは `WARNING` 以上です。これによりOpenAI SDKやHTTP clientのrequest内部データは表示しません。ログ本文は英語で、DEBUGはcyan、INFOはgreen、WARNINGはyellow、ERRORはred、CRITICALはmagentaのANSI色付きレベル名を出力します。工程の開始・完了・省略・ResumeはINFO、polling、バッチ処理、要素単位の変更はDEBUGです。OpenAI request のテキスト上限は `--context-chars`、翻訳バッチの原文上限は `--batch-chars` で変更できます。バッチ翻訳はJSONモードと出力上限4,096トークンを指定します。429や一時的な5xxなどは最大6回、5秒から最大60秒までの指数バックオフで再試行します。バッチ翻訳の空応答や部分応答は同じ入力を再送せず、要素境界でバッチを二分して再実行します。
 
@@ -75,7 +75,7 @@ Docling Serve への PDF/Word 変換は常に `/v1/convert/file/async` を使い
 CLI 引数解析
   -> .env 読み込み・ログ初期化
   -> 出力パス構築・manifest 開始記録
-  -> ParseStage（Docling 非同期変換）
+  -> ParseStage（Docling 非同期変換・PDFページ画像のローカル生成）
   -> NormalizeStage（座標による第1段階補正）
   -> StructureStage（VLMによる第2段階補正）
   -> CleanStage（連続記号の決定論的校正）
@@ -111,6 +111,7 @@ Typer で CLI 引数を解析し、`--env` で指定された `.env` を `python
 2. 応答の `task_id` を使って `/v1/status/poll/{task_id}` を 10 秒間隔で polling します。
 3. polling ごとに `poll_count`、task status、HTTP status をDEBUGログへ出力します。
 4. 完了後に `/v1/result/{task_id}` から zip を取得します。ZIP内の唯一のJSONを `<入力stem>.json` として atomic write で保存します。`artifacts/` は一時ディレクトリへ展開してからディレクトリ単位で置換するため、以前の変換で作られた不要画像は残りません。
+5. PDFの場合、pypdfium2でscale 1.0（72 DPI）のページ画像を1ページずつPNG化して`artifacts/`へatomic保存し、`pages[].image.uri`をローカル画像の相対パスへ更新します。各ページのPDFiumオブジェクトは保存直後に解放し、全ページ画像をメモリへ保持しません。
 
 入力ファイル、`<入力stem>.json`、`artifacts/` の各 SHA-256 が manifest の完了記録と一致する場合、この変換を省略します。単にJSONが存在するだけでは再利用しません。
 
@@ -122,7 +123,7 @@ Docling JSON を複製し、まず各 text の `prov[].page_no` と `prov[].bbox
 
 ### 4. Structure
 
-Normalize で座標補正した Docling 要素をページごとに分け、`pages[].image.uri` が指す1ページ画像、そのページのtext JSON、表セルを OpenAI 互換 API へ渡します。URIや画像ファイルがない場合は無関係な画像を推測せず、テキストだけを渡します。VLMは本文と誤認識されたコードのlabelを `code` へ変更し、同じコードブロックに属する前後要素を連結します。表セルでは原文に完全一致するインラインコードspanを検出し、`structure_ja_v2.inline_code_spans` に保存します。
+Normalize で座標補正した Docling 要素をページごとに分け、PDFではpypdfium2がローカル生成して`pages[].image.uri`へ設定した1ページ画像、そのページのtext JSON、表セルを OpenAI 互換 API へ渡します。URIや画像ファイルがない場合は無関係な画像を推測せず、テキストだけを渡します。VLMは本文と誤認識されたコードのlabelを `code` へ変更し、同じコードブロックに属する前後要素を連結します。表セルでは原文に完全一致するインラインコードspanを検出し、`structure_ja_v2.inline_code_spans` に保存します。
 
 1ページ分の context が `--context-chars` の上限（既定50,000文字）を超える場合は、同じページ内で隣接する2要素を比較してコード判定と `merge_texts` の要否を判断します。その後、同じページ内の2要素を総当たりで比較し、順序が明らかに逆の場合だけ `swap_texts` を適用します。表セルはcontext上限内のまとまりに分割します。許可された `set_label`、`set_level`、`set_text`、`reorder_texts`、`merge_texts`、`swap_texts`、`set_table_cell_inline_code` だけを適用し、`document.structured.json` を保存します。
 
@@ -223,6 +224,8 @@ uv run ty check skills/translate-ja-v2
 - [python-dotenv](https://github.com/theskumar/python-dotenv)
 - [OpenAI Python SDK](https://github.com/openai/openai-python)
 - [Docling Serve](https://github.com/docling-project/docling-serve)
+- [pypdfium2](https://pypdfium2-team.github.io/pypdfium2/)
+- [Pillow](https://python-pillow.github.io/)
 - [pandoc](https://pandoc.org/)
 - [pytest](https://docs.pytest.org/)
 - [Ruff](https://docs.astral.sh/ruff/)

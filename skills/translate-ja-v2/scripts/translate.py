@@ -6,6 +6,7 @@ import base64
 import copy
 import csv
 from difflib import SequenceMatcher
+from io import BytesIO
 import json
 import logging
 import math
@@ -25,6 +26,7 @@ from typing import Annotated, Any, Callable, cast
 from urllib.parse import unquote, urlsplit
 
 import typer
+import pypdfium2 as pdfium
 from pydantic import BaseModel, ConfigDict, Field
 
 LOGGER = logging.getLogger("translate-ja-v2")
@@ -34,6 +36,7 @@ CODE_LABELS = {"code", "program_listing"}
 URL_RE = re.compile(r"https?://[^\s)>\"]+")
 LOG_LEVEL = "DEBUG"
 DOCLING_TIMEOUT_SECONDS = 21600
+PAGE_IMAGE_SCALE = 1.0
 OPENAI_TIMEOUT_SECONDS = 1800
 OPENAI_MAX_ATTEMPTS = 6
 OPENAI_RETRY_INITIAL_SECONDS = 5.0
@@ -587,7 +590,8 @@ def docling_form_payload(document_timeout: int) -> dict[str, str | list[str]]:
         "do_formula_enrichment": "true",
         "document_timeout": str(document_timeout),
         "include_images": "true",
-        "include_page_images": "true",
+        "include_page_images": "false",
+        "images_scale": str(PAGE_IMAGE_SCALE),
         "image_export_mode": "referenced",
         "target_type": "zip",
     }
@@ -724,6 +728,8 @@ def convert_with_docling(
         LOGGER.info("Started Docling async conversion task_id=%s", task_id)
         poll_docling_task(str(task_id), temp_zip, settings)
         extract_docling_zip(temp_zip, output_json, artifacts_dir)
+        if input_path.suffix.lower() == ".pdf":
+            render_pdf_page_images(input_path, output_json, artifacts_dir)
     finally:
         temp_zip.unlink(missing_ok=True)
 
@@ -792,6 +798,81 @@ def extract_docling_zip(zip_path: Path, output_json: Path, artifacts_dir: Path) 
             shutil.rmtree(temp_artifacts)
         if backup_artifacts.exists():
             shutil.rmtree(backup_artifacts)
+
+
+def render_pdf_page_images(
+    input_path: Path, output_json: Path, artifacts_dir: Path
+) -> None:
+    """PDFを1ページずつPNG化し、Docling JSONへ相対URIを設定する。
+
+    Args:
+        input_path: 変換元PDF。
+        output_json: Docling JSONの保存先。
+        artifacts_dir: ページPNGの保存先。
+
+    Returns:
+        なし。
+
+    Raises:
+        ValueError: Docling JSONのルートまたはpagesが不正な場合。
+        RuntimeError: PDFとDocling JSONのページ対応が取れない場合。
+
+    Side Effects:
+        ページPNGとDocling JSONをatomic保存する。
+    """
+
+    document = read_json(output_json)
+    if not isinstance(document, dict):
+        raise ValueError("Docling JSON root must be an object")
+    pages = document.get("pages")
+    if not isinstance(pages, dict):
+        raise ValueError("Docling JSON pages must be an object")
+
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    with pdfium.PdfDocument(input_path) as pdf:
+        page_count = len(pdf)
+        for page_index in range(page_count):
+            page_no = page_index + 1
+            page_data = pages.get(str(page_no), pages.get(page_no))
+            if not isinstance(page_data, dict):
+                raise RuntimeError(f"Docling JSON has no page metadata page={page_no}")
+
+            page = pdf[page_index]
+            try:
+                bitmap = page.render(scale=PAGE_IMAGE_SCALE)
+                try:
+                    image = bitmap.to_pil()
+                    try:
+                        filename = f"page_{page_no:06d}.png"
+                        target = artifacts_dir / filename
+                        with BytesIO() as buffer:
+                            image.save(buffer, format="PNG")
+                            atomic_write_bytes(target, buffer.getvalue())
+                        page_data["image"] = {
+                            "mimetype": "image/png",
+                            "dpi": int(72 * PAGE_IMAGE_SCALE),
+                            "size": {
+                                "width": float(bitmap.width),
+                                "height": float(bitmap.height),
+                            },
+                            "uri": PurePosixPath(
+                                artifacts_dir.name, filename
+                            ).as_posix(),
+                        }
+                        LOGGER.debug(
+                            "Rendered local PDF page image page=%s path=%s",
+                            page_no,
+                            target,
+                        )
+                    finally:
+                        image.close()
+                finally:
+                    bitmap.close()
+            finally:
+                page.close()
+
+    write_json(output_json, document)
+    LOGGER.info("Local PDF page images completed pages=%s", page_count)
 
 
 def label_of(item: dict[str, Any]) -> str:
@@ -4168,7 +4249,14 @@ class ParseStage(FrozenModel):
 
         input_hash = sha256_file(self.input_path)
         config_hash = sha256_json(
-            {"version": 1, "payload": docling_form_payload(DOCLING_TIMEOUT_SECONDS)}
+            {
+                "version": 2,
+                "payload": docling_form_payload(DOCLING_TIMEOUT_SECONDS),
+                "local_page_images": {
+                    "renderer": "pypdfium2",
+                    "scale": PAGE_IMAGE_SCALE,
+                },
+            }
         )
         can_resume = not self.force and stage_is_resumable(
             self.paths.manifest,

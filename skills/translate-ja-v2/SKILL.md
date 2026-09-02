@@ -1,11 +1,11 @@
 ---
 name: translate-ja-v2
-description: PDF/Word文書をpython-dotenvで読み込んだ.env設定、Docling Serve、OpenAI互換API、pandocでJSON/PNG、構造補正、要素単位日本語翻訳、Markdown、Word docxへ変換するtranslate-ja-v2パイプラインを実行・修正・レビューする。Use when Codex translates documents with the bundled Python script, revises scripts/translate.py, adjusts Docling/OpenAI/pandoc handling, or reviews whether heading/table bilingual output, body Japanese-only output, table/code cleanup, and VLM structure correction work.
+description: PDF/Word文書をpython-dotenvで読み込んだ.env設定、Docling Serve、pypdfium2、OpenAI互換API、pandocでJSON/PNG、構造補正、要素単位日本語翻訳、Markdown、Word docxへ変換するtranslate-ja-v2パイプラインを実行・修正・レビューする。Use when Codex translates documents with the bundled Python script, revises scripts/translate.py, adjusts Docling/OpenAI/pandoc handling, or reviews whether heading/table bilingual output, body Japanese-only output, table/code cleanup, and VLM structure correction work.
 ---
 
 # translate-ja-v2
 
-PDF/Word から Docling Serve で JSON/PNG を作り、JSON 上で表・コードブロック整形、VLM 構造補正、要素単位翻訳、Markdown 生成、Word docx 変換まで行うスキル。エージェントスキルの一部として使いやすいよう、正本の Python 実装は [scripts/translate.py](scripts/translate.py) に集約する。
+PDF/Word から Docling Serve で JSON と要素画像を作り、PDFのページPNGはpypdfium2でローカル生成する。JSON 上で表・コードブロック整形、VLM 構造補正、要素単位翻訳、Markdown 生成、Word docx 変換まで行うスキル。エージェントスキルの一部として使いやすいよう、正本の Python 実装は [scripts/translate.py](scripts/translate.py) に集約する。
 
 ## 最初に読むもの
 
@@ -26,7 +26,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
 ```
 
 Word 変換を後回しにする場合だけ `--skip-docx` を使う。構造補正を明示的に止める検証では `--skip-vlm` を使う。
-Docling 変換は常に `/v1/convert/file/async` を使い、polling ごとに poll 回数と status をDEBUG loggingする。ログ本文は英語、アプリの既定レベルはDEBUG、依存ライブラリはWARNING以上とし、各レベル名をANSI色付きで表示する。工程の開始・完了・省略・ResumeはINFOにする。
+Docling 変換は常に `/v1/convert/file/async` を使い、`images_scale=1.0`、`include_page_images=false`を指定する。PDFのページ画像はDocling Serveへ生成させず、変換後にpypdfium2で1ページずつPNG化する。polling ごとに poll 回数と status をDEBUG loggingする。ログ本文は英語、アプリの既定レベルはDEBUG、依存ライブラリはWARNING以上とし、各レベル名をANSI色付きで表示する。工程の開始・完了・省略・ResumeはINFOにする。
 同じコマンドを再実行した場合は manifest と成果物 hash を検証し、Structure、Translate、Review は要素別進捗から、Parse、Normalize、Clean、Render、Docxは工程の完了状態から Resume する。`--force` は Parse を必ず再実行する。
 
 ## 出力
@@ -45,7 +45,7 @@ outputs/<stem>/
 └── manifest.json
 ```
 
-Docling ServeのZIP内にある唯一のJSONを、入力ファイルと同じstemの `<stem>.json` として保存する。
+Docling ServeのZIP内にある唯一のJSONを、入力ファイルと同じstemの `<stem>.json` として保存する。PDFではpypdfium2が生成したページPNGを`artifacts/`へ保存し、その相対パスを`pages[].image.uri`へ設定する。
 
 ## 実装方針
 
@@ -55,7 +55,7 @@ Docling ServeのZIP内にある唯一のJSONを、入力ファイルと同じste
 4. 本文は日本語訳のみ Markdown に出す。
 5. コード、URL、パス、コマンド、識別子は翻訳せず保護する。
 6. Normalize で `prov[].page_no` と `prov[].bbox` を使って読み順を座標補正し、その後に VLM 補正を行う2段階構成にする。
-7. VLM には座標補正済みのDocling JSON要約、bbox、表セル、`pages[].image.uri` が指すpage PNGを渡す。本文と誤認識されたコードのlabel変更、隣接コード連結、表セル内インラインコードspanの特定を構造patchだけで行い、全文再生成はさせない。
+7. VLM には座標補正済みのDocling JSON要約、bbox、表セル、pypdfium2がローカル生成して`pages[].image.uri`へ設定したpage PNGを渡す。本文と誤認識されたコードのlabel変更、隣接コード連結、表セル内インラインコードspanの特定を構造patchだけで行い、全文再生成はさせない。
 8. Cleanでは本文と表セルの3文字以上連続する `.` と `・` を3文字へ縮める。コードブロックと表セル内インラインコードspanは変更しない。
 9. ファイル保存は一時ファイル、flush、fsync、`os.replace()` で行う。
 10. 外部 API を使う単体テストは fake client で検証する。
@@ -63,4 +63,4 @@ Docling ServeのZIP内にある唯一のJSONを、入力ファイルと同じste
 
 ## 完了判断
 
-MVP は、PDF/Word の投入、Docling JSON/PNG 保存、表・コード整形、VLM による見出し/本文の位置補正、JSON 要素への翻訳フィールド追加、見出し/表タイトルの英日併記、本文の和訳のみ Markdown、pandoc による docx 生成、単体テスト成功を満たした時点で完了とする。
+MVP は、PDF/Word の投入、Docling JSONと要素画像の保存、PDFページPNGのローカル生成、表・コード整形、VLM による見出し/本文の位置補正、JSON 要素への翻訳フィールド追加、見出し/表タイトルの英日併記、本文の和訳のみ Markdown、pandoc による docx 生成、単体テスト成功を満たした時点で完了とする。

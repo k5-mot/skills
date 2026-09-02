@@ -76,9 +76,9 @@ JSON と artifact は直接本ファイルへ書かない。必ず一時ファ�
 
 ## 実装順序
 
-1. Docling Serve で JSON と PNG artifacts を作る。
+1. Docling Serveでは`images_scale=1.0`、`include_page_images=false`を指定してJSONと要素画像を作る。PDFのページPNGはpypdfium2で1ページずつローカル生成し、`pages[].image.uri`へ相対パスを設定する。
 2. JSON の `prov[].page_no` と `prov[].bbox` を使い、ページ順・上から下・左から右の読み順だけを決定論的に補正する。
-3. VLM/LLMに座標補正済みDocling JSONの要約、bbox、表セル、`pages[].image.uri` が指すpage PNGを渡す。本文と誤認識されたコードをcodeへ変更し、同じコードブロックに属する前後要素を連結する。表セルでは原文に完全一致するインラインコードspanをmetadataへ保存する。URIをファイル名から推測せず、URIや画像がない場合はテキストだけを渡す。
+3. VLM/LLMに座標補正済みDocling JSONの要約、bbox、表セル、pypdfium2がローカル生成して`pages[].image.uri`へ設定したpage PNGを渡す。本文と誤認識されたコードをcodeへ変更し、同じコードブロックに属する前後要素を連結する。表セルでは原文に完全一致するインラインコードspanをmetadataへ保存する。URIをファイル名から推測せず、URIや画像がない場合はテキストだけを渡す。
 4. 本文と表セルの3文字以上連続する `.` と `・` を3文字へ縮める。コードブロックと表セル内インラインコードspanは保持する。
 5. JSON 各要素へ `translate_ja_v2` フィールドを追加する。
 6. 見出し・表タイトルは英日併記、本文は和訳のみで Markdown を作る。
@@ -102,7 +102,7 @@ Unit test は外部 API を fake client で mock し、normalization、structure
 Integration test は、少なくとも次を確認する。
 
 - `.env` を python-dotenv で読み込める。
-- Docling Serve から JSON と PNG が保存される。
+- Docling ServeからJSONと要素画像が保存され、PDFページPNGがpypdfium2でローカル生成される。
 - VLM 構造補正 prompt に page PNG を添付できる。
 - `.translated.json` に `translate_ja_v2` フィールドが残る。
 - Markdown は見出し・表タイトルを英日併記、本文を和訳のみにする。
