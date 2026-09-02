@@ -142,6 +142,8 @@ VLMには翻訳、要約、本文の創作を許可しない。返却patchは次
 - `swap_texts`
 - `set_table_cell_inline_code`
 
+APIにはJSON object形式と最大4,096出力tokensを指定する。HTTP成功でも空本文を返した場合や、本文が不完全なJSONでparseできない場合は、一時的な生成失敗としてAPI呼び出しから指数backoffで再試行する。
+
 コード片を連結するときは改行で結び、labelを `code` にする。削除されたtextに対するDocling参照は連結先へ更新し、残るtextのindexと参照を再整合する。表セルの `code_spans` はセル原文に完全一致する文字列だけを受理し、`structure_ja_v2.inline_code_spans` に保存する。
 
 ### Context上限時のfallback

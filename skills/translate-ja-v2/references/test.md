@@ -49,6 +49,7 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - Cleanによる `.` と `・` の圧縮とコード保護
 - 翻訳対象、保護対象、見出し/本文/表の描画規則
 - 用語集、翻訳ルール、意味ブロック、batch分割
+- StructureのJSON出力指定、4,096 tokens上限、空応答・不完全JSONのrequest retry
 - 翻訳応答IDの完全一致、空応答、部分応答、retry
 - Reviewの近接文脈、修正反映、空応答時の原訳保持
 - Markdown renderer

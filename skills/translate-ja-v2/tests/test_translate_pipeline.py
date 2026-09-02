@@ -47,6 +47,7 @@ from translate import (  # noqa: E402
     read_json,
     read_glossary_csv,
     read_translation_rules,
+    request_structure_patches,
     render_pdf_page_images,
     render_markdown,
     review_batch,
@@ -56,6 +57,7 @@ from translate import (  # noqa: E402
     stage_is_resumable,
     record_stage_completion,
     structure_document,
+    structure_page_with_vlm,
     StructureStage,
     translate_document,
     translate_batch,
@@ -1065,6 +1067,52 @@ def test_chat_text_reports_empty_content() -> None:
         chat_text(client, settings, [{"role": "user", "content": "hello"}])
 
 
+def test_structure_request_retries_invalid_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structureは空応答と不完全JSONをAPI request単位で再試行する。"""
+
+    class InvalidThenSuccessCompletions:
+        """空本文、不完全JSON、正常JSONを順に返すfake completions。"""
+
+        def __init__(self) -> None:
+            """呼び出し回数を初期化する。"""
+
+            self.calls = 0
+
+        def create(self, **_kwargs):  # noqa: ANN001, ANN202
+            """呼出回数に応じてStructure生成結果を返す。"""
+
+            self.calls += 1
+            responses = ["", '{"patches":[', '{"patches":[]}']
+            return _completion(responses[self.calls - 1])
+
+    completions = InvalidThenSuccessCompletions()
+    client = type(
+        "InvalidThenSuccessClient",
+        (),
+        {"chat": type("Chat", (), {"completions": completions})()},
+    )()
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+    delays: list[float] = []
+    monkeypatch.setattr("translate.time.sleep", delays.append)
+
+    result = request_structure_patches(
+        client,
+        settings,
+        [{"role": "user", "content": "hello"}],
+    )
+
+    assert result == []
+    assert completions.calls == 3
+    assert delays == [5.0, 10.0]
+
+
 def test_translate_batch_splits_after_empty_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1486,6 +1534,58 @@ def test_structure_messages_include_table_cells_for_inline_code_detection() -> N
     assert "#/tables/0/data/grid/0/0" in content
     assert "Run api.call() now" in content
     assert "set_table_cell_inline_code" in content
+
+
+def test_structure_request_uses_bounded_json_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """StructureはJSON形式と出力上限をAPIへ指定する。"""
+
+    options: dict[str, Any] = {}
+
+    def fake_chat(
+        _client: object,
+        _settings: OpenAISettings,
+        _messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        """Structureがchat_textへ渡したoptionを記録する。"""
+
+        options.update(kwargs)
+        return '{"patches":[]}'
+
+    monkeypatch.setattr("translate.chat_text", fake_chat)
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+    data = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "paragraph",
+                "text": "Body",
+                "prov": [{"page_no": 1}],
+            }
+        ]
+    }
+
+    result, applied = structure_page_with_vlm(
+        data,
+        1,
+        object(),
+        settings,
+        None,
+    )
+
+    assert result == data
+    assert applied == []
+    assert options == {
+        "json_response": True,
+        "max_tokens": OPENAI_MAX_OUTPUT_TOKENS,
+    }
 
 
 def test_build_structure_messages_attaches_docling_page_png(tmp_path: Path) -> None:

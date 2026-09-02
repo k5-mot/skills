@@ -85,9 +85,9 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 | OpenAI最大試行回数 | 6 |
 | OpenAI retry初期待ち | 5秒 |
 | OpenAI retry最大待ち | 60秒 |
-| OpenAI最大出力 | 4,096 tokens |
+| OpenAI最大出力 | 4,096 tokens（Structure、Translate、Review） |
 
-HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。OpenAI SDK自体の自動retryは0にする。
+HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。Structureでは一時的な空応答と不完全JSONをAPI呼び出しからretryする。Translateは空応答を同じbatchのまま再送せず要素境界で分割し、Reviewは元の訳文を保持する。OpenAI SDK自体の自動retryは0にする。
 
 ## 7. Docling変換契約
 

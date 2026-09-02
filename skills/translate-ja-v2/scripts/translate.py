@@ -2372,6 +2372,58 @@ def parse_structure_response(response: str) -> list[dict[str, Any]]:
     return [patch for patch in patches if isinstance(patch, dict)]
 
 
+def request_structure_patches(
+    client: Any,
+    settings: OpenAISettings,
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Structure APIを呼び、検証済みpatchを一時的な生成不全時に再試行する。
+
+    Args:
+        client: OpenAI client。
+        settings: OpenAI settings。
+        messages: Structure用Chat messages。
+
+    Returns:
+        JSONとしてparseできたStructure patch配列。
+
+    Raises:
+        OpenAIEmptyResponseError: 最大試行後も本文が空の場合。
+        ValueError: 最大試行後もStructure JSONが不正な場合。
+
+    Side Effects:
+        OpenAI互換APIを呼び、一時的な生成不全時に指数backoffで待機する。
+    """
+
+    for attempt in range(1, OPENAI_MAX_ATTEMPTS + 1):
+        try:
+            response = chat_text(
+                client,
+                settings,
+                messages,
+                json_response=True,
+                max_tokens=OPENAI_MAX_OUTPUT_TOKENS,
+            )
+            return parse_structure_response(response)
+        except (OpenAIEmptyResponseError, ValueError) as exc:
+            if attempt >= OPENAI_MAX_ATTEMPTS:
+                raise
+            delay = min(
+                OPENAI_RETRY_MAX_SECONDS,
+                OPENAI_RETRY_INITIAL_SECONDS * (2 ** (attempt - 1)),
+            )
+            LOGGER.warning(
+                "Retrying Structure generation attempt=%s max_attempts=%s "
+                "delay=%.1f error=%s",
+                attempt,
+                OPENAI_MAX_ATTEMPTS,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+    raise RuntimeError("Structure generation attempts exhausted")
+
+
 def structure_page_with_vlm(
     data: dict[str, Any],
     page_no: int | None,
@@ -2399,8 +2451,8 @@ def structure_page_with_vlm(
     image_path = page_image_path(data, artifacts_dir, page_no)
     messages = build_page_structure_messages(page_no, units, image_path, table_cells)
     if message_text_chars(messages) <= settings.context_chars:
-        response = chat_text(client, settings, messages)
-        return apply_structure_patches(data, parse_structure_response(response))
+        patches = request_structure_patches(client, settings, messages)
+        return apply_structure_patches(data, patches)
     LOGGER.debug(
         "Falling back to pairwise structure page=%s units=%s", page_no, len(units)
     )
@@ -2452,10 +2504,8 @@ def structure_table_cells_with_vlm(
                 "table cell structure request exceeds OpenAI context limit"
             )
         messages = build_page_structure_messages(page_no, [], image_path, chunk)
-        response = chat_text(client, settings, messages)
-        current, chunk_applied = apply_structure_patches(
-            current, parse_structure_response(response)
-        )
+        patches = request_structure_patches(client, settings, messages)
+        current, chunk_applied = apply_structure_patches(current, patches)
         applied.extend(chunk_applied)
         remaining = remaining[len(chunk) :]
     return current, applied
@@ -2492,9 +2542,8 @@ def structure_page_pairwise(
         )
         if message_text_chars(messages) > settings.context_chars:
             raise ValueError("merge comparison exceeds OpenAI context limit")
-        current, merge_applied = apply_structure_patches(
-            current, parse_structure_response(chat_text(client, settings, messages))
-        )
+        patches = request_structure_patches(client, settings, messages)
+        current, merge_applied = apply_structure_patches(current, patches)
         successful_merge = any(
             patch.get("op") == "merge_texts" and patch.get("status") == "success"
             for patch in merge_applied
@@ -2513,9 +2562,8 @@ def structure_page_pairwise(
             )
             if message_text_chars(messages) > settings.context_chars:
                 raise ValueError("swap comparison exceeds OpenAI context limit")
-            current, swap_applied = apply_structure_patches(
-                current, parse_structure_response(chat_text(client, settings, messages))
-            )
+            patches = request_structure_patches(client, settings, messages)
+            current, swap_applied = apply_structure_patches(current, patches)
             applied.extend(swap_applied)
             right_index += 1
         left_index += 1
