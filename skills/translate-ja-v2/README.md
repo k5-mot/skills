@@ -33,6 +33,25 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
   --translation-rules ./skills/translate-ja-v2/examples/translation-rules.md
 ```
 
+### 引数
+
+| 引数 | 必須 | 既定値 | 説明 |
+| --- | --- | --- | --- |
+| `--input PATH` | はい | なし | 翻訳するPDFまたはWord文書を指定します。 |
+| `--output-dir PATH` | いいえ | `./outputs/<入力stem>` | 段階別JSON、Markdown、docx、artifacts、manifestの出力先を指定します。 |
+| `--output PATH` | いいえ | `<output-dir>/document.ja.docx` | 最終docxだけを別のパスへ出力します。 |
+| `--template PATH` | いいえ | なし | pandocへ渡すreference DOCX/DOTXを指定します。 |
+| `--glossary PATH` | いいえ | なし | `english,japanese,desc,genre,note` 列を持つUTF-8 CSV用語集を指定します。 |
+| `--translation-rules PATH` | いいえ | 組み込みルール | 翻訳とReviewへ渡すUTF-8のルール文書を指定します。 |
+| `--context-chars INTEGER` | いいえ | `50000` | 1回のOpenAI互換API requestへ含めるテキストの最大文字数を指定します。 |
+| `--batch-chars INTEGER` | いいえ | `1500` | Translateで1回のbatchへ詰める原文の最大文字数を指定します。 |
+| `--env PATH` | いいえ | `.env` | 読み込むdotenvファイルを指定します。既存の環境変数は上書きしません。 |
+| `--force` | いいえ | 無効 | 完了済みParse成果物があってもDocling変換から再実行します。 |
+| `--skip-vlm` | いいえ | 無効 | StructureのVLM補正だけを省略します。Normalizeは実行します。 |
+| `--skip-review` | いいえ | 無効 | 翻訳Reviewを省略し、Translate成果物からMarkdownを生成します。 |
+| `--skip-docx` | いいえ | 無効 | pandocによるdocx生成を省略し、JSONとMarkdownまで生成します。 |
+| `--help` | いいえ | なし | 利用可能な引数とhelpを表示して終了します。 |
+
 同じコマンドを再実行すると、`manifest.json` と成果物hashを検証して続きからResumeします。詳細は [workflow.md](references/workflow.md)、実装仕様は [spec.md](references/spec.md)、検証手順は [test.md](references/test.md)、DOTX仕様は [template-format.md](references/template-format.md) を参照してください。
 
 ## 👤 Author
