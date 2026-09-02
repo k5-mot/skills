@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+from threading import Barrier
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -1215,6 +1216,82 @@ def test_review_document_checks_neighbor_consistency(
     assert reviewed["texts"][0]["translate_ja_v2"]["render_text"] == "防衛省"
     assert "次の日本語訳: 防衛省" in prompt
     assert "日本語表記が揺れていないか" in prompt
+
+
+def test_review_document_runs_independent_elements_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """独立したレビュー要素を複数workerで同時に処理する。
+
+    Args:
+        monkeypatch: API依存を差し替えるpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    barrier = Barrier(2)
+
+    def fake_review_batch(
+        _client: object,
+        _settings: OpenAISettings,
+        items: list[dict[str, Any]],
+        *,
+        translation_rules: str,
+    ) -> dict[str, str]:
+        """2workerが同時に到達したことを確認して原訳を返す。
+
+        Args:
+            _client: このfakeでは使わないOpenAI client。
+            _settings: このfakeでは使わないAPI設定。
+            items: 単一のレビュー対象。
+            translation_rules: このfakeでは使わない翻訳ルール。
+
+        Returns:
+            対象IDから変更しない訳文への辞書。
+        """
+
+        del translation_rules
+        barrier.wait(timeout=1)
+        item = items[0]
+        return {str(item["id"]): str(item["translated_text"])}
+
+    monkeypatch.setattr(
+        "translate.require_openai_settings",
+        lambda *_args: OpenAISettings(
+            base_url="http://example.test",
+            api_key="test",
+            model="fake",
+            timeout_seconds=1,
+        ),
+    )
+    monkeypatch.setattr("translate.openai_client", lambda _settings: object())
+    monkeypatch.setattr("translate.review_batch", fake_review_batch)
+    document = {
+        "texts": [
+            {
+                "self_ref": f"#/texts/{index}",
+                "label": "paragraph",
+                "text": source,
+                "translate_ja_v2": {
+                    "kind": "body",
+                    "text_en": source,
+                    "text_ja": translated,
+                    "render_text": translated,
+                    "translated": True,
+                },
+            }
+            for index, (source, translated) in enumerate(
+                (("First", "最初"), ("Second", "次"))
+            )
+        ]
+    }
+
+    reviewed, changes = review_document(document)
+
+    assert changes == 0
+    assert reviewed["texts"][0]["translate_ja_v2"]["text_ja"] == "最初"
+    assert reviewed["texts"][1]["translate_ja_v2"]["text_ja"] == "次"
 
 
 def test_review_batch_uses_plain_text_without_structured_output(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
 import csv
 from difflib import SequenceMatcher
@@ -44,6 +45,7 @@ OPENAI_RETRY_MAX_SECONDS = 60.0
 OPENAI_CONTEXT_LIMIT_CHARS = 50000
 OPENAI_MAX_OUTPUT_TOKENS = 4096
 TRANSLATION_BATCH_MAX_CHARS = 1500
+REVIEW_MAX_WORKERS = 4
 PIPELINE_STAGES = (
     "parse",
     "normalize",
@@ -3370,20 +3372,31 @@ def review_document(
     completed = completed_ids if completed_ids is not None else set()
     changes = 0
     add_review_neighbors(targets)
-    for target in targets:
-        target_id = str(target["id"])
-        if target_id in completed:
-            continue
-        reviewed = review_batch(
-            client,
-            settings,
-            [target],
-            translation_rules=translation_rules,
-        )
-        changes += apply_review_results([target], reviewed)
-        completed.add(target_id)
-        if on_progress:
-            on_progress(result, [target_id])
+    pending_targets = [
+        target for target in targets if str(target["id"]) not in completed
+    ]
+    max_workers = min(REVIEW_MAX_WORKERS, len(pending_targets))
+    if max_workers == 0:
+        return result, 0
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                review_batch,
+                client,
+                settings,
+                [target],
+                translation_rules=translation_rules,
+            ): target
+            for target in pending_targets
+        }
+        for future in as_completed(futures):
+            target = futures[future]
+            target_id = str(target["id"])
+            reviewed = future.result()
+            changes += apply_review_results([target], reviewed)
+            completed.add(target_id)
+            if on_progress:
+                on_progress(result, [target_id])
     return result, changes
 
 
