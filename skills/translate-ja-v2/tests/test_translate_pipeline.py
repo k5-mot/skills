@@ -1167,7 +1167,15 @@ def test_review_document_checks_neighbor_consistency(
         **_kwargs: object,
     ) -> str:
         calls.append(messages)
-        return "防衛省"
+        items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
+        return json.dumps(
+            {
+                "reviews": [
+                    {"id": item["id"], "reviewed_text": "防衛省"} for item in items
+                ]
+            },
+            ensure_ascii=False,
+        )
 
     monkeypatch.setattr(
         "translate.require_openai_settings",
@@ -1215,7 +1223,7 @@ def test_review_document_checks_neighbor_consistency(
     assert changes == 1
     assert reviewed["texts"][0]["translate_ja_v2"]["text_ja"] == "防衛省"
     assert reviewed["texts"][0]["translate_ja_v2"]["render_text"] == "防衛省"
-    assert "次の日本語訳: 防衛省" in prompt
+    assert '"next_text_ja": "防衛省"' in prompt
     assert "日本語表記が揺れていないか" in prompt
 
 
@@ -1245,7 +1253,7 @@ def test_review_document_runs_independent_elements_concurrently(
         Args:
             _client: このfakeでは使わないOpenAI client。
             _settings: このfakeでは使わないAPI設定。
-            items: 単一のレビュー対象。
+            items: 極小バッチ上限で1件に分けたレビュー対象。
             translation_rules: このfakeでは使わない翻訳ルール。
 
         Returns:
@@ -1288,17 +1296,17 @@ def test_review_document_runs_independent_elements_concurrently(
         ]
     }
 
-    reviewed, changes = review_document(document)
+    reviewed, changes = review_document(document, batch_chars=1)
 
     assert changes == 0
     assert reviewed["texts"][0]["translate_ja_v2"]["text_ja"] == "最初"
     assert reviewed["texts"][1]["translate_ja_v2"]["text_ja"] == "次"
 
 
-def test_review_batch_uses_plain_text_without_structured_output(
+def test_review_batch_uses_single_json_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """レビュー工程は1要素ずつ通常テキスト応答を受け取る。"""
+    """複数のレビュー要素を1回のID付きJSON requestで処理する。"""
 
     calls: list[tuple[list[dict[str, Any]], dict[str, object]]] = []
 
@@ -1309,7 +1317,19 @@ def test_review_batch_uses_plain_text_without_structured_output(
         **kwargs: object,
     ) -> str:
         calls.append((messages, kwargs))
-        return "訳A" if "原文: A" in str(messages[-1]["content"]) else "訳B"
+        items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
+        return json.dumps(
+            {
+                "reviews": [
+                    {
+                        "id": item["id"],
+                        "reviewed_text": f"訳{item['source_text']}",
+                    }
+                    for item in items
+                ]
+            },
+            ensure_ascii=False,
+        )
 
     monkeypatch.setattr("translate.chat_text", fake_chat)
     settings = OpenAISettings(
@@ -1337,9 +1357,66 @@ def test_review_batch_uses_plain_text_without_structured_output(
             },
         ],
     ) == {"a": "訳A", "b": "訳B"}
-    assert len(calls) == 2
-    assert all("json_response" not in kwargs for _messages, kwargs in calls)
-    assert all("返却JSON" not in str(messages[-1]["content"]) for messages, _ in calls)
+    assert len(calls) == 1
+    assert calls[0][1]["json_response"] is True
+    assert "返却JSON" in str(calls[0][0][-1]["content"])
+
+
+def test_review_batch_splits_invalid_multi_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """複数要素のReview応答が不正なら要素境界で二分する。
+
+    Args:
+        monkeypatch: API応答を差し替えるpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    sizes: list[int] = []
+
+    def fake_chat(
+        _client: object,
+        _settings: OpenAISettings,
+        messages: list[dict[str, Any]],
+        **_kwargs: object,
+    ) -> str:
+        """複数要素では不正、単一要素では正常なJSONを返す。
+
+        Args:
+            _client: fakeでは未使用のclient。
+            _settings: fakeでは未使用の設定。
+            messages: Review入力JSONを含むmessages。
+            **_kwargs: fakeでは未使用の追加引数。
+
+        Returns:
+            Review応答文字列。
+        """
+
+        items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
+        sizes.append(len(items))
+        if len(items) > 1:
+            return "{}"
+        return json.dumps(
+            {"reviews": [{"id": items[0]["id"], "reviewed_text": "訳文"}]},
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("translate.chat_text", fake_chat)
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+    items = [
+        {"id": "a", "source_text": "A", "translated_text": "元訳A", "kind": "本文"},
+        {"id": "b", "source_text": "B", "translated_text": "元訳B", "kind": "本文"},
+    ]
+
+    assert review_batch(object(), settings, items) == {"a": "訳文", "b": "訳文"}
+    assert sizes == [2, 1, 1]
 
 
 @pytest.mark.parametrize(
@@ -2433,7 +2510,8 @@ def test_review_stage_resumes_from_completed_element(
         return {item_id: f"新{item_id[-1]}"}
 
     monkeypatch.setattr("translate.review_batch", fake_review_batch)
-    stage = ReviewStage(paths=paths)
+    monkeypatch.setattr("translate.REVIEW_MAX_WORKERS", 1)
+    stage = ReviewStage(paths=paths, batch_chars=1)
 
     with pytest.raises(RuntimeError, match="interrupted"):
         stage.run(document)
@@ -2559,6 +2637,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         data: dict[str, object],
         translation_rules: str = "",
         context_chars: int = 0,
+        batch_chars: int = 0,
         resume_data: dict[str, object] | None = None,
         completed_ids: set[str] | None = None,
         on_progress: object | None = None,
@@ -2569,6 +2648,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             data: レビュー対象JSON。
             translation_rules: fakeでは未使用の翻訳ルール。
             context_chars: fakeで記録するcontext上限。
+            batch_chars: fakeで記録するbatch上限。
             resume_data: fakeでは未使用の部分成果物。
             completed_ids: fakeでは未使用の完了ID。
             on_progress: fakeでは未使用のcallback。
@@ -2580,6 +2660,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         _ = (translation_rules, resume_data, completed_ids, on_progress)
         stage_calls["review"] += 1
         limits["review_context_chars"] = context_chars
+        limits["review_batch_chars"] = batch_chars
         return data, 0
 
     monkeypatch.setattr("translate.convert_with_docling", fake_docling)
@@ -2622,6 +2703,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         "context_chars": 32000,
         "batch_chars": 800,
         "review_context_chars": 32000,
+        "review_batch_chars": 800,
     }
     run_pipeline(
         PipelineOptions(

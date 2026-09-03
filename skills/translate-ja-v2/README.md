@@ -44,7 +44,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
 | `--glossary PATH` | いいえ | なし | `english,japanese,desc,genre,note` 列を持つUTF-8 CSV用語集を指定します。 |
 | `--translation-rules PATH` | いいえ | 組み込みルール | 翻訳とReviewへ渡すUTF-8のルール文書を指定します。 |
 | `--context-chars INTEGER` | いいえ | `50000` | 1回のOpenAI互換API requestへ含めるテキストの最大文字数を指定します。 |
-| `--batch-chars INTEGER` | いいえ | `1500` | Translateで1回のbatchへ詰める原文の最大文字数を指定します。 |
+| `--batch-chars INTEGER` | いいえ | `1500` | TranslateとReviewで1回のbatchへ詰める原文・訳文の最大文字数を指定します。 |
 | `--env PATH` | いいえ | `.env` | 読み込むdotenvファイルを指定します。既存の環境変数は上書きしません。 |
 | `--force` | いいえ | 無効 | 完了済みParse成果物があってもDocling変換から再実行します。 |
 | `--skip-vlm` | いいえ | 無効 | StructureのVLM補正だけを省略します。Normalizeは実行します。 |

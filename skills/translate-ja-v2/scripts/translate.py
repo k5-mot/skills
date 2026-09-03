@@ -209,7 +209,7 @@ class PipelineOptions(FrozenModel):
         glossary: CSV 用語集のパス。
         translation_rules: 翻訳ルール Markdown のパス。
         context_chars: OpenAI request の最大テキスト文字数。
-        batch_chars: 翻訳バッチの最大原文文字数。
+        batch_chars: 翻訳・Reviewバッチの最大原文・訳文文字数。
 
     Returns:
         パイプライン実行に必要な CLI オプション。
@@ -3359,6 +3359,7 @@ def review_document(
     data: dict[str, Any],
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
     context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS,
+    batch_chars: int = TRANSLATION_BATCH_MAX_CHARS,
     resume_data: dict[str, Any] | None = None,
     completed_ids: set[str] | None = None,
     on_progress: Callable[[dict[str, Any], list[str]], None] | None = None,
@@ -3369,6 +3370,7 @@ def review_document(
         data: 翻訳 metadata 付き Docling JSON。
         translation_rules: LLM に渡す翻訳ルール。
         context_chars: OpenAI request の最大テキスト文字数。
+        batch_chars: 1バッチに含める原文と訳文の最大文字数。
         resume_data: 前回checkpointの部分成果物。
         completed_ids: checkpointで完了済みのレビュー対象ID。
         on_progress: 要素完了時に部分成果物とID配列を通知するcallback。
@@ -3389,7 +3391,8 @@ def review_document(
     pending_targets = [
         target for target in targets if str(target["id"]) not in completed
     ]
-    max_workers = min(REVIEW_MAX_WORKERS, len(pending_targets))
+    batches = pack_translation_blocks([pending_targets], max_chars=batch_chars)
+    max_workers = min(REVIEW_MAX_WORKERS, len(batches))
     if max_workers == 0:
         return result, 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -3398,19 +3401,19 @@ def review_document(
                 review_batch,
                 client,
                 settings,
-                [target],
+                batch,
                 translation_rules=translation_rules,
-            ): target
-            for target in pending_targets
+            ): batch
+            for batch in batches
         }
         for future in as_completed(futures):
-            target = futures[future]
-            target_id = str(target["id"])
+            batch = futures[future]
             reviewed = future.result()
-            changes += apply_review_results([target], reviewed)
-            completed.add(target_id)
+            changes += apply_review_results(batch, reviewed)
+            completed_ids_in_batch = [str(target["id"]) for target in batch]
+            completed.update(completed_ids_in_batch)
             if on_progress:
-                on_progress(result, [target_id])
+                on_progress(result, completed_ids_in_batch)
     return result, changes
 
 
@@ -3597,7 +3600,7 @@ def review_batch(
     *,
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
 ) -> dict[str, str]:
-    """翻訳済み要素を通常テキスト応答で1件ずつレビューする。
+    """翻訳済み要素をID付きJSON応答で一括レビューする。
 
     Args:
         client: OpenAI client。
@@ -3618,14 +3621,65 @@ def review_batch(
     if len(expected_ids) != len(set(expected_ids)):
         raise ValueError("review batch contains duplicate ids")
 
+    request_items = [
+        {
+            "id": str(item["id"]),
+            "kind": str(item["kind"]),
+            "context": str(item.get("context") or ""),
+            "glossary_terms": item.get("glossary_terms") or [],
+            "inline_code_spans": item.get("inline_code_spans") or [],
+            "previous_text_ja": str(item.get("previous_text_ja") or ""),
+            "source_text": str(item["source_text"]),
+            "translated_text": str(item["translated_text"]),
+            "next_text_ja": str(item.get("next_text_ja") or ""),
+        }
+        for item in items
+    ]
+
+    def split_or_keep_original(error: Exception) -> dict[str, str]:
+        """不正なバッチを二分し、単一要素なら原訳を返す。
+
+        Args:
+            error: バッチを採用できない理由。
+
+        Returns:
+            入力IDから再Review結果または原訳への辞書。
+        """
+
+        if len(items) == 1:
+            item = items[0]
+            LOGGER.warning(
+                "Keeping original translation after invalid review response "
+                "id=%s error=%s",
+                item["id"],
+                error,
+            )
+            return {str(item["id"]): str(item["translated_text"])}
+        middle = len(items) // 2
+        LOGGER.warning(
+            "Splitting invalid review batch items=%s error=%s", len(items), error
+        )
+        return {
+            **review_batch(
+                client,
+                settings,
+                items[:middle],
+                translation_rules=translation_rules,
+            ),
+            **review_batch(
+                client,
+                settings,
+                items[middle:],
+                translation_rules=translation_rules,
+            ),
+        }
+
     system = (
         "あなたは専門文書の日英翻訳レビュー担当者です。"
         "原文にない説明、要約、事実追加は禁止です。"
-        "レビュー後の日本語訳以外は出力しません。"
+        "入力IDを変更せずJSONだけを返してください。"
     )
-    result: dict[str, str] = {}
-    for item in items:
-        user = f"""次の翻訳済み要素をレビューし、必要な場合だけ日本語訳を修正してください。
+    user = f"""次の翻訳済み要素をレビューし、必要な場合だけ日本語訳を修正してください。
 
 レビュー観点:
 - 原文の意味、数量、否定、固有名詞が保たれているか。
@@ -3636,45 +3690,84 @@ def review_batch(
 翻訳ルール:
 {translation_rules.strip()}
 
-種類: {item["kind"]}
-文脈: {item.get("context") or "（なし）"}
-用語集の該当語: {", ".join(item.get("glossary_terms") or []) or "（なし）"}
-変更禁止のインラインコード: {", ".join(item.get("inline_code_spans") or []) or "（なし）"}
-前の日本語訳: {item.get("previous_text_ja") or "（なし）"}
-原文: {item["source_text"]}
-現在の日本語訳: {item["translated_text"]}
-次の日本語訳: {item.get("next_text_ja") or "（なし）"}
+返却JSON:
+{{"reviews":[{{"id":"入力と同じID","reviewed_text":"レビュー後の日本語訳"}}]}}
 
-出力はレビュー後の日本語訳だけにしてください。修正不要なら現在の日本語訳だけをそのまま返してください。
+IDの追加、削除、変更、重複は禁止です。修正不要ならtranslated_textをそのまま返してください。
+
+入力JSON:
+{json.dumps(request_items, ensure_ascii=False)}
 """
+    try:
+        response = chat_text(
+            client,
+            settings,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            json_response=True,
+            max_tokens=OPENAI_MAX_OUTPUT_TOKENS,
+        )
+    except OpenAIEmptyResponseError as exc:
+        return split_or_keep_original(exc)
+    try:
         try:
-            reviewed_text = chat_text(
-                client,
-                settings,
-                [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=OPENAI_MAX_OUTPUT_TOKENS,
+            payload = json.loads(response)
+        except json.JSONDecodeError:
+            payload = parse_json_object(response)
+    except ValueError as exc:
+        return split_or_keep_original(exc)
+    if isinstance(payload, list):
+        reviews = payload
+    elif isinstance(payload, dict):
+        reviews = payload.get("reviews")
+        if {"id", "reviewed_text"} <= payload.keys():
+            reviews = [payload]
+    else:
+        return split_or_keep_original(ValueError("review response must be an object"))
+    if not isinstance(reviews, list):
+        return split_or_keep_original(
+            ValueError("review response must contain reviews list")
+        )
+    result: dict[str, str] = {}
+    for entry in reviews:
+        if not isinstance(entry, dict):
+            return split_or_keep_original(ValueError("review entry must be an object"))
+        item_id = entry.get("id")
+        reviewed_text = entry.get("reviewed_text")
+        if (
+            not isinstance(item_id, str)
+            or not isinstance(reviewed_text, str)
+            or not reviewed_text.strip()
+        ):
+            return split_or_keep_original(
+                ValueError("review entry must contain string id and text")
             )
-            if not reviewed_text:
-                raise OpenAIEmptyResponseError("OpenAI response content is empty")
-            rejection_reason = review_rejection_reason(item, reviewed_text)
-            if rejection_reason:
-                LOGGER.warning(
-                    "Keeping original translation after invalid review id=%s error=%s",
-                    item["id"],
-                    rejection_reason,
-                )
-                reviewed_text = str(item["translated_text"])
-        except OpenAIEmptyResponseError as exc:
+        if item_id in result:
+            return split_or_keep_original(
+                ValueError(f"review response contains duplicate id: {item_id}")
+            )
+        result[item_id] = reviewed_text
+    if set(result) != set(expected_ids):
+        missing = sorted(set(expected_ids) - set(result))
+        unknown = sorted(set(result) - set(expected_ids))
+        return split_or_keep_original(
+            ValueError(
+                f"review response ids do not match missing={missing} unknown={unknown}"
+            )
+        )
+    items_by_id = {str(item["id"]): item for item in items}
+    for item_id, reviewed_text in result.items():
+        item = items_by_id[item_id]
+        rejection_reason = review_rejection_reason(item, reviewed_text)
+        if rejection_reason:
             LOGGER.warning(
-                "Keeping original translation after empty review id=%s error=%s",
-                item["id"],
-                exc,
+                "Keeping original translation after invalid review id=%s error=%s",
+                item_id,
+                rejection_reason,
             )
-            reviewed_text = str(item["translated_text"])
-        result[str(item["id"])] = reviewed_text
+            result[item_id] = str(item["translated_text"])
     LOGGER.debug("Reviewed batch items=%s", len(items))
     return result
 
@@ -4762,6 +4855,7 @@ class ReviewStage(FrozenModel):
     paths: StagePaths
     translation_rules_path: Path | None = None
     context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS
+    batch_chars: int = TRANSLATION_BATCH_MAX_CHARS
 
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
         """レビュー済み文書を返す。"""
@@ -4770,9 +4864,10 @@ class ReviewStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 2,
+                "version": 3,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
+                "batch_chars": self.batch_chars,
                 "translation_rules": translation_rules,
             }
         )
@@ -4835,6 +4930,7 @@ class ReviewStage(FrozenModel):
             document,
             translation_rules=translation_rules,
             context_chars=self.context_chars,
+            batch_chars=self.batch_chars,
             resume_data=resume_data,
             completed_ids=completed_ids,
             on_progress=save_progress,
@@ -4994,6 +5090,7 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
             paths=paths,
             translation_rules_path=args.translation_rules,
             context_chars=args.context_chars,
+            batch_chars=args.batch_chars,
         ).run(translated)
     markdown_path = RenderStage(paths=paths).run(render_source)
     if not args.skip_docx:
@@ -5045,7 +5142,10 @@ def cli(
     ] = OPENAI_CONTEXT_LIMIT_CHARS,
     batch_chars: Annotated[
         int,
-        typer.Option(min=1, help="maximum source characters per translation batch"),
+        typer.Option(
+            min=1,
+            help="maximum source and translation characters per LLM batch",
+        ),
     ] = TRANSLATION_BATCH_MAX_CHARS,
 ) -> None:
     """CLI から translate-ja-v2 パイプラインを実行する。
@@ -5063,7 +5163,7 @@ def cli(
         glossary: CSV 用語集のパス。
         translation_rules: 翻訳ルール本文ファイルのパス。
         context_chars: OpenAI request の最大テキスト文字数。
-        batch_chars: 翻訳バッチの最大原文文字数。
+        batch_chars: 翻訳・Reviewバッチの最大原文・訳文文字数。
 
     Returns:
         なし。
