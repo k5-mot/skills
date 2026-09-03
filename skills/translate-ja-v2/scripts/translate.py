@@ -3199,7 +3199,10 @@ def build_translation_messages(
 返却JSON:
 {{"translations":[{{"id":"入力と同じID","translated_text":"日本語訳"}}]}}
 
-context_idは共有文脈の参照です。用語集はenglishが原文に一致する場合だけ適用してください。IDの追加、削除、変更、重複は禁止です。
+入力件数: {len(request_items)}
+返却必須ID JSON: {json.dumps([item["id"] for item in request_items], ensure_ascii=False)}
+
+context_idは共有文脈の参照です。用語集はenglishが原文に一致する場合だけ適用してください。translationsには必須IDを各1回含め、入力件数と同じ件数を返してください。IDの追加、削除、変更、重複は禁止です。
 
 入力JSON:
 {json.dumps(request_items, ensure_ascii=False)}
@@ -4155,7 +4158,10 @@ def build_review_messages(
 返却JSON:
 {{"reviews":[{{"id":"入力と同じID","reviewed_text":"レビュー後の日本語訳"}}]}}
 
-入力順を文書順として参照してください。IDの追加、削除、変更、重複は禁止です。修正不要ならtranslated_textをそのまま返してください。
+入力件数: {len(request_items)}
+返却必須ID JSON: {json.dumps([item["id"] for item in request_items], ensure_ascii=False)}
+
+入力順を文書順として参照してください。reviewsには必須IDを各1回含め、入力件数と同じ件数を返してください。IDの追加、削除、変更、重複は禁止です。修正不要ならtranslated_textをそのまま返してください。
 
 入力JSON:
 {json.dumps(request_items, ensure_ascii=False)}
@@ -5296,7 +5302,7 @@ class TranslateStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 8,
+                "version": 9,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,
@@ -5397,7 +5403,7 @@ class ReviewStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 6,
+                "version": 7,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,

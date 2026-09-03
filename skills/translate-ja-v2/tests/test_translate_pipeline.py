@@ -800,6 +800,8 @@ def test_translation_messages_deduplicate_shared_context_and_glossary() -> None:
     assert prompt.count('"english": "force"') == 1
     assert prompt.count('"context_id": "c1"') == 2
     assert "inline_code_spans" not in prompt
+    assert "入力件数: 2" in prompt
+    assert '返却必須ID JSON: ["1", "2"]' in prompt
 
 
 def test_fit_batches_to_context_measures_complete_messages() -> None:
@@ -929,6 +931,8 @@ def test_review_messages_only_send_required_fields() -> None:
     assert "next_text_ja" not in prompt
     assert "glossary_terms" not in prompt
     assert "Section" not in prompt
+    assert "入力件数: 1" in prompt
+    assert '返却必須ID JSON: ["1"]' in prompt
 
 
 def test_translate_document_batches_text_section_and_table(
