@@ -47,7 +47,7 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - page image URIの安全な解決と、無関係なPNGへfallbackしないこと
 - context上限時の隣接コードだけのpairwise fallback
 - Cleanによる `.` と `・` の圧縮とコード保護
-- 翻訳対象、コード・ページ装飾の保護、見出し/本文/表の描画規則
+- 翻訳対象、コード・ページ装飾・記号の保護、見出し/本文/表の描画規則
 - 用語集、翻訳ルール、意味ブロック、共有context・用語集の重複排除、batch分割
 - StructureのJSON出力指定、4,096 tokens上限、空応答・不完全JSONのrequest retry
 - 完成したTranslate・Review messagesによるcontext上限分割、推定応答JSONと最大20要素による出力上限分割

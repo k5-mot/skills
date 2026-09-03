@@ -1259,6 +1259,30 @@ def test_translate_text_item_preserves_page_decorations(label: str) -> None:
     }
 
 
+def test_translate_text_item_preserves_symbol_only_text() -> None:
+    """記号だけの要素はLLMへ送らず原文を保持する。
+
+    Returns:
+        なし。
+    """
+
+    item = {"label": "paragraph", "text": "•"}
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+
+    translate_text_item(item, object(), settings)
+
+    assert item["translate_ja_v2"] == {
+        "kind": "symbol",
+        "render_text": "•",
+        "translated": False,
+    }
+
+
 def test_translate_batch_splits_partial_single_entry_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

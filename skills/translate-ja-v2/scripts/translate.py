@@ -1612,6 +1612,20 @@ def is_page_decoration(item: dict[str, Any]) -> bool:
     return label_of(item) in {"page_header", "page_footer"}
 
 
+def is_symbol_only(text: str) -> bool:
+    """文字や数字を含まない記号だけの文字列か判定する。
+
+    Args:
+        text: 判定対象文字列。
+
+    Returns:
+        空白以外があり英数字を含まない場合はTrue。
+    """
+
+    stripped = text.strip()
+    return bool(stripped) and not any(character.isalnum() for character in stripped)
+
+
 def heading_level(item: dict[str, Any]) -> int:
     """Docling item から見出しレベルを推定する。
 
@@ -3460,6 +3474,13 @@ def translate_text_items(
                 )
                 immediate_completed.append(ref)
             continue
+        if is_symbol_only(text):
+            if ref not in completed:
+                item.setdefault("translate_ja_v2", {}).update(
+                    {"kind": "symbol", "render_text": text, "translated": False}
+                )
+                immediate_completed.append(ref)
+            continue
         if is_code(item):
             if ref not in completed:
                 item.setdefault("translate_ja_v2", {}).update(
@@ -3663,6 +3684,9 @@ def translate_text_item(
     if is_page_decoration(item):
         meta.update({"kind": "decoration", "render_text": text, "translated": False})
         return
+    if is_symbol_only(text):
+        meta.update({"kind": "symbol", "render_text": text, "translated": False})
+        return
     if is_code(item):
         meta.update({"kind": "code", "render_text": text, "translated": False})
         return
@@ -3763,6 +3787,17 @@ def translate_table_item(
         source = str(cell.get("text") or cell.get("content") or "").strip()
         cell_meta = cell.setdefault("translate_ja_v2", {})
         if not source:
+            immediate_completed.append(cell_ref)
+            continue
+        if is_symbol_only(source):
+            cell_meta.update(
+                {
+                    "kind": "symbol",
+                    "text_en": source,
+                    "render_text": source,
+                    "translated": False,
+                }
+            )
             immediate_completed.append(cell_ref)
             continue
         code_spans = inline_code_spans(cell)
@@ -5261,7 +5296,7 @@ class TranslateStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 7,
+                "version": 8,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,
