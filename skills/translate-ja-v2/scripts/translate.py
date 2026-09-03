@@ -35,6 +35,20 @@ LOGGER = logging.getLogger("translate-ja-v2")
 HEADING_LABELS = {"title", "section_header", "heading", "header"}
 CODE_LABELS = {"code", "program_listing"}
 URL_RE = re.compile(r"https?://[^\s)>\"]+")
+JAPANESE_TEXT_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+REVIEW_META_CONTEXT_MARKERS = (
+    "レビュー対象",
+    "翻訳対象",
+    "現在の日本語訳",
+    "前の日本語訳",
+    "次の日本語訳",
+)
+REVIEW_META_FAILURE_MARKERS = (
+    "入力内容が不足",
+    "入力されていません",
+    "提供されていません",
+    "ご提示ください",
+)
 LOG_LEVEL = "DEBUG"
 DOCLING_TIMEOUT_SECONDS = 21600
 PAGE_IMAGE_SCALE = 1.0
@@ -3545,8 +3559,20 @@ def review_rejection_reason(item: dict[str, Any], reviewed_text: str) -> str | N
 
     current = str(item["translated_text"]).strip()
     reviewed = reviewed_text.strip()
+    introduced_meta_context = any(
+        marker in reviewed and marker not in current
+        for marker in REVIEW_META_CONTEXT_MARKERS
+    )
+    if introduced_meta_context and any(
+        marker in reviewed for marker in REVIEW_META_FAILURE_MARKERS
+    ):
+        return "review response is a meta-level request for missing input"
+    if JAPANESE_TEXT_RE.search(current) and not JAPANESE_TEXT_RE.search(reviewed):
+        return "review response removes all Japanese text"
     if len(reviewed) > max(200, len(current) * 1.5):
         return "review response is disproportionately longer than current translation"
+    if len(current) >= 100 and len(reviewed) < len(current) * 0.6:
+        return "review response is disproportionately shorter than current translation"
     source = str(item["source_text"]).strip()
     for position in ("previous", "next"):
         neighbor_source = str(item.get(f"{position}_source_text") or "").strip()

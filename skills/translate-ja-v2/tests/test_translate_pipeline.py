@@ -1347,13 +1347,18 @@ def test_review_batch_uses_plain_text_without_structured_output(
     [
         ("隣接要素の訳文", "matches next element"),
         ("あ" * 201, "disproportionately longer"),
+        (
+            "レビュー対象の原文と現在の日本語訳をご提示ください。",
+            "meta-level request",
+        ),
+        ("Target translation", "removes all Japanese text"),
     ],
 )
-def test_review_rejects_neighbor_copy_and_disproportionate_length(
+def test_review_rejects_invalid_response(
     reviewed_text: str,
     reason: str,
 ) -> None:
-    """隣接訳の誤コピーと異常に長い応答を採用しない。
+    """誤コピー、異常長、メタ応答、英語への退行を採用しない。
 
     Args:
         reviewed_text: 検証対象のレビュー応答。
@@ -1375,6 +1380,12 @@ def test_review_rejects_neighbor_copy_and_disproportionate_length(
         review_rejection_reason(
             {**item, "translated_text": "い" * 150},
             "あ" * 226,
+        )
+    )
+    assert "disproportionately shorter" in str(
+        review_rejection_reason(
+            {**item, "translated_text": "い" * 100},
+            "短すぎる訳文。",
         )
     )
 
