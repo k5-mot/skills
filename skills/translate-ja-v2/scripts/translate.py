@@ -73,6 +73,7 @@ OPENAI_CONTEXT_LIMIT_CHARS = 50000
 OPENAI_MAX_OUTPUT_TOKENS = 4096
 OPENAI_BATCH_MAX_OUTPUT_TOKENS = 16384
 OPENAI_SAFE_OUTPUT_CHARS = 12000
+OPENAI_BATCH_MAX_ITEMS = 20
 TRANSLATION_BATCH_MAX_CHARS = 1500
 REVIEW_MAX_WORKERS = 4
 PIPELINE_STAGES = (
@@ -3090,18 +3091,23 @@ def fit_batches_to_output(
     batches: list[list[dict[str, Any]]],
     estimate_chars: Callable[[list[dict[str, Any]]], int],
 ) -> list[list[dict[str, Any]]]:
-    """推定応答JSONが安全な出力文字数内になるようバッチを分割する。
+    """項目数と推定応答JSONが安全上限内になるようバッチを分割する。
 
     Args:
         batches: 入力順を保ったLLMバッチ。
         estimate_chars: 候補バッチの推定応答文字数を返す関数。
 
     Returns:
-        推定応答が安全上限内となるバッチ配列。
+        項目数と推定応答が安全上限内となるバッチ配列。
     """
 
+    item_fitted_batches = [
+        batch[start : start + OPENAI_BATCH_MAX_ITEMS]
+        for batch in batches
+        for start in range(0, len(batch), OPENAI_BATCH_MAX_ITEMS)
+    ]
     return fit_batches_to_char_limit(
-        batches,
+        item_fitted_batches,
         OPENAI_SAFE_OUTPUT_CHARS,
         estimate_chars,
         "output",
@@ -5215,7 +5221,7 @@ class TranslateStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 5,
+                "version": 6,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,
@@ -5316,7 +5322,7 @@ class ReviewStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 5,
+                "version": 6,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,

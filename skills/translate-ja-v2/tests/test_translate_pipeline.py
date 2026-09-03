@@ -881,6 +881,20 @@ def test_fit_batches_to_output_measures_estimated_response(
     assert all(estimate_chars(batch) <= 12000 for batch in batches)
 
 
+def test_fit_batches_to_output_limits_item_count() -> None:
+    """短い要素でも1バッチを20要素以内へ事前分割する。
+
+    Returns:
+        なし。
+    """
+
+    items = [{"id": str(index), "text": "a"} for index in range(41)]
+
+    batches = fit_batches_to_output([items], estimated_translation_response_chars)
+
+    assert [len(batch) for batch in batches] == [20, 20, 1]
+
+
 def test_review_messages_only_send_required_fields() -> None:
     """Review promptは原文・訳文・IDと非空inline codeだけを送る。
 
