@@ -149,7 +149,7 @@ PDFページ画像は `artifacts/page_<6桁page>.png` とし、JSONのURIはJSON
 
 ### Translateの境界
 
-Docling原文と構造を変えず、`translate_ja_v2` metadataだけを追加する。同一contextと用語集はバッチ上部へ集約し、空fieldは送らない。APIではバッチ内連番IDを使い、応答後に元refへ戻す。完成messagesを `context-chars` 以内へ分割し、API応答のID集合は入力連番と完全一致させる。
+Docling原文と構造を変えず、`translate_ja_v2` metadataだけを追加する。ページヘッダーとページフッターは翻訳せず原文を描画値として保持する。同一contextと用語集はバッチ上部へ集約し、空fieldは送らない。APIではバッチ内連番IDを使い、応答後に元refへ戻す。完成messagesを `context-chars` 以内へ分割し、API応答のID集合は入力連番と完全一致させる。
 
 ### Reviewの境界
 

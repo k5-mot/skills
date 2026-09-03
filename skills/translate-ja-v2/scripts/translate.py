@@ -1599,6 +1599,19 @@ def is_code(item: dict[str, Any]) -> bool:
     )
 
 
+def is_page_decoration(item: dict[str, Any]) -> bool:
+    """ページヘッダーまたはフッターとして検出された要素か判定する。
+
+    Args:
+        item: Docling text item。
+
+    Returns:
+        ページ装飾要素ならTrue。
+    """
+
+    return label_of(item) in {"page_header", "page_footer"}
+
+
 def heading_level(item: dict[str, Any]) -> int:
     """Docling item から見出しレベルを推定する。
 
@@ -3440,6 +3453,13 @@ def translate_text_items(
             if ref not in completed:
                 immediate_completed.append(ref)
             continue
+        if is_page_decoration(item):
+            if ref not in completed:
+                item.setdefault("translate_ja_v2", {}).update(
+                    {"kind": "decoration", "render_text": text, "translated": False}
+                )
+                immediate_completed.append(ref)
+            continue
         if is_code(item):
             if ref not in completed:
                 item.setdefault("translate_ja_v2", {}).update(
@@ -3639,6 +3659,9 @@ def translate_text_item(
     text = text_of(item).strip()
     meta = item.setdefault("translate_ja_v2", {})
     if not text:
+        return
+    if is_page_decoration(item):
+        meta.update({"kind": "decoration", "render_text": text, "translated": False})
         return
     if is_code(item):
         meta.update({"kind": "code", "render_text": text, "translated": False})
@@ -5238,7 +5261,7 @@ class TranslateStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 6,
+                "version": 7,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,

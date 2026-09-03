@@ -1231,6 +1231,34 @@ def test_translate_batch_accepts_integer_response_id(
     ) == {"a": "訳A"}
 
 
+@pytest.mark.parametrize("label", ["page_header", "page_footer"])
+def test_translate_text_item_preserves_page_decorations(label: str) -> None:
+    """ページヘッダーとフッターはLLMへ送らず原文を保持する。
+
+    Args:
+        label: Doclingのページ装飾label。
+
+    Returns:
+        なし。
+    """
+
+    item = {"label": label, "text": "xvi"}
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+
+    translate_text_item(item, object(), settings)
+
+    assert item["translate_ja_v2"] == {
+        "kind": "decoration",
+        "render_text": "xvi",
+        "translated": False,
+    }
+
+
 def test_translate_batch_splits_partial_single_entry_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
