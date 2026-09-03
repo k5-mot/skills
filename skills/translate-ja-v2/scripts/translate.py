@@ -71,6 +71,8 @@ OPENAI_RETRY_INITIAL_SECONDS = 5.0
 OPENAI_RETRY_MAX_SECONDS = 60.0
 OPENAI_CONTEXT_LIMIT_CHARS = 50000
 OPENAI_MAX_OUTPUT_TOKENS = 4096
+OPENAI_BATCH_MAX_OUTPUT_TOKENS = 16384
+OPENAI_SAFE_OUTPUT_CHARS = 12000
 TRANSLATION_BATCH_MAX_CHARS = 1500
 REVIEW_MAX_WORKERS = 4
 PIPELINE_STAGES = (
@@ -3046,6 +3048,66 @@ def fit_batches_to_context(
     )
 
 
+def estimated_translation_response_chars(items: list[dict[str, Any]]) -> int:
+    """翻訳バッチの完成応答JSON文字数を原文長から保守的に見積もる。
+
+    Args:
+        items: textを持つ翻訳対象。
+
+    Returns:
+        原文を仮の訳文とした応答JSONの文字数。
+    """
+
+    payload = {
+        "translations": [
+            {"id": str(index), "translated_text": str(item["text"])}
+            for index, item in enumerate(items, start=1)
+        ]
+    }
+    return len(json.dumps(payload, ensure_ascii=False))
+
+
+def estimated_review_response_chars(items: list[dict[str, Any]]) -> int:
+    """Reviewバッチの完成応答JSON文字数を現在の訳文から見積もる。
+
+    Args:
+        items: translated_textを持つReview対象。
+
+    Returns:
+        現在の訳文を仮のレビュー結果とした応答JSONの文字数。
+    """
+
+    payload = {
+        "reviews": [
+            {"id": str(index), "reviewed_text": str(item["translated_text"])}
+            for index, item in enumerate(items, start=1)
+        ]
+    }
+    return len(json.dumps(payload, ensure_ascii=False))
+
+
+def fit_batches_to_output(
+    batches: list[list[dict[str, Any]]],
+    estimate_chars: Callable[[list[dict[str, Any]]], int],
+) -> list[list[dict[str, Any]]]:
+    """推定応答JSONが安全な出力文字数内になるようバッチを分割する。
+
+    Args:
+        batches: 入力順を保ったLLMバッチ。
+        estimate_chars: 候補バッチの推定応答文字数を返す関数。
+
+    Returns:
+        推定応答が安全上限内となるバッチ配列。
+    """
+
+    return fit_batches_to_char_limit(
+        batches,
+        OPENAI_SAFE_OUTPUT_CHARS,
+        estimate_chars,
+        "output",
+    )
+
+
 def build_translation_messages(
     items: list[dict[str, Any]], translation_rules: str
 ) -> list[dict[str, Any]]:
@@ -3209,7 +3271,7 @@ def translate_batch(
             settings,
             messages,
             json_response=True,
-            max_tokens=OPENAI_MAX_OUTPUT_TOKENS,
+            max_tokens=OPENAI_BATCH_MAX_OUTPUT_TOKENS,
         )
     except OpenAIEmptyResponseError as exc:
         return split_batch(exc)
@@ -3393,8 +3455,12 @@ def translate_text_items(
     if immediate_completed and on_progress:
         on_progress(immediate_completed)
 
-    batches = fit_batches_to_context(
+    output_fitted_batches = fit_batches_to_output(
         pack_translation_blocks(blocks, max_chars=batch_chars),
+        estimated_translation_response_chars,
+    )
+    batches = fit_batches_to_context(
+        output_fitted_batches,
         settings.context_chars,
         partial(build_translation_messages, translation_rules=translation_rules),
     )
@@ -3688,8 +3754,12 @@ def translate_table_item(
 
     if immediate_completed and on_progress:
         on_progress(immediate_completed)
-    batches = fit_batches_to_context(
+    output_fitted_batches = fit_batches_to_output(
         pack_translation_blocks([targets], max_chars=batch_chars),
+        estimated_translation_response_chars,
+    )
+    batches = fit_batches_to_context(
+        output_fitted_batches,
         settings.context_chars,
         partial(build_translation_messages, translation_rules=translation_rules),
     )
@@ -3764,8 +3834,12 @@ def review_document(
     pending_targets = [
         target for target in targets if str(target["id"]) not in completed
     ]
-    batches = fit_batches_to_context(
+    output_fitted_batches = fit_batches_to_output(
         pack_translation_blocks([pending_targets], max_chars=batch_chars),
+        estimated_review_response_chars,
+    )
+    batches = fit_batches_to_context(
+        output_fitted_batches,
         settings.context_chars,
         partial(build_review_messages, translation_rules=translation_rules),
     )
@@ -4082,7 +4156,7 @@ def review_batch(
             settings,
             messages,
             json_response=True,
-            max_tokens=OPENAI_MAX_OUTPUT_TOKENS,
+            max_tokens=OPENAI_BATCH_MAX_OUTPUT_TOKENS,
         )
     except OpenAIEmptyResponseError as exc:
         return split_or_keep_original(exc)
@@ -5141,7 +5215,7 @@ class TranslateStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 4,
+                "version": 5,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,
@@ -5242,7 +5316,7 @@ class ReviewStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 4,
+                "version": 5,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,

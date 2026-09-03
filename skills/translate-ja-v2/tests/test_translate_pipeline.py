@@ -35,12 +35,16 @@ from translate import (  # noqa: E402
     docling_form_payload,
     apply_review_results,
     extract_docling_zip,
+    estimated_review_response_chars,
+    estimated_translation_response_chars,
+    fit_batches_to_output,
     fit_batches_to_context,
     load_dotenv_file,
     main,
     message_text_chars,
     normalize_document,
     OpenAIEmptyResponseError,
+    OPENAI_BATCH_MAX_OUTPUT_TOKENS,
     OPENAI_MAX_OUTPUT_TOKENS,
     OpenAISettings,
     pack_translation_blocks,
@@ -673,7 +677,7 @@ def test_translate_document_passes_glossary_hits_and_rules(
     assert "Strategic Command" in prompt
     assert "Unmatched Term" not in prompt
     assert "固有名詞は英語のまま和訳する" in prompt
-    assert client.completions.calls[0]["max_tokens"] == OPENAI_MAX_OUTPUT_TOKENS
+    assert client.completions.calls[0]["max_tokens"] == OPENAI_BATCH_MAX_OUTPUT_TOKENS
     assert client.completions.calls[0]["response_format"] == {"type": "json_object"}
     assert translated["texts"][0]["translate_ja_v2"]["glossary_terms"] == [
         "Strategic Command"
@@ -840,6 +844,41 @@ def test_fit_batches_to_context_measures_complete_messages() -> None:
         "4",
     ]
     assert all(message_text_chars(build(batch)) <= context_chars for batch in batches)
+
+
+@pytest.mark.parametrize(
+    ("text_field", "estimate_chars"),
+    [
+        ("text", estimated_translation_response_chars),
+        ("translated_text", estimated_review_response_chars),
+    ],
+)
+def test_fit_batches_to_output_measures_estimated_response(
+    text_field: str,
+    estimate_chars: Any,
+) -> None:
+    """推定した完成応答が安全上限を超えるバッチは事前分割する。
+
+    Args:
+        text_field: 応答見積もりに使う入力field。
+        estimate_chars: TranslateまたはReviewの応答文字数見積もり関数。
+
+    Returns:
+        なし。
+    """
+
+    items = [{"id": str(index), text_field: "a" * 5000} for index in range(1, 5)]
+
+    batches = fit_batches_to_output([items], estimate_chars)
+
+    assert [len(batch) for batch in batches] == [2, 2]
+    assert [item["id"] for batch in batches for item in batch] == [
+        "1",
+        "2",
+        "3",
+        "4",
+    ]
+    assert all(estimate_chars(batch) <= 12000 for batch in batches)
 
 
 def test_review_messages_only_send_required_fields() -> None:
