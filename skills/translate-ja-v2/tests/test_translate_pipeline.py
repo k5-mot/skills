@@ -1200,6 +1200,37 @@ def test_translate_batch_accepts_top_level_array(
     ) == {"a": "訳A"}
 
 
+def test_translate_batch_accepts_integer_response_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JSON numberで返されたバッチ内連番IDも完全一致検証へ使う。
+
+    Args:
+        monkeypatch: LLM応答を差し替えるpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    monkeypatch.setattr(
+        "translate.chat_text",
+        lambda _client, _settings, _messages, **_kwargs: json.dumps(
+            {"translations": [{"id": 1, "translated_text": "訳A"}]},
+            ensure_ascii=False,
+        ),
+    )
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+
+    assert translate_batch(
+        object(), settings, [{"id": "a", "text": "A", "style": "本文"}]
+    ) == {"a": "訳A"}
+
+
 def test_translate_batch_splits_partial_single_entry_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

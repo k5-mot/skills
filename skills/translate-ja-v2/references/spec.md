@@ -92,7 +92,7 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 | Translate・Review最大要素数 | 20要素/batch |
 | Review最大並列数 | 4バッチ |
 
-HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。Structureでは一時的な空応答と不完全JSONをAPI呼び出しからretryする。TranslateとReviewは20要素以内、推定応答JSONを12,000文字以内、完成messagesを `context-chars` 以内へ事前分割し、空応答、不正JSON、ID不一致の複数要素batchをさらに要素境界で分割する。Translateは単一要素の生成不全も指数backoffで最大6回までretryする。Reviewは単一要素の生成不全、隣接要素の誤コピー、異常な長短、入力不足を訴えるメタ応答、日本語から英語のみへの退行を検出すると元の訳文を保持する。OpenAI SDK自体の自動retryは0にする。
+HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。Structureでは一時的な空応答と不完全JSONをAPI呼び出しからretryする。TranslateとReviewは20要素以内、推定応答JSONを12,000文字以内、完成messagesを `context-chars` 以内へ事前分割し、空応答、不正JSON、ID不一致の複数要素batchをさらに要素境界で分割する。バッチ内IDは文字列とJSON整数を受理して文字列へ正規化した後、完全一致を検証する。Translateは単一要素の生成不全も指数backoffで最大6回までretryする。Reviewは単一要素の生成不全、隣接要素の誤コピー、異常な長短、入力不足を訴えるメタ応答、日本語から英語のみへの退行を検出すると元の訳文を保持する。OpenAI SDK自体の自動retryは0にする。
 
 ## 7. Docling変換契約
 

@@ -3180,6 +3180,23 @@ context_idは共有文脈の参照です。用語集はenglishが原文に一致
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def normalize_batch_response_id(value: Any) -> str | None:
+    """LLMが返す文字列または整数のバッチIDを文字列へ正規化する。
+
+    Args:
+        value: JSON応答内のID値。
+
+    Returns:
+        検証可能な文字列ID。不正な型ならNone。
+    """
+
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    return None
+
+
 def translate_batch(
     client: Any,
     settings: OpenAISettings,
@@ -3299,10 +3316,10 @@ def translate_batch(
     for entry in translations:
         if not isinstance(entry, dict):
             return split_batch(ValueError("translation entry must be an object"))
-        item_id = entry.get("id")
+        item_id = normalize_batch_response_id(entry.get("id"))
         translated_text = entry.get("translated_text")
         if (
-            not isinstance(item_id, str)
+            item_id is None
             or not isinstance(translated_text, str)
             or not translated_text.strip()
         ):
@@ -4189,10 +4206,10 @@ def review_batch(
     for entry in reviews:
         if not isinstance(entry, dict):
             return split_or_keep_original(ValueError("review entry must be an object"))
-        item_id = entry.get("id")
+        item_id = normalize_batch_response_id(entry.get("id"))
         reviewed_text = entry.get("reviewed_text")
         if (
-            not isinstance(item_id, str)
+            item_id is None
             or not isinstance(reviewed_text, str)
             or not reviewed_text.strip()
         ):
