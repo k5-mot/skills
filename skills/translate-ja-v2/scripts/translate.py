@@ -2970,6 +2970,55 @@ def pack_translation_blocks(
     return batches
 
 
+def fit_batches_to_char_limit(
+    batches: list[list[dict[str, Any]]],
+    max_chars: int,
+    measure_chars: Callable[[list[dict[str, Any]]], int],
+    limit_name: str,
+) -> list[list[dict[str, Any]]]:
+    """測定した文字数が指定上限内になるようバッチを分割する。
+
+    Args:
+        batches: 意味とbatch_charsを基準に作成済みのバッチ。
+        max_chars: 測定値の最大文字数。
+        measure_chars: 候補要素から測定文字数を返す関数。
+        limit_name: エラーに表示する上限名。
+
+    Returns:
+        入力順を保ち、各測定値が上限内となるバッチ配列。
+
+    Raises:
+        ValueError: max_charsが1未満、または単一要素でも上限を超える場合。
+    """
+
+    if max_chars < 1:
+        raise ValueError(f"{limit_name} limit must be positive")
+    fitted: list[list[dict[str, Any]]] = []
+    for batch in batches:
+        start = 0
+        while start < len(batch):
+            low = 1
+            high = len(batch) - start
+            best = 0
+            while low <= high:
+                size = (low + high) // 2
+                candidate = batch[start : start + size]
+                if measure_chars(candidate) <= max_chars:
+                    best = size
+                    low = size + 1
+                else:
+                    high = size - 1
+            if best == 0:
+                item_id = batch[start].get("id")
+                raise ValueError(
+                    f"single LLM item exceeds {limit_name} limit id={item_id} "
+                    f"limit={max_chars}"
+                )
+            fitted.append(batch[start : start + best])
+            start += best
+    return fitted
+
+
 def fit_batches_to_context(
     batches: list[list[dict[str, Any]]],
     context_chars: int,
@@ -2989,32 +3038,12 @@ def fit_batches_to_context(
         ValueError: context_charsが1未満、または単一要素でも上限を超える場合。
     """
 
-    if context_chars < 1:
-        raise ValueError("context_chars must be positive")
-    fitted: list[list[dict[str, Any]]] = []
-    for batch in batches:
-        start = 0
-        while start < len(batch):
-            low = 1
-            high = len(batch) - start
-            best = 0
-            while low <= high:
-                size = (low + high) // 2
-                candidate = batch[start : start + size]
-                if message_text_chars(build_messages(candidate)) <= context_chars:
-                    best = size
-                    low = size + 1
-                else:
-                    high = size - 1
-            if best == 0:
-                item_id = batch[start].get("id")
-                raise ValueError(
-                    f"single LLM item exceeds context limit id={item_id} "
-                    f"limit={context_chars}"
-                )
-            fitted.append(batch[start : start + best])
-            start += best
-    return fitted
+    return fit_batches_to_char_limit(
+        batches,
+        context_chars,
+        lambda items: message_text_chars(build_messages(items)),
+        "context",
+    )
 
 
 def build_translation_messages(
