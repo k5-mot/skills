@@ -48,10 +48,11 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - context上限時の隣接コードだけのpairwise fallback
 - Cleanによる `.` と `・` の圧縮とコード保護
 - 翻訳対象、保護対象、見出し/本文/表の描画規則
-- 用語集、翻訳ルール、意味ブロック、batch分割
+- 用語集、翻訳ルール、意味ブロック、共有context・用語集の重複排除、batch分割
 - StructureのJSON出力指定、4,096 tokens上限、空応答・不完全JSONのrequest retry
-- 翻訳応答IDの完全一致、空応答、部分応答、retry
-- ReviewのID付きbatch、近接文脈、修正反映、不正応答の二分、空応答・隣接訳コピー・異常な長短・メタ応答・日本語消失での原訳保持、独立batchの並列実行
+- 完成したTranslate・Review messagesによるcontext上限分割
+- 翻訳応答のバッチ内連番ID完全一致、元refへの復元、空応答、部分応答、retry
+- Reviewの必要fieldだけを持つID付きbatch、修正反映、不正応答の二分、空応答・隣接訳コピー・異常な長短・メタ応答・日本語消失での原訳保持、独立batchの並列実行
 - Markdown renderer
 - Docling async API、固定payload、pollingログ
 - 23ページPDFの10、10、3ページ分割と直列変換、JSON参照・ページ番号・artifact URIの連結
@@ -93,7 +94,7 @@ python /home/penguin/.codex/skills/.system/skill-creator/scripts/quick_validate.
 ```bash
 uv run python skills/translate-ja-v2/scripts/translate.py \
   --context-chars 50000 \
-  --batch-chars 5000 \
+  --batch-chars 10000 \
   --input ./inputs/sample.pdf \
   --output-dir ./outputs/sample-full-validation \
   --template ./skills/translate-ja-v2/examples/template.dotx \

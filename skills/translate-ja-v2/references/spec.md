@@ -68,7 +68,7 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 --glossary PATH           翻訳用CSV用語集
 --translation-rules PATH  翻訳・レビュー用ルール文書
 --context-chars INTEGER   OpenAI requestの最大テキスト文字数
---batch-chars INTEGER     翻訳・Review batchの最大原文・訳文文字数
+--batch-chars INTEGER     翻訳・Review候補batchの最大原文・訳文文字数
 ```
 
 既定値は `context-chars=50000`、`batch-chars=1500` で、いずれも1以上とする。
@@ -89,7 +89,7 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 | OpenAI最大出力 | 4,096 tokens（Structure、Translate、Review） |
 | Review最大並列数 | 4バッチ |
 
-HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。Structureでは一時的な空応答と不完全JSONをAPI呼び出しからretryする。TranslateとReviewは空応答、不正JSON、ID不一致の複数要素batchを要素境界で分割する。Reviewはさらに隣接要素の誤コピー、異常な長短、入力不足を訴えるメタ応答、日本語から英語のみへの退行を検出すると元の訳文を保持する。OpenAI SDK自体の自動retryは0にする。
+HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。Structureでは一時的な空応答と不完全JSONをAPI呼び出しからretryする。TranslateとReviewは完成messagesのテキスト量を `context-chars` 以内へ事前分割し、空応答、不正JSON、ID不一致の複数要素batchをさらに要素境界で分割する。Reviewは隣接要素の誤コピー、異常な長短、入力不足を訴えるメタ応答、日本語から英語のみへの退行を検出すると元の訳文を保持する。OpenAI SDK自体の自動retryは0にする。
 
 ## 7. Docling変換契約
 
@@ -146,11 +146,11 @@ PDFページ画像は `artifacts/page_<6桁page>.png` とし、JSONのURIはJSON
 
 ### Translateの境界
 
-Docling原文と構造を変えず、`translate_ja_v2` metadataだけを追加する。API応答のID集合は入力と完全一致させる。
+Docling原文と構造を変えず、`translate_ja_v2` metadataだけを追加する。同一contextと用語集はバッチ上部へ集約し、空fieldは送らない。APIではバッチ内連番IDを使い、応答後に元refへ戻す。完成messagesを `context-chars` 以内へ分割し、API応答のID集合は入力連番と完全一致させる。
 
 ### Reviewの境界
 
-翻訳metadataの訳文と描画値だけを修正する。原文と構造は変更しない。原文と訳文の合計を `--batch-chars` 以内へ詰め、ID付きJSONで最大4バッチを並列実行する。応答ID集合が入力と一致したバッチだけを採用し、完了状態はバッチ内の各要素について保存する。原文が異なる前後要素の訳文と95%以上一致し、かつ原訳との一致率が80%未満の応答は、隣接要素の誤コピーとして棄却する。原訳の1.5倍を超えかつ200文字を超える応答、100文字以上の原訳を60%未満へ短縮する応答、Review入力の不足を訴えるメタ応答、日本語を含む原訳から日本語をすべて除く応答も棄却する。
+翻訳metadataの訳文と描画値だけを修正する。原文と構造は変更しない。原文と訳文の合計を `--batch-chars` 以内へ詰め、完成messagesを `context-chars` 以内へさらに分割し、最大4バッチを並列実行する。API入力はバッチ内連番ID、原文、訳文、非空inline codeだけとし、前後訳、見出しcontext、英語名だけの用語情報、空fieldは送らない。応答ID集合が入力連番と一致したバッチだけを採用し、元refへ戻してから完了状態を各要素について保存する。原文が異なる前後要素の訳文と95%以上一致し、かつ原訳との一致率が80%未満の応答は、ローカルで隣接要素の誤コピーとして棄却する。原訳の1.5倍を超えかつ200文字を超える応答、100文字以上の原訳を60%未満へ短縮する応答、Review入力の不足を訴えるメタ応答、日本語を含む原訳から日本語をすべて除く応答も棄却する。
 
 ### Renderの境界
 

@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
 import csv
 from difflib import SequenceMatcher
+from functools import partial
 from io import BytesIO
 import json
 import logging
@@ -2969,6 +2970,119 @@ def pack_translation_blocks(
     return batches
 
 
+def fit_batches_to_context(
+    batches: list[list[dict[str, Any]]],
+    context_chars: int,
+    build_messages: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
+) -> list[list[dict[str, Any]]]:
+    """完成したChat messagesがcontext上限内になるようバッチを分割する。
+
+    Args:
+        batches: 意味とbatch_charsを基準に作成済みのバッチ。
+        context_chars: messagesの最大テキスト文字数。
+        build_messages: 候補要素から実際のmessagesを作る関数。
+
+    Returns:
+        入力順を保ち、各messagesが上限内となるバッチ配列。
+
+    Raises:
+        ValueError: context_charsが1未満、または単一要素でも上限を超える場合。
+    """
+
+    if context_chars < 1:
+        raise ValueError("context_chars must be positive")
+    fitted: list[list[dict[str, Any]]] = []
+    for batch in batches:
+        start = 0
+        while start < len(batch):
+            low = 1
+            high = len(batch) - start
+            best = 0
+            while low <= high:
+                size = (low + high) // 2
+                candidate = batch[start : start + size]
+                if message_text_chars(build_messages(candidate)) <= context_chars:
+                    best = size
+                    low = size + 1
+                else:
+                    high = size - 1
+            if best == 0:
+                item_id = batch[start].get("id")
+                raise ValueError(
+                    f"single LLM item exceeds context limit id={item_id} "
+                    f"limit={context_chars}"
+                )
+            fitted.append(batch[start : start + best])
+            start += best
+    return fitted
+
+
+def build_translation_messages(
+    items: list[dict[str, Any]], translation_rules: str
+) -> list[dict[str, Any]]:
+    """重複文脈と用語集を集約した翻訳用messagesを作る。
+
+    Args:
+        items: id、text、style、context、glossaryを持つ翻訳対象。
+        translation_rules: LLMへ渡す翻訳ルール。
+
+    Returns:
+        OpenAI Chat Completionsへ渡すmessages。
+    """
+
+    contexts: dict[str, str] = {}
+    context_ids: dict[str, str] = {}
+    glossary_by_json: dict[str, dict[str, str]] = {}
+    request_items: list[dict[str, Any]] = []
+    for local_id, item in enumerate(items, start=1):
+        request_item: dict[str, Any] = {
+            "id": str(local_id),
+            "style": str(item["style"]),
+            "text": str(item["text"]),
+        }
+        context = str(item.get("context") or "")
+        if context:
+            context_id = context_ids.get(context)
+            if context_id is None:
+                context_id = f"c{len(contexts) + 1}"
+                context_ids[context] = context_id
+                contexts[context_id] = context
+            request_item["context_id"] = context_id
+        spans = item.get("inline_code_spans")
+        if isinstance(spans, list) and spans:
+            request_item["inline_code_spans"] = spans
+        for term in item.get("glossary") or []:
+            if isinstance(term, dict):
+                key = json.dumps(term, ensure_ascii=False, sort_keys=True)
+                glossary_by_json.setdefault(key, cast(dict[str, str], term))
+        request_items.append(request_item)
+
+    system = (
+        "あなたは専門文書の日英翻訳者です。原文にない説明、要約、事実追加は禁止です。"
+        "入力IDを変更せずJSONだけを返してください。inline_code_spansは変更しません。"
+    )
+    user = f"""次の要素を日本語へ翻訳してください。
+
+翻訳ルール:
+{translation_rules.strip()}
+
+共有文脈JSON:
+{json.dumps(contexts, ensure_ascii=False)}
+
+共有用語集JSON:
+{json.dumps(list(glossary_by_json.values()), ensure_ascii=False)}
+
+返却JSON:
+{{"translations":[{{"id":"入力と同じID","translated_text":"日本語訳"}}]}}
+
+context_idは共有文脈の参照です。用語集はenglishが原文に一致する場合だけ適用してください。IDの追加、削除、変更、重複は禁止です。
+
+入力JSON:
+{json.dumps(request_items, ensure_ascii=False)}
+"""
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def translate_batch(
     client: Any,
     settings: OpenAISettings,
@@ -2996,20 +3110,10 @@ def translate_batch(
 
     if not items:
         return {}
-    request_items = [
-        {
-            "id": str(item["id"]),
-            "style": str(item["style"]),
-            "context": str(item.get("context") or ""),
-            "glossary": item.get("glossary") or [],
-            "inline_code_spans": item.get("inline_code_spans") or [],
-            "text": str(item["text"]),
-        }
-        for item in items
-    ]
-    expected_ids = [item["id"] for item in request_items]
-    if len(expected_ids) != len(set(expected_ids)):
+    original_ids = [str(item["id"]) for item in items]
+    if len(original_ids) != len(set(original_ids)):
         raise ValueError("translation batch contains duplicate ids")
+    expected_ids = [str(index) for index in range(1, len(items) + 1)]
 
     def split_batch(error: Exception) -> dict[str, str]:
         if len(items) == 1:
@@ -3033,32 +3137,12 @@ def translate_batch(
             ),
         }
 
-    system = (
-        "あなたは専門文書の日英翻訳者です。原文にない説明、要約、事実追加は禁止です。"
-        "各要素を文脈に沿って翻訳し、入力IDを変更せずJSONだけを返してください。"
-        "inline_code_spansの文字列は翻訳・変更せず、そのまま訳文へ残してください。"
-    )
-    user = f"""次の複数要素を日本語へ翻訳してください。
-
-翻訳ルール:
-{translation_rules.strip()}
-
-返却JSON:
-{{"translations":[{{"id":"入力と同じID","translated_text":"日本語訳"}}]}}
-
-IDの追加、削除、変更、重複は禁止です。styleとcontextは訳文の調整にだけ使ってください。
-
-入力JSON:
-{json.dumps(request_items, ensure_ascii=False)}
-"""
+    messages = build_translation_messages(items, translation_rules)
     try:
         response = chat_text(
             client,
             settings,
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            messages,
             json_response=True,
             max_tokens=OPENAI_MAX_OUTPUT_TOKENS,
         )
@@ -3106,12 +3190,16 @@ IDの追加、削除、変更、重複は禁止です。styleとcontextは訳文
                 f"missing={missing} unknown={unknown}"
             )
         )
+    translated_by_original_id = {
+        original_id: result[str(index)]
+        for index, original_id in enumerate(original_ids, start=1)
+    }
     LOGGER.debug(
         "Translated batch items=%s source_chars=%s",
         len(items),
-        sum(len(item["text"]) for item in request_items),
+        sum(len(str(item["text"])) for item in items),
     )
-    return result
+    return translated_by_original_id
 
 
 def apply_text_translation(
@@ -3240,7 +3328,12 @@ def translate_text_items(
     if immediate_completed and on_progress:
         on_progress(immediate_completed)
 
-    for batch in pack_translation_blocks(blocks, max_chars=batch_chars):
+    batches = fit_batches_to_context(
+        pack_translation_blocks(blocks, max_chars=batch_chars),
+        settings.context_chars,
+        partial(build_translation_messages, translation_rules=translation_rules),
+    )
+    for batch in batches:
         translations = translate_batch(
             client,
             settings,
@@ -3530,7 +3623,12 @@ def translate_table_item(
 
     if immediate_completed and on_progress:
         on_progress(immediate_completed)
-    for batch in pack_translation_blocks([targets], max_chars=batch_chars):
+    batches = fit_batches_to_context(
+        pack_translation_blocks([targets], max_chars=batch_chars),
+        settings.context_chars,
+        partial(build_translation_messages, translation_rules=translation_rules),
+    )
+    for batch in batches:
         translations = translate_batch(
             client,
             settings,
@@ -3601,7 +3699,11 @@ def review_document(
     pending_targets = [
         target for target in targets if str(target["id"]) not in completed
     ]
-    batches = pack_translation_blocks([pending_targets], max_chars=batch_chars)
+    batches = fit_batches_to_context(
+        pack_translation_blocks([pending_targets], max_chars=batch_chars),
+        settings.context_chars,
+        partial(build_review_messages, translation_rules=translation_rules),
+    )
     max_workers = min(REVIEW_MAX_WORKERS, len(batches))
     if max_workers == 0:
         return result, 0
@@ -3638,19 +3740,12 @@ def collect_review_targets(data: dict[str, Any]) -> list[dict[str, Any]]:
     """
 
     targets: list[dict[str, Any]] = []
-    heading_stack: list[tuple[int, str]] = []
     texts = data.get("texts")
     if isinstance(texts, list):
         for index, value in enumerate(texts):
             if not isinstance(value, dict):
                 continue
             item = cast(dict[str, Any], value)
-            if is_heading(item):
-                level = heading_level(item)
-                while heading_stack and heading_stack[-1][0] >= level:
-                    heading_stack.pop()
-                heading_stack.append((level, text_of(item).strip()))
-            context = " > ".join(title for _level, title in heading_stack)
             meta = item.get("translate_ja_v2")
             if isinstance(meta, dict) and meta.get("translated") is True:
                 add_review_target(
@@ -3658,10 +3753,8 @@ def collect_review_targets(data: dict[str, Any]) -> list[dict[str, Any]]:
                     {
                         "id": self_ref(item, "texts", index),
                         "kind": str(meta.get("kind") or "text"),
-                        "context": context,
                         "source_text": str(meta.get("text_en") or text_of(item)),
                         "translated_text": str(meta.get("text_ja") or ""),
-                        "glossary_terms": meta.get("glossary_terms") or [],
                         "meta": meta,
                         "text_field": "text_ja",
                         "render_field": "render_text",
@@ -3683,10 +3776,8 @@ def collect_review_targets(data: dict[str, Any]) -> list[dict[str, Any]]:
                     {
                         "id": f"{ref}/caption",
                         "kind": "caption",
-                        "context": caption,
                         "source_text": str(meta.get("caption_en") or caption),
                         "translated_text": str(meta.get("caption_ja") or ""),
-                        "glossary_terms": meta.get("glossary_terms") or [],
                         "meta": meta,
                         "text_field": "caption_ja",
                         "render_field": "caption_render",
@@ -3700,7 +3791,6 @@ def collect_review_targets(data: dict[str, Any]) -> list[dict[str, Any]]:
                         {
                             "id": cell_ref,
                             "kind": "cell",
-                            "context": caption,
                             "source_text": str(
                                 cell_meta.get("text_en")
                                 or cell.get("text")
@@ -3708,7 +3798,6 @@ def collect_review_targets(data: dict[str, Any]) -> list[dict[str, Any]]:
                                 or ""
                             ),
                             "translated_text": str(cell_meta.get("text_ja") or ""),
-                            "glossary_terms": cell_meta.get("glossary_terms") or [],
                             "inline_code_spans": inline_code_spans(cell),
                             "meta": cell_meta,
                             "text_field": "text_ja",
@@ -3730,7 +3819,7 @@ def add_review_target(targets: list[dict[str, Any]], target: dict[str, Any]) -> 
 
 
 def add_review_neighbors(targets: list[dict[str, Any]]) -> None:
-    """レビュー対象に前後の原文と訳文を添える。
+    """誤コピーのローカル検証用に前後の原文と訳文を添える。
 
     Args:
         targets: 文書順に並んだレビュー対象。
@@ -3739,7 +3828,7 @@ def add_review_neighbors(targets: list[dict[str, Any]]) -> None:
         なし。
 
     Side Effects:
-        各対象へ前後要素の原文と訳文を追加する。
+        各対象へ前後要素の原文と訳文を追加する。APIには送信しない。
     """
 
     for index, target in enumerate(targets):
@@ -3803,6 +3892,57 @@ def review_rejection_reason(item: dict[str, Any], reviewed_text: str) -> str | N
     return None
 
 
+def build_review_messages(
+    items: list[dict[str, Any]], translation_rules: str
+) -> list[dict[str, Any]]:
+    """重複する前後文脈を含まないReview用messagesを作る。
+
+    Args:
+        items: 原文と現在訳を持つReview対象。
+        translation_rules: LLMへ渡す翻訳ルール。
+
+    Returns:
+        OpenAI Chat Completionsへ渡すmessages。
+    """
+
+    request_items: list[dict[str, Any]] = []
+    for local_id, item in enumerate(items, start=1):
+        request_item: dict[str, Any] = {
+            "id": str(local_id),
+            "source_text": str(item["source_text"]),
+            "translated_text": str(item["translated_text"]),
+        }
+        spans = item.get("inline_code_spans")
+        if isinstance(spans, list) and spans:
+            request_item["inline_code_spans"] = spans
+        request_items.append(request_item)
+
+    system = (
+        "あなたは専門文書の日英翻訳レビュー担当者です。"
+        "原文にない説明、要約、事実追加は禁止です。"
+        "入力IDを変更せずJSONだけを返してください。"
+    )
+    user = f"""翻訳済み要素をレビューし、必要な場合だけ日本語訳を修正してください。
+
+レビュー観点:
+- 原文の意味、数量、否定、固有名詞が保たれているか。
+- バッチ内で同じ概念・英語表現の日本語表記が揺れていないか。
+- inline_code_spansが変更されていないか。
+
+翻訳ルール:
+{translation_rules.strip()}
+
+返却JSON:
+{{"reviews":[{{"id":"入力と同じID","reviewed_text":"レビュー後の日本語訳"}}]}}
+
+入力順を文書順として参照してください。IDの追加、削除、変更、重複は禁止です。修正不要ならtranslated_textをそのまま返してください。
+
+入力JSON:
+{json.dumps(request_items, ensure_ascii=False)}
+"""
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def review_batch(
     client: Any,
     settings: OpenAISettings,
@@ -3827,24 +3967,10 @@ def review_batch(
 
     if not items:
         return {}
-    expected_ids = [str(item["id"]) for item in items]
-    if len(expected_ids) != len(set(expected_ids)):
+    original_ids = [str(item["id"]) for item in items]
+    if len(original_ids) != len(set(original_ids)):
         raise ValueError("review batch contains duplicate ids")
-
-    request_items = [
-        {
-            "id": str(item["id"]),
-            "kind": str(item["kind"]),
-            "context": str(item.get("context") or ""),
-            "glossary_terms": item.get("glossary_terms") or [],
-            "inline_code_spans": item.get("inline_code_spans") or [],
-            "previous_text_ja": str(item.get("previous_text_ja") or ""),
-            "source_text": str(item["source_text"]),
-            "translated_text": str(item["translated_text"]),
-            "next_text_ja": str(item.get("next_text_ja") or ""),
-        }
-        for item in items
-    ]
+    expected_ids = [str(index) for index in range(1, len(items) + 1)]
 
     def split_or_keep_original(error: Exception) -> dict[str, str]:
         """不正なバッチを二分し、単一要素なら原訳を返す。
@@ -3884,38 +4010,12 @@ def review_batch(
             ),
         }
 
-    system = (
-        "あなたは専門文書の日英翻訳レビュー担当者です。"
-        "原文にない説明、要約、事実追加は禁止です。"
-        "入力IDを変更せずJSONだけを返してください。"
-    )
-    user = f"""次の翻訳済み要素をレビューし、必要な場合だけ日本語訳を修正してください。
-
-レビュー観点:
-- 原文の意味、数量、否定、固有名詞が保たれているか。
-- 用語集に反していないか。
-- 前後の要素と同じ概念・同じ英語表現の日本語表記が揺れていないか。
-- 見出し、本文、表セルの文体が近接要素と不自然にずれていないか。
-
-翻訳ルール:
-{translation_rules.strip()}
-
-返却JSON:
-{{"reviews":[{{"id":"入力と同じID","reviewed_text":"レビュー後の日本語訳"}}]}}
-
-IDの追加、削除、変更、重複は禁止です。修正不要ならtranslated_textをそのまま返してください。
-
-入力JSON:
-{json.dumps(request_items, ensure_ascii=False)}
-"""
+    messages = build_review_messages(items, translation_rules)
     try:
         response = chat_text(
             client,
             settings,
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            messages,
             json_response=True,
             max_tokens=OPENAI_MAX_OUTPUT_TOKENS,
         )
@@ -3967,9 +4067,10 @@ IDの追加、削除、変更、重複は禁止です。修正不要ならtransl
                 f"review response ids do not match missing={missing} unknown={unknown}"
             )
         )
-    items_by_id = {str(item["id"]): item for item in items}
-    for item_id, reviewed_text in result.items():
-        item = items_by_id[item_id]
+    reviewed_by_original_id: dict[str, str] = {}
+    for index, item in enumerate(items, start=1):
+        item_id = str(item["id"])
+        reviewed_text = result[str(index)]
         rejection_reason = review_rejection_reason(item, reviewed_text)
         if rejection_reason:
             LOGGER.warning(
@@ -3977,9 +4078,10 @@ IDの追加、削除、変更、重複は禁止です。修正不要ならtransl
                 item_id,
                 rejection_reason,
             )
-            result[item_id] = str(item["translated_text"])
+            reviewed_text = str(item["translated_text"])
+        reviewed_by_original_id[item_id] = reviewed_text
     LOGGER.debug("Reviewed batch items=%s", len(items))
-    return result
+    return reviewed_by_original_id
 
 
 def apply_review_results(
@@ -4974,7 +5076,7 @@ class TranslateStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 2,
+                "version": 3,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,
@@ -5075,7 +5177,7 @@ class ReviewStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 3,
+                "version": 4,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,

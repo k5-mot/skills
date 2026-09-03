@@ -20,8 +20,10 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from translate import (  # noqa: E402
     apply_structure_patches,
+    build_review_messages,
     build_stage_paths,
     build_structure_messages,
+    build_translation_messages,
     chat_text,
     CleanStage,
     clean_document,
@@ -33,6 +35,7 @@ from translate import (  # noqa: E402
     docling_form_payload,
     apply_review_results,
     extract_docling_zip,
+    fit_batches_to_context,
     load_dotenv_file,
     main,
     message_text_chars,
@@ -730,7 +733,7 @@ def test_translate_resume_keeps_completed_heading_as_context(
     )
     prompt = client.completions.calls[0]["messages"][1]["content"]
 
-    assert '"context": "Strategy"' in prompt
+    assert prompt.count("Strategy") == 1
     assert translated["texts"][0]["translate_ja_v2"]["text_ja"] == "戦略"
     assert translated["texts"][1]["translate_ja_v2"]["text_ja"] == "訳文"
 
@@ -760,6 +763,119 @@ def test_pack_translation_blocks_keeps_sections_within_limit() -> None:
         ["h2", "p2"],
     ]
     assert all(sum(len(item["text"]) for item in batch) <= 3000 for batch in batches)
+
+
+def test_translation_messages_deduplicate_shared_context_and_glossary() -> None:
+    """Translate promptは共通文脈と用語集を一度だけ送る。
+
+    Returns:
+        なし。
+    """
+
+    term = {
+        "english": "force",
+        "japanese": "部隊",
+        "desc": "",
+        "genre": "",
+        "note": "",
+    }
+    items = [
+        {
+            "id": f"#/texts/{index}",
+            "style": "本文",
+            "context": "Strategy > Operations",
+            "glossary": [term],
+            "text": source,
+        }
+        for index, source in enumerate(("The force moves.", "The force stops."))
+    ]
+
+    prompt = str(build_translation_messages(items, "rule")[1]["content"])
+
+    assert prompt.count("Strategy > Operations") == 1
+    assert prompt.count('"english": "force"') == 1
+    assert prompt.count('"context_id": "c1"') == 2
+    assert "inline_code_spans" not in prompt
+
+
+def test_fit_batches_to_context_measures_complete_messages() -> None:
+    """バッチは本文量だけでなく完成したpromptの上限で分割する。
+
+    Returns:
+        なし。
+    """
+
+    items = [
+        {
+            "id": str(index),
+            "source_text": "source",
+            "translated_text": "訳文",
+            "text": "source\n訳文",
+        }
+        for index in range(5)
+    ]
+
+    def build(batch: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """テスト対象バッチからReview messagesを作る。
+
+        Args:
+            batch: Review対象要素。
+
+        Returns:
+            完成したReview messages。
+        """
+
+        return build_review_messages(batch, "rule")
+
+    context_chars = message_text_chars(build(items[:2]))
+
+    batches = fit_batches_to_context([items], context_chars, build)
+
+    assert [len(batch) for batch in batches] == [2, 2, 1]
+    assert [item["id"] for batch in batches for item in batch] == [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+    ]
+    assert all(message_text_chars(build(batch)) <= context_chars for batch in batches)
+
+
+def test_review_messages_only_send_required_fields() -> None:
+    """Review promptは原文・訳文・IDと非空inline codeだけを送る。
+
+    Returns:
+        なし。
+    """
+
+    prompt = str(
+        build_review_messages(
+            [
+                {
+                    "id": "a",
+                    "kind": "body",
+                    "context": "Section",
+                    "glossary_terms": ["force"],
+                    "previous_text_ja": "前",
+                    "source_text": "Run api.call()",
+                    "translated_text": "api.call() を実行",
+                    "next_text_ja": "後",
+                    "inline_code_spans": ["api.call()"],
+                }
+            ],
+            "rule",
+        )[1]["content"]
+    )
+
+    assert '"id": "1"' in prompt
+    assert '"source_text": "Run api.call()"' in prompt
+    assert '"translated_text": "api.call() を実行"' in prompt
+    assert '"inline_code_spans": ["api.call()"]' in prompt
+    assert "previous_text_ja" not in prompt
+    assert "next_text_ja" not in prompt
+    assert "glossary_terms" not in prompt
+    assert "Section" not in prompt
 
 
 def test_translate_document_batches_text_section_and_table(
@@ -894,7 +1010,8 @@ def test_translate_document_batches_text_section_and_table(
             "The reserve waits.",
         )
     )
-    assert '"context": "Strategy > Operations"' in text_prompt
+    assert text_prompt.count("Strategy > Operations") == 1
+    assert "context_id" in text_prompt
     assert "do not translate" not in text_prompt
     assert "Terms" in table_prompt
     assert "Run api.call()" in table_prompt
@@ -952,7 +1069,7 @@ def test_translate_batch_accepts_top_level_array(
     monkeypatch.setattr(
         "translate.chat_text",
         lambda _client, _settings, _messages, **_kwargs: json.dumps(
-            [{"id": "a", "translated_text": "訳A"}], ensure_ascii=False
+            [{"id": "1", "translated_text": "訳A"}], ensure_ascii=False
         ),
     )
     settings = OpenAISettings(
@@ -1132,10 +1249,17 @@ def test_translate_batch_splits_after_empty_response(
     assert sizes == [2, 1, 1]
 
 
-def test_review_document_checks_neighbor_consistency(
+def test_review_document_checks_batch_consistency_without_neighbor_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """レビュー工程は前後要素を見て表記ゆれを補正する。"""
+    """Reviewは配列順で表記を揃え、前後訳を重複送信しない。
+
+    Args:
+        monkeypatch: OpenAI依存をfakeへ置換するpytest fixture。
+
+    Returns:
+        なし。
+    """
 
     calls: list[list[dict[str, Any]]] = []
 
@@ -1202,7 +1326,11 @@ def test_review_document_checks_neighbor_consistency(
     assert changes == 1
     assert reviewed["texts"][0]["translate_ja_v2"]["text_ja"] == "防衛省"
     assert reviewed["texts"][0]["translate_ja_v2"]["render_text"] == "防衛省"
-    assert '"next_text_ja": "防衛省"' in prompt
+    assert "next_text_ja" not in prompt
+    assert "previous_text_ja" not in prompt
+    assert "glossary_terms" not in prompt
+    assert '"source_text": "Department of Defense"' in prompt
+    assert '"translated_text": "防衛省"' in prompt
     assert "日本語表記が揺れていないか" in prompt
 
 
@@ -2574,12 +2702,12 @@ def test_translate_stage_resumes_from_completed_element(
 
         nonlocal fail_second
         content = str(messages[1]["content"])
-        item_id = "#/texts/0" if "#/texts/0" in content else "#/texts/1"
+        item_id = "#/texts/0" if '"text": "A"' in content else "#/texts/1"
         calls.append(item_id)
         if item_id == "#/texts/1" and fail_second:
             raise RuntimeError("interrupted")
         return json.dumps(
-            {"translations": [{"id": item_id, "translated_text": f"訳{item_id[-1]}"}]}
+            {"translations": [{"id": "1", "translated_text": f"訳{item_id[-1]}"}]}
         )
 
     monkeypatch.setattr("translate.chat_text", fake_chat)
