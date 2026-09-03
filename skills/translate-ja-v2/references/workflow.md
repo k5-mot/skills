@@ -133,31 +133,28 @@ Doclingが本文として検出したコードをコードブロックへ補正�
 ページごとに次をVLMへ渡す。
 
 - ページ番号
-- 座標補正済みtextのref、page、bbox、label、level、最大500文字のtext
-- 表セルのref、page、bbox、最大500文字のtext
+- 座標補正済みtextのref、bbox、label、最大500文字のtext
+- 表セルのref、bbox、最大500文字のtext
 - 対応するページPNG
 
 VLMには翻訳、要約、本文の創作を許可しない。返却patchは次だけを受理する。
 
-- `set_label`
-- `set_level`
-- `set_text`
-- `reorder_texts`
-- `merge_texts`
-- `swap_texts`
+- `set_label`。labelは `code` または `program_listing` だけを受理する。
+- `merge_texts`。現在の文書上で隣接するtextだけを受理する。
 - `set_table_cell_inline_code`
 
 APIにはJSON object形式と最大4,096出力tokensを指定する。HTTP成功でも空本文を返した場合や、本文が不完全なJSONでparseできない場合は、一時的な生成失敗としてAPI呼び出しから指数backoffで再試行する。
 
-コード片を連結するときは改行で結び、labelを `code` にする。削除されたtextに対するDocling参照は連結先へ更新し、残るtextのindexと参照を再整合する。表セルの `code_spans` はセル原文に完全一致する文字列だけを受理し、`structure_ja_v2.inline_code_spans` に保存する。
+コード片を連結するときはVLMが生成した本文とlabelを採用せず、元の隣接textを文書順に改行で結び、labelを `code` にする。削除されたtextに対するDocling参照は連結先へ更新し、残るtextのindexと参照を再整合する。表セルの `code_spans` はセル原文に完全一致する文字列だけを受理し、`structure_ja_v2.inline_code_spans` に保存する。
 
 ### Context上限時のfallback
 
 ページ単位promptが `--context-chars` を超える場合は次へ切り替える。
 
-1. 同一ページで隣接する2要素を比較し、コードlabelとコード連結を判断する。
-2. 同一ページ内の2要素を総当たりで比較し、明らかに逆順の場合だけ `swap_texts` を適用する。
-3. 表セルはcontext上限内のまとまりに分割する。
+1. 同一ページで隣接する2要素だけを比較し、コードlabelとコード連結を判断する。
+2. 表セルはcontext上限内のまとまりに分割する。
+
+順序はNormalizeの出力を正とし、Structureでは並べ替えない。配列順とページ単位の入力から分かる `coordinate_order` と要素ごとのpageはpromptへ重複して渡さない。
 
 各ページのtextと表セルが完了するたびに部分成果物と要素進捗を保存する。`--skip-vlm` の場合はVLM補正を行わず、Normalize結果をStructure成果物として保存する。
 

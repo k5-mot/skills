@@ -19,7 +19,6 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from translate import (  # noqa: E402
-    apply_reorder_texts,
     apply_structure_patches,
     build_stage_paths,
     build_structure_messages,
@@ -354,34 +353,8 @@ def test_stage_resume_rejects_corrupt_output_and_changed_config(
     assert not stage_is_resumable(manifest, "normalize", output, "input", "config")
 
 
-def test_apply_reorder_texts_moves_selected_refs_first() -> None:
-    """reorder_texts patch は指定 ref 順に texts を並べ替える。"""
-
-    data = {
-        "body": {"children": [{"$ref": "#/texts/0"}, {"$ref": "#/texts/1"}]},
-        "texts": [
-            {"self_ref": "#/texts/0", "text": "Body"},
-            {"self_ref": "#/texts/1", "text": "Heading"},
-        ],
-    }
-    result = apply_reorder_texts(
-        data, {"op": "reorder_texts", "refs": ["#/texts/1", "#/texts/0"]}
-    )
-
-    assert result["status"] == "success"
-    assert [item["text"] for item in data["texts"]] == ["Heading", "Body"]
-    assert [item["self_ref"] for item in data["texts"]] == [
-        "#/texts/0",
-        "#/texts/1",
-    ]
-    assert [child["$ref"] for child in data["body"]["children"]] == [
-        "#/texts/0",
-        "#/texts/1",
-    ]
-
-
 def test_apply_merge_texts_accepts_refs_in_reverse_document_order() -> None:
-    """merge_textsはrefsが文書順と逆でも参照を安全に統合する。
+    """merge_textsはVLMの順序や本文を使わず原文順にコードを統合する。
 
     Returns:
         なし。
@@ -406,7 +379,9 @@ def test_apply_merge_texts_accepts_refs_in_reverse_document_order() -> None:
         ],
     )
 
-    assert result["texts"] == [{"self_ref": "#/texts/0", "text": "second first"}]
+    assert result["texts"] == [
+        {"self_ref": "#/texts/0", "label": "code", "text": "first\nsecond"}
+    ]
     assert result["body"]["children"] == [{"$ref": "#/texts/0"}]
     assert applied[0]["status"] == "success"
 
@@ -587,7 +562,11 @@ def test_normalize_document_updates_refs_after_coordinate_reorder() -> None:
 
 
 def test_structure_messages_include_coordinate_corrected_bbox() -> None:
-    """VLM には座標補正後の順序と bbox を渡す。"""
+    """VLMには配列順とbboxを渡し、重複する順序番号は渡さない。
+
+    Returns:
+        なし。
+    """
 
     normalized, _patches = normalize_document(
         {
@@ -600,8 +579,8 @@ def test_structure_messages_include_coordinate_corrected_bbox() -> None:
     content = build_structure_messages(normalized)[1]["content"]
 
     assert isinstance(content, str)
-    assert "座標補正済みDocling要素" in content
-    assert '"coordinate_order": 0' in content
+    assert "Docling要素" in content
+    assert "coordinate_order" not in content
     assert '"t": 700.0' in content
     assert content.index("Upper") < content.index("Lower")
 
@@ -1587,8 +1566,12 @@ def test_render_markdown_uses_translated_json_fields() -> None:
     assert "| `api.call()` を実行 |" in markdown
 
 
-def test_apply_structure_patches_supports_label_level_and_reorder() -> None:
-    """構造 patch は label、level、順序をまとめて適用できる。"""
+def test_apply_structure_patches_rejects_non_code_operations() -> None:
+    """Structureはコード化以外のlabel・本文・順序変更を拒否する。
+
+    Returns:
+        なし。
+    """
 
     data = {
         "texts": [
@@ -1601,14 +1584,25 @@ def test_apply_structure_patches_supports_label_level_and_reorder() -> None:
         [
             {"op": "set_label", "ref": "#/texts/1", "label": "section_header"},
             {"op": "set_level", "ref": "#/texts/1", "level": 2},
+            {"op": "set_text", "ref": "#/texts/0", "text": "Changed"},
             {"op": "reorder_texts", "refs": ["#/texts/1", "#/texts/0"]},
+            {"op": "swap_texts", "refs": ["#/texts/0", "#/texts/1"]},
+            {"op": "set_label", "ref": "#/texts/0", "label": "code"},
         ],
     )
 
-    assert all(entry["status"] == "success" for entry in applied)
-    assert patched["texts"][0]["text"] == "Title"
-    assert patched["texts"][0]["label"] == "section_header"
-    assert patched["texts"][0]["level"] == 2
+    assert [entry["status"] for entry in applied] == [
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+        "success",
+    ]
+    assert patched["texts"] == [
+        {"self_ref": "#/texts/0", "label": "code", "text": "Body"},
+        {"self_ref": "#/texts/1", "label": "paragraph", "text": "Title"},
+    ]
 
 
 def test_apply_structure_patches_merge_reindexes_references_once() -> None:
@@ -1666,8 +1660,8 @@ def test_apply_structure_patches_converts_and_merges_code_fragments() -> None:
             {
                 "op": "merge_texts",
                 "refs": ["#/texts/0", "#/texts/1"],
-                "text": "def run():\n    pass",
-                "label": "code",
+                "text": "VLMが生成した本文",
+                "label": "section_header",
             },
         ],
     )
@@ -1737,6 +1731,12 @@ def test_structure_messages_include_table_cells_for_inline_code_detection() -> N
     assert "#/tables/0/data/grid/0/0" in content
     assert "Run api.call() now" in content
     assert "set_table_cell_inline_code" in content
+    assert '"page":' not in content
+    assert "coordinate_order" not in content
+    assert "set_level" not in content
+    assert "set_text" not in content
+    assert "reorder_texts" not in content
+    assert "swap_texts" not in content
 
 
 def test_structure_request_uses_bounded_json_output(
@@ -1859,7 +1859,15 @@ def test_build_structure_messages_does_not_fallback_to_unrelated_png(
 def test_structure_document_falls_back_to_pairwise_when_page_prompt_is_large(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ページ単位 prompt が大きい場合は隣接 merge と総当たり swap へ fallback する。"""
+    """ページpromptが大きい場合は隣接コード判定だけへfallbackする。
+
+    Args:
+        tmp_path: ページ画像を保存するpytest fixture。
+        monkeypatch: OpenAI依存をfakeへ置換するpytest fixture。
+
+    Returns:
+        なし。
+    """
 
     artifacts_dir = tmp_path / "artifacts"
     artifacts_dir.mkdir()
@@ -1927,9 +1935,13 @@ def test_structure_document_falls_back_to_pairwise_when_page_prompt_is_large(
         context_chars=3800,
     )
 
-    assert structured["texts"][0]["text"] == "merged fragment"
+    assert structured["texts"][0]["text"].startswith("fragment 0 ")
+    assert "\nfragment 1 " in structured["texts"][0]["text"]
+    assert structured["texts"][0]["label"] == "code"
     assert any(patch["op"] == "merge_texts" for patch in patches)
     assert any("2つのDocling text要素" in str(call[1]["content"]) for call in calls)
+    assert not any("swap_texts" in str(call) for call in calls)
+    assert len(calls) == 7
     assert all(message_text_chars(call) <= 3800 for call in calls)
 
 

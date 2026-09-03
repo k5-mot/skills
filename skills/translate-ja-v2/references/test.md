@@ -42,10 +42,10 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - 成果物破損、入力変更、設定変更時のResume拒否
 - bbox順序、座標なし要素のslot保持、Docling参照更新
 - Normalizeが本文や表セルを変更しないこと
-- Structureの許可patch、コードlabel、コード連結、順序補正
+- Structureの許可patch、コードlabel、隣接コード連結、本文生成・順序補正の拒否
 - 表セルinline codeのexact span
 - page image URIの安全な解決と、無関係なPNGへfallbackしないこと
-- context上限時のpairwise fallback
+- context上限時の隣接コードだけのpairwise fallback
 - Cleanによる `.` と `・` の圧縮とコード保護
 - 翻訳対象、保護対象、見出し/本文/表の描画規則
 - 用語集、翻訳ルール、意味ブロック、batch分割

@@ -138,7 +138,7 @@ PDFページ画像は `artifacts/page_<6桁page>.png` とし、JSONのURIはJSON
 
 ### Structureの境界
 
-コード構造、必要なtext結合、順序、表セルinline code metadataだけを補正する。翻訳や要約はしない。patch適用時は存在するref、操作種別、値の型を検証する。
+コードlabel、隣接するコードtextの結合、表セルinline code metadataだけを補正する。翻訳、要約、本文生成、見出し補正、順序変更はしない。patch適用時は存在するref、操作種別、値の型を検証し、結合本文は元textからローカル生成する。
 
 ### Cleanの境界
 

@@ -1894,37 +1894,39 @@ def build_page_structure_messages(
         Chat messages。
     """
 
+    request_units = [
+        {key: value for key, value in unit.items() if key != "page"} for unit in units
+    ]
+    request_cells = [
+        {key: value for key, value in cell.items() if key != "page"}
+        for cell in table_cells or []
+    ]
     system = (
-        "あなたはDocling JSONの構造補正を担当するVLM/LLMです。"
+        "あなたはDocling JSONのコード構造補正を担当するVLMです。"
         "翻訳、要約、本文の創作は禁止です。"
-        "対象はpageとbboxで座標補正済みです。"
-        "本文と誤認識されたコードはcodeへ変更し、前後のコード要素と同じ"
-        "コードブロックなら結合してください。"
-        "表セルでは自然言語を書き換えず、インラインコードのexact spanだけを"
+        "本文と誤認識されたコードはcodeへ変更し、隣接する同一コードブロック"
+        "だけを結合してください。表セルはインラインコードのexact spanだけを"
         "特定してください。"
     )
-    user = f"""次の1ページ分の座標補正済みDocling要素を読み、ページ画像とbboxも参照して、明らかに構造が壊れている箇所だけをpatchで返してください。
+    user = f"""次の1ページ分のDocling要素を読み、ページ画像とbboxを参照してコード構造だけをpatchで返してください。
 
 ページ: {page_no if page_no is not None else "unknown"}
 text要素:
-{json.dumps(units, ensure_ascii=False)}
+{json.dumps(request_units, ensure_ascii=False)}
 
 表セル:
-{json.dumps(table_cells or [], ensure_ascii=False)}
+{json.dumps(request_cells, ensure_ascii=False)}
 
 返却JSON:
 {{
   "patches": [
-    {{"op": "set_label", "ref": "#/texts/0", "label": "section_header", "reason": "理由"}},
-    {{"op": "set_level", "ref": "#/texts/0", "level": 2, "reason": "理由"}},
-    {{"op": "set_text", "ref": "#/texts/0", "text": "整形後テキスト", "reason": "理由"}},
-    {{"op": "merge_texts", "refs": ["#/texts/0", "#/texts/1"], "text": "結合後テキスト", "label": "code", "reason": "理由"}},
-    {{"op": "reorder_texts", "refs": ["#/texts/0", "#/texts/1"], "reason": "理由"}},
+    {{"op": "set_label", "ref": "#/texts/0", "label": "code", "reason": "コード構文"}},
+    {{"op": "merge_texts", "refs": ["#/texts/0", "#/texts/1"], "reason": "同じコードブロック"}},
     {{"op": "set_table_cell_inline_code", "ref": "#/tables/0/data/grid/0/0", "code_spans": ["api.call()"], "reason": "理由"}}
   ]
 }}
 
-コード本文は `set_label` のlabelを `code` にしてください。同一コードブロックとして隣接する要素は `merge_texts` で改行結合し、labelを `code` にしてください。`code_spans` は表セル原文に完全一致する文字列だけを返してください。
+`set_label` のlabelは `code` だけ使用できます。`merge_texts` は同一コードブロックとして隣接する要素だけに使い、本文はローカルで改行連結します。`code_spans` は表セル原文に完全一致する文字列だけを返してください。
 
 補正不要なら {{"patches":[]}} を返してください。
 """
@@ -2012,7 +2014,7 @@ def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
         data: Docling JSON。
 
     Returns:
-        ref、page、bbox、coordinate_order、label、level、text を持つ unit 配列。
+        ref、page、bbox、label、text を持つ unit 配列。
     """
 
     values = data.get("texts")
@@ -2030,9 +2032,7 @@ def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
                 "ref": self_ref(item, "texts", index),
                 "page": page_numbers(item),
                 "bbox": position["bbox"] if position else None,
-                "coordinate_order": index,
                 "label": item.get("label"),
-                "level": item.get("level"),
                 "text": text[:500],
             }
         )
@@ -2162,71 +2162,32 @@ def build_merge_messages(
         Chat messages。
     """
 
+    request_units = [
+        {key: value for key, value in unit.items() if key != "page"}
+        for unit in (left, right)
+    ]
     system = (
-        "あなたはDocling JSONの構造補正を担当するVLM/LLMです。"
+        "あなたはDocling JSONのコード構造補正を担当するVLMです。"
         "本文と誤認識されたコードをcodeへ変更し、隣接要素が同じコードブロック"
-        "ならmergeしてください。表、箇条書き、段落の明らかな誤分割もmergeできます。"
-        "意味変更、翻訳、要約は禁止です。"
+        "ならmergeしてください。意味変更、翻訳、要約は禁止です。"
     )
-    user = f"""ページ画像と隣接する2つのDocling text要素を比較し、同一の表・コードブロック・箇条書き・段落として結合すべきか判定してください。
+    user = f"""ページ画像と隣接する2つのDocling text要素を比較し、同じコードブロックとして結合すべきか判定してください。
 
 ページ: {page_no if page_no is not None else "unknown"}
 要素:
-{json.dumps([left, right], ensure_ascii=False)}
+{json.dumps(request_units, ensure_ascii=False)}
 
 返却JSON:
 {{
   "patches": [
     {{"op": "set_label", "ref": "{left["ref"]}", "label": "code", "reason": "コード構文"}},
-    {{"op": "merge_texts", "refs": ["{left["ref"]}", "{right["ref"]}"], "text": "結合後テキスト", "label": "code", "reason": "理由"}}
+    {{"op": "merge_texts", "refs": ["{left["ref"]}", "{right["ref"]}"], "reason": "同じコードブロック"}}
   ]
 }}
 
-本文labelの要素がコードなら `set_label` だけを返せます。同じコードブロックの前後要素は、原文を改行で連結した `merge_texts` を返してください。
+本文labelの要素がコードなら `set_label` だけを返せます。同じコードブロックの前後要素だけ `merge_texts` を返してください。結合後の本文はローカルで原文を改行連結します。
 
 結合不要なら {{"patches":[]}} を返してください。
-"""
-    content = build_multimodal_content(user, image_path)
-    return [{"role": "system", "content": system}, {"role": "user", "content": content}]
-
-
-def build_swap_messages(
-    page_no: int | None,
-    left: dict[str, Any],
-    right: dict[str, Any],
-    image_path: Path | None,
-) -> list[dict[str, Any]]:
-    """2 要素の順序入れ替え判定 messages を作る。
-
-    Args:
-        page_no: 対象ページ番号。
-        left: 現在前にある要素 unit。
-        right: 現在後ろにある要素 unit。
-        image_path: Docling JSON の URI から解決したページ画像パス。
-
-    Returns:
-        Chat messages。
-    """
-
-    system = (
-        "あなたはDocling JSONのreading order補正を担当するVLM/LLMです。"
-        "ページ画像とbboxを根拠に、2要素の順序が明らかに逆の場合だけswapしてください。"
-        "意味変更、翻訳、要約は禁止です。"
-    )
-    user = f"""ページ画像と2つのDocling text要素を比較し、後方要素を前方要素より前に置くべきか判定してください。
-
-ページ: {page_no if page_no is not None else "unknown"}
-要素:
-{json.dumps([left, right], ensure_ascii=False)}
-
-返却JSON:
-{{
-  "patches": [
-    {{"op": "swap_texts", "refs": ["{left["ref"]}", "{right["ref"]}"], "reason": "理由"}}
-  ]
-}}
-
-入れ替え不要なら {{"patches":[]}} を返してください。
 """
     content = build_multimodal_content(user, image_path)
     return [{"role": "system", "content": system}, {"role": "user", "content": content}]
@@ -2249,14 +2210,10 @@ def apply_structure_patches(
     applied: list[dict[str, Any]] = []
     for patch in patches:
         op = patch.get("op")
-        if op in {"set_label", "set_level", "set_text"}:
+        if op == "set_label" and patch.get("label") in CODE_LABELS:
             applied.append(apply_field_patch(result, patch))
-        elif op == "reorder_texts":
-            applied.append(apply_reorder_texts(result, patch))
         elif op == "merge_texts":
             applied.append(apply_merge_texts(result, patch))
-        elif op == "swap_texts":
-            applied.append(apply_swap_texts(result, patch))
         elif op == "set_table_cell_inline_code":
             applied.append(apply_table_cell_inline_code_patch(result, patch))
         else:
@@ -2528,7 +2485,7 @@ def pointer_target(data: dict[str, Any], pointer: str) -> tuple[Any, str | int]:
 
 
 def apply_field_patch(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    """set_label/set_level/set_text patch を適用する。
+    """検証済みset_label patchを適用する。
 
     Args:
         data: 更新対象 JSON。
@@ -2538,10 +2495,9 @@ def apply_field_patch(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, 
         適用結果。
     """
 
-    field_by_op = {"set_label": "label", "set_level": "level", "set_text": "text"}
     op = str(patch.get("op"))
     ref = str(patch.get("ref") or "")
-    field = field_by_op[op]
+    field = "label"
     parent, key = pointer_target(data, f"{ref}/{field}")
     before = parent[key] if isinstance(parent, list) else parent.get(key)
     after = patch.get(field)
@@ -2559,61 +2515,12 @@ def apply_field_patch(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, 
     }
 
 
-def apply_reorder_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    """texts 配列と関連 JSON pointer を指定 ref 順へ並べ替える。
-
-    Args:
-        data: 更新対象 JSON。
-        patch: refs を含む reorder_texts patch。
-
-    Returns:
-        適用結果。
-    """
-
-    texts = data.get("texts")
-    refs = patch.get("refs")
-    if not isinstance(texts, list) or not isinstance(refs, list):
-        return {
-            "op": "reorder_texts",
-            "status": "failed",
-            "error": "texts or refs is not list",
-        }
-    wanted = [str(ref) for ref in refs]
-    current_refs: list[str] = []
-    for index, item in enumerate(texts):
-        if not isinstance(item, dict):
-            return {
-                "op": "reorder_texts",
-                "status": "failed",
-                "error": "texts contains non-object item",
-            }
-        current_refs.append(self_ref(cast(dict[str, Any], item), "texts", index))
-    if len(wanted) != len(set(wanted)) or any(
-        ref not in current_refs for ref in wanted
-    ):
-        return {"op": "reorder_texts", "status": "failed", "error": "unknown ref"}
-    wanted_set = set(wanted)
-    ordered_refs = wanted + [ref for ref in current_refs if ref not in wanted_set]
-    if not reorder_text_collection(data, ordered_refs):
-        return {
-            "op": "reorder_texts",
-            "status": "failed",
-            "error": "could not preserve text references",
-        }
-    return {
-        "op": "reorder_texts",
-        "status": "success",
-        "refs": wanted,
-        "reason": patch.get("reason"),
-    }
-
-
 def apply_merge_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     """複数 text 要素を先頭 ref の位置へ結合する。
 
     Args:
         data: 更新対象 JSON。
-        patch: refs、text、任意 label/level を持つ patch。
+        patch: 隣接するコード要素のrefsを持つpatch。
 
     Returns:
         適用結果。
@@ -2623,30 +2530,34 @@ def apply_merge_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, 
     refs = patch.get("refs")
     if not isinstance(texts, list) or not isinstance(refs, list) or len(refs) < 2:
         return {"op": "merge_texts", "status": "failed", "error": "invalid refs"}
-    wanted = [str(ref) for ref in refs]
+    requested = [str(ref) for ref in refs]
     current_refs = [
         self_ref(cast(dict[str, Any], item), "texts", index)
         for index, item in enumerate(texts)
         if isinstance(item, dict)
     ]
     if len(current_refs) != len(texts) or any(
-        ref not in current_refs for ref in wanted
+        ref not in current_refs for ref in requested
     ):
         return {"op": "merge_texts", "status": "failed", "error": "unknown ref"}
+    indexes = sorted(current_refs.index(ref) for ref in requested)
+    if len(indexes) != len(set(indexes)) or indexes != list(
+        range(indexes[0], indexes[-1] + 1)
+    ):
+        return {
+            "op": "merge_texts",
+            "status": "failed",
+            "error": "refs must be unique and adjacent",
+        }
+    wanted = [current_refs[index] for index in indexes]
 
-    first_index = current_refs.index(wanted[0])
+    first_index = indexes[0]
     merged = copy.deepcopy(cast(dict[str, Any], texts[first_index]))
-    merged["text"] = str(
-        patch.get("text")
-        or "\n".join(
-            text_of(cast(dict[str, Any], texts[current_refs.index(ref)]))
-            for ref in wanted
-        )
+    merged["text"] = "\n".join(
+        text_of(cast(dict[str, Any], texts[current_refs.index(ref)])) for ref in wanted
     )
-    if patch.get("label"):
-        merged["label"] = patch["label"]
-    if patch.get("level"):
-        merged["level"] = patch["level"]
+    merged["label"] = "code"
+    merged.pop("level", None)
     prov: list[Any] = []
     for ref in wanted:
         item = texts[current_refs.index(ref)]
@@ -2678,50 +2589,6 @@ def apply_merge_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, 
         "status": "success",
         "refs": wanted,
         "text": merged["text"],
-        "reason": patch.get("reason"),
-    }
-
-
-def apply_swap_texts(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    """2つの text 要素の順序を入れ替える。
-
-    Args:
-        data: 更新対象 JSON。
-        patch: refs を持つ patch。
-
-    Returns:
-        適用結果。
-    """
-
-    texts = data.get("texts")
-    refs = patch.get("refs")
-    if not isinstance(texts, list) or not isinstance(refs, list) or len(refs) != 2:
-        return {"op": "swap_texts", "status": "failed", "error": "invalid refs"}
-    current_refs = [
-        self_ref(cast(dict[str, Any], item), "texts", index)
-        for index, item in enumerate(texts)
-        if isinstance(item, dict)
-    ]
-    left, right = str(refs[0]), str(refs[1])
-    if (
-        len(current_refs) != len(texts)
-        or left not in current_refs
-        or right not in current_refs
-    ):
-        return {"op": "swap_texts", "status": "failed", "error": "unknown ref"}
-    ordered_refs = list(current_refs)
-    left_index = ordered_refs.index(left)
-    right_index = ordered_refs.index(right)
-    ordered_refs[left_index], ordered_refs[right_index] = (
-        ordered_refs[right_index],
-        ordered_refs[left_index],
-    )
-    if not reorder_text_collection(data, ordered_refs):
-        return {"op": "swap_texts", "status": "failed", "error": "swap failed"}
-    return {
-        "op": "swap_texts",
-        "status": "success",
-        "refs": [left, right],
         "reason": patch.get("reason"),
     }
 
@@ -2892,7 +2759,7 @@ def structure_page_pairwise(
     settings: OpenAISettings,
     image_path: Path | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """隣接 merge 後、総当たり swap で1ページを補正する。
+    """隣接要素を順番に比較して1ページのコード構造を補正する。
 
     Args:
         data: 更新対象 Docling JSON。
@@ -2926,21 +2793,6 @@ def structure_page_pairwise(
         if not successful_merge:
             index += 1
 
-    left_index = 0
-    while left_index < len(page_structure_units(current, page_no)):
-        right_index = left_index + 1
-        while right_index < len(page_structure_units(current, page_no)):
-            units = page_structure_units(current, page_no)
-            messages = build_swap_messages(
-                page_no, units[left_index], units[right_index], image_path
-            )
-            if message_text_chars(messages) > settings.context_chars:
-                raise ValueError("swap comparison exceeds OpenAI context limit")
-            patches = request_structure_patches(client, settings, messages)
-            current, swap_applied = apply_structure_patches(current, patches)
-            applied.extend(swap_applied)
-            right_index += 1
-        left_index += 1
     return current, applied
 
 
@@ -4957,7 +4809,7 @@ class StructureStage(FrozenModel):
         )
         config_hash = sha256_json(
             {
-                "version": 4,
+                "version": 5,
                 "skip_vlm": self.skip_vlm,
                 "context_chars": self.context_chars,
                 "model": None if self.skip_vlm else os.environ.get("OPENAI_MODEL"),
