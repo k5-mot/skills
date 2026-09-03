@@ -52,6 +52,18 @@ REVIEW_META_FAILURE_MARKERS = (
 LOG_LEVEL = "DEBUG"
 DOCLING_TIMEOUT_SECONDS = 21600
 PAGE_IMAGE_SCALE = 1.0
+DOCLING_PDF_CHUNK_PAGES = 10
+DOCLING_COLLECTION_KEYS = (
+    "groups",
+    "texts",
+    "pictures",
+    "tables",
+    "key_value_items",
+    "form_items",
+)
+DOCLING_COLLECTION_REF_RE = re.compile(
+    r"^#/(groups|texts|pictures|tables|key_value_items|form_items)/(\d+)$"
+)
 OPENAI_TIMEOUT_SECONDS = 1800
 OPENAI_MAX_ATTEMPTS = 6
 OPENAI_RETRY_INITIAL_SECONDS = 5.0
@@ -707,15 +719,19 @@ def poll_docling_task(
     raise TimeoutError(f"Docling async task timed out task_id={task_id}")
 
 
-def convert_with_docling(
-    input_path: Path, output_json: Path, artifacts_dir: Path
+def convert_docling_file(
+    input_path: Path,
+    output_json: Path,
+    artifacts_dir: Path,
+    settings: DoclingSettings,
 ) -> None:
-    """入力文書を Docling JSON と PNG artifacts へ変換する。
+    """1つの入力ファイルをDocling ServeでJSONとartifactsへ変換する。
 
     Args:
-        input_path: PDF/Word などの入力文書。
+        input_path: Docling Serveへ送る入力ファイル。
         output_json: Docling JSON の保存先。
         artifacts_dir: PNG などの artifact 保存先。
+        settings: Docling接続設定。
 
     Returns:
         なし。
@@ -724,9 +740,7 @@ def convert_with_docling(
         Docling Serve へ HTTP request を送り、JSON と artifacts を保存する。
     """
 
-    settings = require_docling_settings()
     output_json.parent.mkdir(parents=True, exist_ok=True)
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
     temp_zip = output_json.with_suffix(output_json.suffix + ".docling.zip")
     try:
         endpoint = f"{settings.server_url}/v1/convert/file/async"
@@ -744,10 +758,354 @@ def convert_with_docling(
         LOGGER.info("Started Docling async conversion task_id=%s", task_id)
         poll_docling_task(str(task_id), temp_zip, settings)
         extract_docling_zip(temp_zip, output_json, artifacts_dir)
-        if input_path.suffix.lower() == ".pdf":
-            render_pdf_page_images(input_path, output_json, artifacts_dir)
     finally:
         temp_zip.unlink(missing_ok=True)
+
+
+def write_pdf_chunk(
+    source_pdf: pdfium.PdfDocument,
+    page_indexes: list[int],
+    output_path: Path,
+) -> None:
+    """元PDFの指定ページだけを含む一時PDFを作る。
+
+    Args:
+        source_pdf: 読み込み済みの元PDF。
+        page_indexes: 取り込む0始まりページ番号。
+        output_path: 一時PDFの保存先。
+
+    Returns:
+        なし。
+
+    Raises:
+        ValueError: ページ番号が空の場合。
+
+    Side Effects:
+        指定先へPDFファイルを保存する。
+    """
+
+    if not page_indexes:
+        raise ValueError("PDF chunk must contain at least one page")
+    with pdfium.PdfDocument.new() as chunk_pdf:
+        chunk_pdf.import_pages(source_pdf, pages=page_indexes)
+        chunk_pdf.save(output_path)
+
+
+def remap_docling_chunk(
+    document: dict[str, Any],
+    collection_offsets: dict[str, int],
+    page_offset: int,
+    artifact_subdir: str,
+) -> dict[str, Any]:
+    """チャンク内の参照・ページ番号・artifact URIを全体座標へ変換する。
+
+    Args:
+        document: Docling Serveが返したチャンクJSON。
+        collection_offsets: 各collectionの既存要素数。
+        page_offset: チャンク先頭より前にあるページ数。
+        artifact_subdir: チャンクartifactを格納するサブディレクトリ名。
+
+    Returns:
+        全体文書用に参照を再採番したDocling JSON。
+
+    Raises:
+        ValueError: collectionまたはpagesの形が不正な場合。
+    """
+
+    remapped = copy.deepcopy(document)
+
+    def visit(value: Any, key: str | None = None) -> Any:
+        """JSON値を再帰走査してチャンク固有値を置換する。
+
+        Args:
+            value: 現在のJSON値。
+            key: 親object内のkey。
+
+        Returns:
+            必要な値を置換したJSON値。
+        """
+
+        if isinstance(value, dict):
+            return {
+                child_key: visit(child, child_key) for child_key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [visit(child) for child in value]
+        if key in {"self_ref", "$ref"} and isinstance(value, str):
+            match = DOCLING_COLLECTION_REF_RE.fullmatch(value)
+            if match:
+                collection, index_text = match.groups()
+                return (
+                    f"#/{collection}/{int(index_text) + collection_offsets[collection]}"
+                )
+        if key == "page_no" and isinstance(value, int) and not isinstance(value, bool):
+            return value + page_offset
+        if key == "uri" and isinstance(value, str) and value.startswith("artifacts/"):
+            relative = value.removeprefix("artifacts/")
+            return PurePosixPath("artifacts", artifact_subdir, relative).as_posix()
+        return value
+
+    remapped = visit(remapped)
+    if not isinstance(remapped, dict):
+        raise ValueError("Remapped Docling chunk root must be an object")
+    pages = remapped.get("pages")
+    if not isinstance(pages, dict):
+        raise ValueError("Docling chunk pages must be an object")
+    remapped["pages"] = {
+        str(int(str(local_page)) + page_offset): page_data
+        for local_page, page_data in pages.items()
+    }
+    for collection in DOCLING_COLLECTION_KEYS:
+        value = remapped.get(collection, [])
+        if not isinstance(value, list):
+            raise ValueError(f"Docling chunk {collection} must be a list")
+        remapped[collection] = value
+    return remapped
+
+
+def merge_docling_chunks(
+    chunks: list[dict[str, Any]],
+    expected_page_counts: list[int],
+    input_path: Path,
+) -> dict[str, Any]:
+    """複数チャンクのDocling JSONを参照整合性を保って連結する。
+
+    Args:
+        chunks: ページ順に並んだチャンクJSON。
+        expected_page_counts: 各チャンクに含めたPDFページ数。
+        input_path: 元PDFパス。
+
+    Returns:
+        元PDF全体を表す単一のDocling JSON。
+
+    Raises:
+        ValueError: チャンク数、schema、ページ、tree構造が不正な場合。
+    """
+
+    if not chunks or len(chunks) != len(expected_page_counts):
+        raise ValueError("Docling chunks and page counts must be non-empty and aligned")
+    merged: dict[str, Any] | None = None
+    page_offset = 0
+    for chunk_index, (chunk, expected_pages) in enumerate(
+        zip(chunks, expected_page_counts, strict=True), start=1
+    ):
+        pages = chunk.get("pages")
+        if not isinstance(pages, dict) or len(pages) != expected_pages:
+            raise ValueError(
+                f"Docling chunk page count mismatch chunk={chunk_index} "
+                f"expected={expected_pages} actual={len(pages) if isinstance(pages, dict) else 'invalid'}"
+            )
+        expected_local_pages = {
+            str(page_no) for page_no in range(1, expected_pages + 1)
+        }
+        if {str(page_no) for page_no in pages} != expected_local_pages:
+            raise ValueError(
+                f"Docling chunk page numbers are invalid chunk={chunk_index}"
+            )
+        collection_offsets = {
+            collection: len(merged.get(collection, [])) if merged else 0
+            for collection in DOCLING_COLLECTION_KEYS
+        }
+        remapped = remap_docling_chunk(
+            chunk,
+            collection_offsets,
+            page_offset,
+            f"chunk_{chunk_index:06d}",
+        )
+        if merged is None:
+            merged = remapped
+        else:
+            for schema_key in ("schema_name", "version"):
+                if merged.get(schema_key) != remapped.get(schema_key):
+                    raise ValueError(
+                        f"Docling chunk {schema_key} mismatch chunk={chunk_index}"
+                    )
+            for collection in DOCLING_COLLECTION_KEYS:
+                merged[collection].extend(remapped[collection])
+            for tree_name in ("body", "furniture"):
+                merged_tree = merged.get(tree_name)
+                chunk_tree = remapped.get(tree_name)
+                if not isinstance(merged_tree, dict) or not isinstance(
+                    chunk_tree, dict
+                ):
+                    raise ValueError(f"Docling chunk {tree_name} must be an object")
+                merged_children = merged_tree.get("children")
+                chunk_children = chunk_tree.get("children")
+                if not isinstance(merged_children, list) or not isinstance(
+                    chunk_children, list
+                ):
+                    raise ValueError(
+                        f"Docling chunk {tree_name}.children must be a list"
+                    )
+                merged_children.extend(chunk_children)
+            merged_pages = merged.get("pages")
+            remapped_pages = remapped.get("pages")
+            if not isinstance(merged_pages, dict) or not isinstance(
+                remapped_pages, dict
+            ):
+                raise ValueError("Docling chunk pages must be an object")
+            merged_pages.update(remapped_pages)
+        page_offset += expected_pages
+
+    if merged is None:
+        raise ValueError("Docling chunks are empty")
+    merged["name"] = input_path.stem
+    origin = merged.get("origin")
+    if not isinstance(origin, dict):
+        origin = {}
+        merged["origin"] = origin
+    origin.update(
+        {
+            "mimetype": "application/pdf",
+            "binary_hash": int(sha256_file(input_path)[:16], 16),
+            "filename": input_path.name,
+        }
+    )
+    return merged
+
+
+def replace_artifacts_directory(source: Path, destination: Path) -> None:
+    """準備済みartifactディレクトリを既存成果物とatomicに入れ替える。
+
+    Args:
+        source: 同一filesystem上の準備済みartifactディレクトリ。
+        destination: 最終artifactディレクトリ。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        既存成果物を一時退避し、sourceをdestinationへ移動する。
+    """
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    backup = destination.with_name(f".{destination.name}.backup-{uuid.uuid4().hex}")
+    try:
+        if destination.exists():
+            os.replace(destination, backup)
+        os.replace(source, destination)
+    except Exception:
+        if backup.exists() and not destination.exists():
+            os.replace(backup, destination)
+        raise
+    finally:
+        if backup.exists():
+            shutil.rmtree(backup)
+
+
+def convert_pdf_with_docling_chunks(
+    input_path: Path,
+    output_json: Path,
+    artifacts_dir: Path,
+    settings: DoclingSettings,
+) -> None:
+    """PDFを10ページずつDocling変換し、JSONとartifactsをローカル連結する。
+
+    Args:
+        input_path: 変換対象PDF。
+        output_json: 連結済みDocling JSONの保存先。
+        artifacts_dir: 連結済みartifactの保存先。
+        settings: Docling接続設定。
+
+    Returns:
+        なし。
+
+    Raises:
+        ValueError: PDFが空、またはDocling JSONを安全に連結できない場合。
+
+    Side Effects:
+        Docling Serveへチャンクを直列送信し、ローカル成果物をatomic置換する。
+    """
+
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".docling-chunks-", dir=str(output_json.parent)
+    ) as temp_dir_text:
+        temp_dir = Path(temp_dir_text)
+        temp_artifacts = temp_dir / "artifacts"
+        chunks: list[dict[str, Any]] = []
+        expected_page_counts: list[int] = []
+        with pdfium.PdfDocument(input_path) as source_pdf:
+            page_count = len(source_pdf)
+            if page_count == 0:
+                raise ValueError("PDF must contain at least one page")
+            for chunk_index, start_page in enumerate(
+                range(0, page_count, DOCLING_PDF_CHUNK_PAGES), start=1
+            ):
+                end_page = min(start_page + DOCLING_PDF_CHUNK_PAGES, page_count)
+                chunk_pdf = temp_dir / f"chunk_{chunk_index:06d}.pdf"
+                chunk_json = temp_dir / f"chunk_{chunk_index:06d}.json"
+                chunk_artifacts = temp_artifacts / f"chunk_{chunk_index:06d}"
+                write_pdf_chunk(
+                    source_pdf, list(range(start_page, end_page)), chunk_pdf
+                )
+                LOGGER.info(
+                    "Started Docling PDF chunk chunk=%s pages=%s-%s total_pages=%s",
+                    chunk_index,
+                    start_page + 1,
+                    end_page,
+                    page_count,
+                )
+                convert_docling_file(
+                    chunk_pdf,
+                    chunk_json,
+                    chunk_artifacts,
+                    settings,
+                )
+                chunk_document = read_json(chunk_json)
+                if not isinstance(chunk_document, dict):
+                    raise ValueError(
+                        f"Docling chunk JSON root must be an object chunk={chunk_index}"
+                    )
+                chunks.append(chunk_document)
+                expected_page_counts.append(end_page - start_page)
+                LOGGER.info(
+                    "Completed Docling PDF chunk chunk=%s pages=%s-%s",
+                    chunk_index,
+                    start_page + 1,
+                    end_page,
+                )
+        merged = merge_docling_chunks(chunks, expected_page_counts, input_path)
+        temp_output_json = temp_dir / "document.json"
+        write_json(temp_output_json, merged)
+        render_pdf_page_images(input_path, temp_output_json, temp_artifacts)
+        replace_artifacts_directory(temp_artifacts, artifacts_dir)
+        atomic_write_bytes(output_json, temp_output_json.read_bytes())
+        LOGGER.info(
+            "Merged Docling PDF chunks chunks=%s pages=%s output=%s",
+            len(chunks),
+            sum(expected_page_counts),
+            output_json,
+        )
+
+
+def convert_with_docling(
+    input_path: Path, output_json: Path, artifacts_dir: Path
+) -> None:
+    """入力文書を Docling JSON と PNG artifacts へ変換する。
+
+    Args:
+        input_path: PDF/Word などの入力文書。
+        output_json: Docling JSON の保存先。
+        artifacts_dir: PNG などの artifact 保存先。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        PDFは10ページずつ、他形式は1ファイルとしてDocling Serveへ送る。
+    """
+
+    settings = require_docling_settings()
+    if input_path.suffix.lower() == ".pdf":
+        convert_pdf_with_docling_chunks(
+            input_path,
+            output_json,
+            artifacts_dir,
+            settings,
+        )
+        return
+    convert_docling_file(input_path, output_json, artifacts_dir, settings)
 
 
 def extract_docling_zip(zip_path: Path, output_json: Path, artifacts_dir: Path) -> None:
@@ -4486,8 +4844,9 @@ class ParseStage(FrozenModel):
         input_hash = sha256_file(self.input_path)
         config_hash = sha256_json(
             {
-                "version": 2,
+                "version": 3,
                 "payload": docling_form_payload(DOCLING_TIMEOUT_SECONDS),
+                "pdf_chunk_pages": DOCLING_PDF_CHUNK_PAGES,
                 "local_page_images": {
                     "renderer": "pypdfium2",
                     "scale": PAGE_IMAGE_SCALE,

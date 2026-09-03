@@ -31,7 +31,7 @@ Document != State != Patch
 | Environment | python-dotenv | `.env` 読込 |
 | HTTP | HTTPX | Docling Serveのasync API |
 | LLM | OpenAI Python SDK | OpenAI互換Chat Completions |
-| PDF | pypdfium2 5.x | ページPNGの逐次生成 |
+| PDF | pypdfium2 5.x | 10ページ単位のPDF分割、ページPNGの逐次生成 |
 | Image | Pillow | PNG encode |
 | Document | Docling Serve | PDF/WordからDocling JSONと要素画像への変換 |
 | Render | pandoc | Markdownからdocxへの変換 |
@@ -79,6 +79,7 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 | --- | ---: |
 | アプリログレベル | DEBUG |
 | Docling全体timeout | 21,600秒 |
+| Docling PDF chunk | 10ページ、直列処理 |
 | PDF page image scale | 1.0 |
 | PDF page image DPI | 72 |
 | OpenAI timeout | 1,800秒 |
@@ -114,13 +115,15 @@ target_type=zip
 
 ZIPはJSONを正確に1件だけ含むこと。`artifacts` より外側のmemberは展開対象外とし、`..` を含む危険な相対パスは拒否する。
 
+PDFは10ページ単位の一時PDFへ分割し、各チャンクを直列変換する。各結果のschemaとversion、および1始まりで連続する `pages` が期待ページ数と一致することを連結前に検証する。既存collection長をoffsetとして `self_ref` と `$ref` を再採番し、すべての `page_no` と `pages` keyへ先行ページ数を加算する。抽出artifactは `artifacts/chunk_<6桁>/` に分離して同名fileの衝突を避ける。
+
 PDFページ画像は `artifacts/page_<6桁page>.png` とし、JSONのURIはJSONファイルのディレクトリから見た `artifacts/<filename>` とする。
 
 ## 8. ステージ契約
 
 | Stage | 入力 | 出力 | 外部サービス | Resume粒度 |
 | --- | --- | --- | --- | --- |
-| Parse | 入力文書 | `<stem>.json`, `artifacts/` | Docling Serve | 工程 |
+| Parse | 入力文書 | `<stem>.json`, `artifacts/` | Docling Serve（PDFは10ページずつ直列） | 工程 |
 | Normalize | Parse JSON | `document.normalized.json` | なし | 工程 |
 | Structure | Normalize JSON、page PNG | `document.structured.json` | OpenAI互換API | 要素 |
 | Clean | Structure JSON | `document.cleaned.json` | なし | 工程 |

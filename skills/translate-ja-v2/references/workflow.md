@@ -77,15 +77,20 @@ Parse、Normalize、Clean、Markdown、Docxは工程単位の状態だけを持�
 
 ### 処理
 
-1. Docling Serveの `/v1/convert/file/async` にmultipartで入力を送る。
-2. `task_id` を取得し、`/v1/status/poll/{task_id}` を10秒間隔でpollする。
-3. 成功後、`/v1/result/{task_id}` からZIPを取得する。
-4. ZIP内にJSONが正確に1件あることを検証し、入力stem名のJSONとしてatomic保存する。
-5. ZIP内の `artifacts/` 配下だけを一時ディレクトリに展開し、既存ディレクトリと置換する。
-6. PDFではpypdfium2を使い、全ページをscale 1.0、72 DPIで1ページずつPNG化する。
-7. PNGを `artifacts/page_000001.png` 形式で保存し、Docling JSONの `pages[page_no].image.uri` を `artifacts/<filename>` に更新する。
+1. PDFはpypdfium2で先頭から10ページずつ一時PDFへ分割する。Word文書は分割しない。
+2. 各入力をDocling Serveの `/v1/convert/file/async` にmultipartで直列送信する。同時送信はしない。
+3. `task_id` を取得し、`/v1/status/poll/{task_id}` を10秒間隔でpollする。
+4. 成功後、`/v1/result/{task_id}` からZIPを取得する。
+5. ZIP内にJSONが正確に1件あることを検証する。PDFではチャンクごとの `artifacts/` を `artifacts/chunk_000001/` 形式で分離する。
+6. PDFの各JSONについて、collection indexを基に `self_ref` と `$ref` を再採番し、`page_no` と `pages` keyへ先行ページ数を加算する。artifact URIもチャンク別pathへ変更する。
+7. `groups`、`texts`、`pictures`、`tables`、`key_value_items`、`form_items`、`body.children`、`furniture.children`、`pages` をページ順に連結する。schemaとversion、各チャンクのページ数が一致しない場合は失敗させる。
+8. 元PDFのname、filename、hashを設定し、入力stem名のJSONとしてatomic保存する。
+9. PDFではpypdfium2を使い、元PDF全体をscale 1.0、72 DPIで1ページずつPNG化する。
+10. PNGを `artifacts/page_000001.png` 形式で保存し、Docling JSONの `pages[page_no].image.uri` を `artifacts/<filename>` に更新する。
 
-Docling Serveには `include_page_images=false` を送り、ページ全体画像はローカルで生成する。これにより、サーバー側が全ページ画像を抱えることによるメモリ負荷を避ける。図などの抽出画像を得るため `include_images=true` は維持する。
+Docling Serveには `include_page_images=false` を送り、ページ全体画像はローカルで生成する。加えてPDFを10ページ単位で直列処理し、サーバーが文書全体を一度に保持する負荷を抑える。図などの抽出画像を得るため `include_images=true` は維持する。
+
+PDFチャンクは一時ディレクトリで処理し、全チャンクが成功した場合だけ連結JSONとartifactsを公開する。Parse途中で失敗した場合のResumeはチャンク単位ではなく工程単位であり、先頭チャンクから再実行する。
 
 PDFページ、bitmap、Pillow imageは各ページ保存後に閉じ、全ページをメモリへ保持しない。ページ数とDocling JSONの `pages` が対応しない場合は失敗させる。
 

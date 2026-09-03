@@ -54,6 +54,7 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - ReviewのID付きbatch、近接文脈、修正反映、不正応答の二分、空応答・隣接訳コピー・異常な長短・メタ応答・日本語消失での原訳保持、独立batchの並列実行
 - Markdown renderer
 - Docling async API、固定payload、pollingログ
+- 23ページPDFの10、10、3ページ分割と直列変換、JSON参照・ページ番号・artifact URIの連結
 - PDFページ画像のローカル生成とURI更新
 - pandoc必須判定と相対画像の作業ディレクトリ
 - Structure、Translate、Reviewの要素単位Resume
@@ -126,6 +127,9 @@ manifest.json
 ### Parse
 
 - `sample.json` の `pages` 件数がPDFページ数と一致する。
+- Docling ServeへのPDF送信が最大10ページであり、チャンク番号順に直列実行される。
+- `self_ref`、`$ref`、`page_no` が連結後の全体index・ページ番号を指す。
+- 抽出画像のURIが `artifacts/chunk_<6桁>/...` を指し、チャンク間で同名画像が衝突しない。
 - 各 `pages[].image.uri` が `artifacts/page_<6桁>.png` を指す。
 - URIを出力ディレクトリ基準で解決したPNGが存在する。
 - PNG件数がPDFページ数以上である。

@@ -1988,9 +1988,17 @@ def test_docling_payload_disables_remote_page_images() -> None:
 def test_convert_with_docling_uses_async_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Docling 変換は async endpoint を使う。"""
+    """非PDFのDocling変換がasync endpointを1回使うことを確認する。
 
-    input_path = tmp_path / "source.pdf"
+    Args:
+        tmp_path: 一時入力と成果物を置くpytest fixture。
+        monkeypatch: 外部通信をfakeへ置換するpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    input_path = tmp_path / "source.docx"
     output_json = tmp_path / "document.json"
     artifacts_dir = tmp_path / "artifacts"
     input_path.write_bytes(b"%PDF-1.4")
@@ -2032,27 +2040,172 @@ def test_convert_with_docling_uses_async_endpoint(
         target_artifacts_dir.mkdir(parents=True, exist_ok=True)
         write_json(target_json, {"texts": []})
 
-    rendered: list[Path] = []
-
-    def fake_render(
-        source_path: Path, target_json: Path, target_artifacts_dir: Path
-    ) -> None:
-        """ローカルページ画像生成の呼び出しを記録する。"""
-
-        assert target_json == output_json
-        assert target_artifacts_dir == artifacts_dir
-        rendered.append(source_path)
-
     monkeypatch.setattr("translate.request_docling_convert", fake_request)
     monkeypatch.setattr("translate.poll_docling_task", fake_poll)
     monkeypatch.setattr("translate.extract_docling_zip", fake_extract)
-    monkeypatch.setattr("translate.render_pdf_page_images", fake_render)
 
     convert_with_docling(input_path, output_json, artifacts_dir)
 
     assert endpoints == ["http://docling.test/v1/convert/file/async"]
-    assert rendered == [input_path]
     assert output_json.exists()
+
+
+def test_convert_with_docling_chunks_pdf_and_merges_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """23ページPDFを10ページずつ変換し参照とartifactを連結する。
+
+    Args:
+        tmp_path: 一時PDFと成果物を置くpytest fixture。
+        monkeypatch: Docling Serve変換をfakeへ置換するpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    input_path = tmp_path / "source.pdf"
+    output_json = tmp_path / "output" / "source.json"
+    artifacts_dir = output_json.parent / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    (artifacts_dir / "stale.png").write_bytes(b"stale")
+    with pdfium.PdfDocument.new() as pdf:
+        for _ in range(23):
+            pdf.new_page(200, 300)
+        pdf.save(input_path)
+    settings = DoclingSettings(
+        server_url="http://docling.test",
+        api_key="test",
+        timeout_seconds=120,
+    )
+    chunk_page_counts: list[int] = []
+
+    def fake_convert_file(
+        chunk_path: Path,
+        chunk_json: Path,
+        chunk_artifacts: Path,
+        actual_settings: DoclingSettings,
+    ) -> None:
+        """一時PDFのページ数に対応する最小Docling JSONを保存する。
+
+        Args:
+            chunk_path: 変換対象の一時PDF。
+            chunk_json: fake JSONの保存先。
+            chunk_artifacts: fake画像の保存先。
+            actual_settings: 呼び出し元から渡されたDocling設定。
+
+        Returns:
+            なし。
+        """
+
+        assert actual_settings == settings
+        with pdfium.PdfDocument(chunk_path) as chunk_pdf:
+            chunk_pages = len(chunk_pdf)
+        chunk_page_counts.append(chunk_pages)
+        chunk_no = len(chunk_page_counts)
+        chunk_artifacts.mkdir(parents=True, exist_ok=True)
+        (chunk_artifacts / "image.png").write_bytes(f"image-{chunk_no}".encode())
+        write_json(
+            chunk_json,
+            {
+                "schema_name": "DoclingDocument",
+                "version": "1.7.0",
+                "name": chunk_path.stem,
+                "origin": {
+                    "mimetype": "application/pdf",
+                    "binary_hash": chunk_no,
+                    "filename": chunk_path.name,
+                },
+                "body": {
+                    "self_ref": "#/body",
+                    "children": [
+                        {"$ref": "#/groups/0"},
+                        {"$ref": "#/pictures/0"},
+                    ],
+                },
+                "furniture": {"self_ref": "#/furniture", "children": []},
+                "groups": [
+                    {
+                        "self_ref": "#/groups/0",
+                        "parent": {"$ref": "#/body"},
+                        "children": [{"$ref": "#/texts/0"}],
+                    }
+                ],
+                "texts": [
+                    {
+                        "self_ref": "#/texts/0",
+                        "parent": {"$ref": "#/groups/0"},
+                        "text": f"chunk {chunk_no}",
+                        "prov": [{"page_no": 1}],
+                    }
+                ],
+                "pictures": [
+                    {
+                        "self_ref": "#/pictures/0",
+                        "parent": {"$ref": "#/body"},
+                        "prov": [{"page_no": chunk_pages}],
+                        "image": {
+                            "mimetype": "image/png",
+                            "uri": "artifacts/image.png",
+                        },
+                    }
+                ],
+                "tables": [],
+                "key_value_items": [],
+                "form_items": [],
+                "pages": {
+                    str(page_no): {
+                        "page_no": page_no,
+                        "size": {"width": 200, "height": 300},
+                    }
+                    for page_no in range(1, chunk_pages + 1)
+                },
+            },
+        )
+
+    monkeypatch.setattr("translate.require_docling_settings", lambda: settings)
+    monkeypatch.setattr("translate.convert_docling_file", fake_convert_file)
+
+    convert_with_docling(input_path, output_json, artifacts_dir)
+
+    document = read_json(output_json)
+    assert chunk_page_counts == [10, 10, 3]
+    assert document["name"] == "source"
+    assert document["origin"]["filename"] == "source.pdf"
+    assert len(document["pages"]) == 23
+    assert list(document["pages"]) == [str(page_no) for page_no in range(1, 24)]
+    assert [item["self_ref"] for item in document["texts"]] == [
+        "#/texts/0",
+        "#/texts/1",
+        "#/texts/2",
+    ]
+    assert [child["$ref"] for child in document["body"]["children"]] == [
+        "#/groups/0",
+        "#/pictures/0",
+        "#/groups/1",
+        "#/pictures/1",
+        "#/groups/2",
+        "#/pictures/2",
+    ]
+    assert [item["parent"]["$ref"] for item in document["texts"]] == [
+        "#/groups/0",
+        "#/groups/1",
+        "#/groups/2",
+    ]
+    assert [item["prov"][0]["page_no"] for item in document["texts"]] == [1, 11, 21]
+    assert [item["prov"][0]["page_no"] for item in document["pictures"]] == [
+        10,
+        20,
+        23,
+    ]
+    assert [item["image"]["uri"] for item in document["pictures"]] == [
+        "artifacts/chunk_000001/image.png",
+        "artifacts/chunk_000002/image.png",
+        "artifacts/chunk_000003/image.png",
+    ]
+    assert (artifacts_dir / "chunk_000001" / "image.png").read_bytes() == b"image-1"
+    assert not (artifacts_dir / "stale.png").exists()
+    assert (artifacts_dir / "page_000023.png").is_file()
+    assert document["pages"]["23"]["image"]["uri"] == ("artifacts/page_000023.png")
 
 
 def test_render_pdf_page_images_updates_docling_uris(tmp_path: Path) -> None:

@@ -39,7 +39,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
 4. Cleanは非コード本文と表セルの3文字以上連続する `.` と `・` を3文字へ縮める。
 5. 翻訳で原文を上書きせず、`translate_ja_v2` metadataへ追加する。
 6. 見出しと表タイトルは英日併記、本文は日本語、コード・URL・パス・識別子は原文を描画する。
-7. page imageはpypdfium2でローカル生成し、Docling JSONの相対URIから正確に解決する。無関係な画像へfallbackしない。
+7. PDFはpypdfium2で10ページずつ分割してDocling Serveへ直列送信し、参照とページ番号を再採番してJSONをローカル連結する。page imageもローカル生成し、Docling JSONの相対URIから正確に解決する。無関係な画像へfallbackしない。
 8. JSONと成果物をatomic保存し、hash一致を確認してからResumeする。
 9. ログ本文は英語、既定levelはDEBUGとする。開始・完了・省略・ResumeはINFO、反復的な詳細はDEBUGとし、secretや巨大payloadを出さない。
 10. 外部APIを使うunit testはfake clientで検証し、変更後は [test.md](references/test.md) の該当検証を実行する。
