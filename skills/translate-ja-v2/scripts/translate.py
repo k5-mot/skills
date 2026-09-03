@@ -3089,6 +3089,7 @@ def translate_batch(
     items: list[dict[str, Any]],
     *,
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
+    _invalid_attempt: int = 1,
 ) -> dict[str, str]:
     """複数の原文をID付きJSONで一括翻訳する。
 
@@ -3097,6 +3098,7 @@ def translate_batch(
         settings: OpenAI 互換 API 設定。
         items: id、text、style、context、glossary を持つ翻訳対象。
         translation_rules: LLM に渡す翻訳ルール。
+        _invalid_attempt: 単一要素の生成不全に対する現在の試行番号。
 
     Returns:
         入力IDから日本語訳への辞書。
@@ -3116,8 +3118,42 @@ def translate_batch(
     expected_ids = [str(index) for index in range(1, len(items) + 1)]
 
     def split_batch(error: Exception) -> dict[str, str]:
+        """不正なバッチを二分し、単一要素なら上限付きで再試行する。
+
+        Args:
+            error: バッチを採用できない理由。
+
+        Returns:
+            入力IDから再翻訳結果への辞書。
+
+        Raises:
+            Exception: 単一要素で最大試行回数に達した場合の元の例外。
+        """
+
         if len(items) == 1:
-            raise error
+            if _invalid_attempt >= OPENAI_MAX_ATTEMPTS:
+                raise error
+            delay = min(
+                OPENAI_RETRY_MAX_SECONDS,
+                OPENAI_RETRY_INITIAL_SECONDS * (2 ** (_invalid_attempt - 1)),
+            )
+            LOGGER.warning(
+                "Retrying invalid translation generation id=%s attempt=%s "
+                "max_attempts=%s delay=%.1f error=%s",
+                items[0]["id"],
+                _invalid_attempt,
+                OPENAI_MAX_ATTEMPTS,
+                delay,
+                error,
+            )
+            time.sleep(delay)
+            return translate_batch(
+                client,
+                settings,
+                items,
+                translation_rules=translation_rules,
+                _invalid_attempt=_invalid_attempt + 1,
+            )
         middle = len(items) // 2
         LOGGER.warning(
             "Splitting invalid translation batch items=%s error=%s", len(items), error
@@ -5076,7 +5112,7 @@ class TranslateStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 3,
+                "version": 4,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,

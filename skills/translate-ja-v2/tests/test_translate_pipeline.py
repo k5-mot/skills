@@ -1043,6 +1043,7 @@ def test_translate_batch_rejects_missing_response_id(
             ensure_ascii=False,
         ),
     )
+    monkeypatch.setattr("translate.time.sleep", lambda _delay: None)
     settings = OpenAISettings(
         base_url="http://example.test",
         api_key="test",
@@ -1059,6 +1060,68 @@ def test_translate_batch_rejects_missing_response_id(
                 {"id": "b", "text": "B", "style": "本文"},
             ],
         )
+
+
+def test_translate_batch_retries_invalid_single_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """単一要素の生成不全は待機後に同じ要素を再試行する。
+
+    Args:
+        monkeypatch: LLM応答と待機処理を差し替えるpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    responses = iter(
+        [
+            "{}",
+            json.dumps(
+                {"translations": [{"id": "1", "translated_text": "訳文"}]},
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    calls = 0
+
+    def fake_chat(
+        _client: object,
+        _settings: OpenAISettings,
+        _messages: list[dict[str, Any]],
+        **_kwargs: object,
+    ) -> str:
+        """初回だけ不正JSON objectを返す。
+
+        Args:
+            _client: fakeでは未使用のclient。
+            _settings: fakeでは未使用の設定。
+            _messages: fakeでは未使用のmessages。
+            **_kwargs: fakeでは未使用の追加引数。
+
+        Returns:
+            順番に用意したLLM応答。
+        """
+
+        nonlocal calls
+        calls += 1
+        return next(responses)
+
+    delays: list[float] = []
+    monkeypatch.setattr("translate.chat_text", fake_chat)
+    monkeypatch.setattr("translate.time.sleep", delays.append)
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+
+    assert translate_batch(
+        object(), settings, [{"id": "a", "text": "A", "style": "本文"}]
+    ) == {"a": "訳文"}
+    assert calls == 2
+    assert delays == [5.0]
 
 
 def test_translate_batch_accepts_top_level_array(

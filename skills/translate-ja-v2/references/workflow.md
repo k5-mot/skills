@@ -194,7 +194,7 @@ texts、表タイトル、自然言語を含む表セルを翻訳する。コー
 
 各候補からsystem prompt、翻訳ルール、共有文脈、共有用語集、入力JSONを含む完成messagesを作り、テキスト全体が `--context-chars` を超える場合は要素境界でさらに分割する。単一要素でも超える場合はAPIを呼ばずに失敗させる。
 
-同じ見出し階層は共有文脈辞書へ一度だけ置き、各要素は短い `context_id` で参照する。用語集もバッチ内で重複を除いて一度だけ置く。空のinline code fieldは送らない。APIには長いDocling refの代わりにバッチ内の連番IDを渡し、応答後に元refへ戻す。JSON objectの `translations` で同じ連番ID集合を返させ、IDの欠落、追加、変更、重複、空訳は採用しない。空応答または部分応答で複数要素がある場合は要素境界で二分して再実行する。
+同じ見出し階層は共有文脈辞書へ一度だけ置き、各要素は短い `context_id` で参照する。用語集もバッチ内で重複を除いて一度だけ置く。空のinline code fieldは送らない。APIには長いDocling refの代わりにバッチ内の連番IDを渡し、応答後に元refへ戻す。JSON objectの `translations` で同じ連番ID集合を返させ、IDの欠落、追加、変更、重複、空訳は採用しない。空応答または部分応答で複数要素がある場合は要素境界で二分して再実行する。単一要素でも生成不全なら指数backoffで最大6回まで再試行し、正常な訳を得られなければ失敗させる。
 
 `--glossary` は `english,japanese,desc,genre,note` 列を持つCSVである。対象原文に `english` が含まれる行だけをpromptへ加える。`--translation-rules` を省略した場合は組み込みルールを使う。
 
