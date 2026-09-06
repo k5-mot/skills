@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
 import csv
 from difflib import SequenceMatcher
+from enum import StrEnum
 from functools import partial
 from io import BytesIO
 import json
@@ -75,6 +76,7 @@ OPENAI_BATCH_MAX_OUTPUT_TOKENS = 16384
 OPENAI_SAFE_OUTPUT_CHARS = 12000
 OPENAI_BATCH_MAX_ITEMS = 20
 TRANSLATION_BATCH_MAX_CHARS = 1500
+LIBRETRANSLATE_TIMEOUT_SECONDS = 1800
 REVIEW_MAX_WORKERS = 4
 PIPELINE_STAGES = (
     "parse",
@@ -96,6 +98,13 @@ DEFAULT_TRANSLATION_RULES = """\
 
 class OpenAIEmptyResponseError(RuntimeError):
     """OpenAI 互換 API が本文を返さなかったことを表す。"""
+
+
+class TranslationBackend(StrEnum):
+    """Translate工程で選択できる翻訳backendを表す。"""
+
+    DEFAULT = "default"
+    LLM = "llm"
 
 
 class ColorFormatter(logging.Formatter):
@@ -178,6 +187,23 @@ class OpenAISettings(FrozenModel):
     context_chars: int = Field(default=OPENAI_CONTEXT_LIMIT_CHARS, ge=1)
 
 
+class LibreTranslateSettings(FrozenModel):
+    """LibreTranslate API の接続設定を保持する。
+
+    Args:
+        base_url: LibreTranslate API のベース URL。
+        api_key: 任意の API キー。
+        timeout_seconds: API 呼び出しのtimeout秒数。
+
+    Returns:
+        LibreTranslate接続に必要な設定値。
+    """
+
+    base_url: str
+    api_key: str | None = None
+    timeout_seconds: int = LIBRETRANSLATE_TIMEOUT_SECONDS
+
+
 class StagePaths(FrozenModel):
     """translate-ja-v2 の主要出力パスを保持する。
 
@@ -226,6 +252,7 @@ class PipelineOptions(FrozenModel):
         translation_rules: 翻訳ルール Markdown のパス。
         context_chars: OpenAI request の最大テキスト文字数。
         batch_chars: 翻訳・Reviewバッチの最大原文・訳文文字数。
+        translator: Translate工程で使う翻訳backend。
 
     Returns:
         パイプライン実行に必要な CLI オプション。
@@ -244,6 +271,7 @@ class PipelineOptions(FrozenModel):
     translation_rules: Path | None = None
     context_chars: int = Field(default=OPENAI_CONTEXT_LIMIT_CHARS, ge=1)
     batch_chars: int = Field(default=TRANSLATION_BATCH_MAX_CHARS, ge=1)
+    translator: TranslationBackend = TranslationBackend.DEFAULT
 
 
 def configure_logging(level_name: str | None = None) -> None:
@@ -375,6 +403,25 @@ def require_openai_settings(
         model=model,
         timeout_seconds=OPENAI_TIMEOUT_SECONDS,
         context_chars=context_chars,
+    )
+
+
+def require_libretranslate_settings() -> LibreTranslateSettings:
+    """LibreTranslate API設定を環境変数から読み込む。
+
+    Returns:
+        LibreTranslate API の接続設定。
+
+    Raises:
+        RuntimeError: `LIBRETRANSLATE_URL` が未設定の場合。
+    """
+
+    base_url = os.environ.get("LIBRETRANSLATE_URL")
+    if not base_url:
+        raise RuntimeError("LIBRETRANSLATE_URL is required")
+    return LibreTranslateSettings(
+        base_url=base_url.rstrip("/"),
+        api_key=os.environ.get("LIBRETRANSLATE_API_KEY") or None,
     )
 
 
@@ -1735,6 +1782,47 @@ def openai_client(settings: OpenAISettings) -> Any:
         timeout=settings.timeout_seconds,
         max_retries=0,
     )
+
+
+def libretranslate_client(settings: LibreTranslateSettings) -> Any:
+    """LibreTranslate用HTTP clientを生成する。
+
+    Args:
+        settings: LibreTranslate API設定。
+
+    Returns:
+        timeout設定済みのHTTPX client。
+    """
+
+    import httpx
+
+    return httpx.Client(timeout=settings.timeout_seconds)
+
+
+def is_retryable_libretranslate_error(exc: Exception) -> bool:
+    """LibreTranslate APIの一時的なHTTP失敗かを判定する。
+
+    Args:
+        exc: LibreTranslate呼び出しで発生した例外。
+
+    Returns:
+        再試行可能なnetwork、timeout、HTTP statusならTrue。
+    """
+
+    import httpx
+
+    if isinstance(exc, (httpx.NetworkError, httpx.TimeoutException)):
+        return True
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None) in {
+        408,
+        409,
+        429,
+        500,
+        502,
+        503,
+        504,
+    }
 
 
 def is_retryable_openai_error(exc: Exception) -> bool:
@@ -3382,6 +3470,84 @@ def translate_batch(
     return translated_by_original_id
 
 
+def translate_batch_with_libretranslate(
+    client: Any,
+    settings: LibreTranslateSettings,
+    items: list[dict[str, Any]],
+) -> dict[str, str]:
+    """複数の原文をLibreTranslateのbatch APIで日本語へ翻訳する。
+
+    Args:
+        client: postとcloseを持つHTTP client。
+        settings: LibreTranslate API設定。
+        items: idとtextを持つ翻訳対象。
+
+    Returns:
+        入力IDから日本語訳への辞書。
+
+    Raises:
+        ValueError: 入力IDの重複、または応答件数・訳文が不正な場合。
+
+    Side Effects:
+        LibreTranslate `/translate` APIを呼び、一時的な失敗時に再試行する。
+    """
+
+    if not items:
+        return {}
+    item_ids = [str(item["id"]) for item in items]
+    if len(item_ids) != len(set(item_ids)):
+        raise ValueError("translation batch contains duplicate ids")
+    request: dict[str, Any] = {
+        "q": [str(item["text"]) for item in items],
+        "source": "en",
+        "target": "ja",
+        "format": "text",
+    }
+    if settings.api_key:
+        request["api_key"] = settings.api_key
+    for attempt in range(1, OPENAI_MAX_ATTEMPTS + 1):
+        try:
+            response = client.post(f"{settings.base_url}/translate", json=request)
+            response.raise_for_status()
+            payload = response.json()
+            translated = (
+                payload.get("translatedText") if isinstance(payload, dict) else None
+            )
+            if not isinstance(translated, list) or len(translated) != len(items):
+                raise ValueError(
+                    "LibreTranslate response translatedText must match input count"
+                )
+            if not all(
+                isinstance(value, str) and value.strip() for value in translated
+            ):
+                raise ValueError("LibreTranslate response contains empty translation")
+            LOGGER.debug(
+                "Translated LibreTranslate batch items=%s source_chars=%s",
+                len(items),
+                sum(len(str(item["text"])) for item in items),
+            )
+            return dict(zip(item_ids, cast(list[str], translated), strict=True))
+        except Exception as exc:
+            if attempt >= OPENAI_MAX_ATTEMPTS or not is_retryable_libretranslate_error(
+                exc
+            ):
+                raise
+            delay = min(
+                OPENAI_RETRY_MAX_SECONDS,
+                OPENAI_RETRY_INITIAL_SECONDS * (2 ** (attempt - 1)),
+            )
+            LOGGER.warning(
+                "Retrying LibreTranslate request attempt=%s max_attempts=%s "
+                "delay=%.1f error=%s",
+                attempt,
+                OPENAI_MAX_ATTEMPTS,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+    raise RuntimeError("LibreTranslate request attempts exhausted")
+
+
 def apply_text_translation(
     item: dict[str, Any], translated: str, terms: list[dict[str, str]]
 ) -> None:
@@ -3428,30 +3594,32 @@ def apply_text_translation(
 def translate_text_items(
     values: list[Any],
     client: Any,
-    settings: OpenAISettings,
+    settings: OpenAISettings | None,
     glossary: list[dict[str, str]],
     translation_rules: str,
     batch_chars: int = TRANSLATION_BATCH_MAX_CHARS,
     completed_ids: set[str] | None = None,
     on_progress: Callable[[list[str]], None] | None = None,
+    batch_translator: Callable[[list[dict[str, Any]]], dict[str, str]] | None = None,
 ) -> None:
     """見出し階層と後続本文を意味ブロック化して一括翻訳する。
 
     Args:
         values: Docling texts 配列。
-        client: OpenAI client。
-        settings: OpenAI 互換 API 設定。
+        client: 選択した翻訳backendのclient。
+        settings: LLM翻訳時のOpenAI互換API設定。
         glossary: CSV から読み込んだ用語集。
         translation_rules: LLM に渡す翻訳ルール。
         batch_chars: 翻訳バッチの最大原文文字数。
         completed_ids: checkpointで完了済みのtext ref。
         on_progress: 要素完了時にref配列を通知するcallback。
+        batch_translator: LibreTranslateなどLLM以外のbatch翻訳関数。
 
     Returns:
         なし。
 
     Side Effects:
-        text item の翻訳 metadata を更新し、OpenAI 互換 API を呼び出す。
+        text itemの翻訳metadataを更新し、選択した翻訳APIを呼び出す。
     """
 
     blocks: list[list[dict[str, Any]]] = []
@@ -3526,17 +3694,26 @@ def translate_text_items(
         pack_translation_blocks(blocks, max_chars=batch_chars),
         estimated_translation_response_chars,
     )
-    batches = fit_batches_to_context(
-        output_fitted_batches,
-        settings.context_chars,
-        partial(build_translation_messages, translation_rules=translation_rules),
-    )
+    if batch_translator is None:
+        if settings is None:
+            raise ValueError("OpenAI settings are required for LLM translation")
+        batches = fit_batches_to_context(
+            output_fitted_batches,
+            settings.context_chars,
+            partial(build_translation_messages, translation_rules=translation_rules),
+        )
+    else:
+        batches = output_fitted_batches
     for batch in batches:
-        translations = translate_batch(
-            client,
-            settings,
-            batch,
-            translation_rules=translation_rules,
+        translations = (
+            batch_translator(batch)
+            if batch_translator is not None
+            else translate_batch(
+                client,
+                cast(OpenAISettings, settings),
+                batch,
+                translation_rules=translation_rules,
+            )
         )
         for target in batch:
             apply_text_translation(
@@ -3557,6 +3734,7 @@ def translate_document(
     resume_data: dict[str, Any] | None = None,
     completed_ids: set[str] | None = None,
     on_progress: Callable[[dict[str, Any], list[str]], None] | None = None,
+    translator: TranslationBackend = TranslationBackend.LLM,
 ) -> dict[str, Any]:
     """Docling JSON の各要素へ日本語翻訳フィールドを追加する。
 
@@ -3569,15 +3747,26 @@ def translate_document(
         resume_data: 前回checkpointの部分成果物。
         completed_ids: checkpointで完了済みの要素ID。
         on_progress: 要素完了時に部分成果物とID配列を通知するcallback。
+        translator: Translate工程で使う翻訳backend。
 
     Returns:
         翻訳フィールドを追加した JSON。
     """
 
     result = copy.deepcopy(resume_data if resume_data is not None else data)
-    settings = require_openai_settings(context_chars)
-    client = openai_client(settings)
-    glossary_entries = glossary or []
+    settings: OpenAISettings | None = None
+    batch_translator: Callable[[list[dict[str, Any]]], dict[str, str]] | None = None
+    if translator == TranslationBackend.LLM:
+        settings = require_openai_settings(context_chars)
+        client = openai_client(settings)
+        glossary_entries = glossary or []
+    else:
+        libretranslate_settings = require_libretranslate_settings()
+        client = libretranslate_client(libretranslate_settings)
+        batch_translator = partial(
+            translate_batch_with_libretranslate, client, libretranslate_settings
+        )
+        glossary_entries = []
     completed = completed_ids if completed_ids is not None else set()
 
     def notify(element_ids: list[str]) -> None:
@@ -3594,35 +3783,41 @@ def translate_document(
         if on_progress:
             on_progress(result, element_ids)
 
-    texts = result.get("texts")
-    if isinstance(texts, list):
-        translate_text_items(
-            texts,
-            client,
-            settings,
-            glossary_entries,
-            translation_rules,
-            batch_chars,
-            completed,
-            notify,
-        )
-    tables = result.get("tables")
-    if isinstance(tables, list):
-        for index, value in enumerate(tables):
-            if not isinstance(value, dict):
-                continue
-            item = cast(dict[str, Any], value)
-            translate_table_item(
-                item,
+    try:
+        texts = result.get("texts")
+        if isinstance(texts, list):
+            translate_text_items(
+                texts,
                 client,
                 settings,
-                self_ref(item, "tables", index),
                 glossary_entries,
                 translation_rules,
                 batch_chars,
                 completed,
                 notify,
+                batch_translator,
             )
+        tables = result.get("tables")
+        if isinstance(tables, list):
+            for index, value in enumerate(tables):
+                if not isinstance(value, dict):
+                    continue
+                item = cast(dict[str, Any], value)
+                translate_table_item(
+                    item,
+                    client,
+                    settings,
+                    self_ref(item, "tables", index),
+                    glossary_entries,
+                    translation_rules,
+                    batch_chars,
+                    completed,
+                    notify,
+                    batch_translator,
+                )
+    finally:
+        if translator == TranslationBackend.DEFAULT:
+            client.close()
     return result
 
 
@@ -3737,26 +3932,28 @@ def translate_text_item(
 def translate_table_item(
     item: dict[str, Any],
     client: Any,
-    settings: OpenAISettings,
+    settings: OpenAISettings | None,
     ref: str,
     glossary: list[dict[str, str]] | None = None,
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
     batch_chars: int = TRANSLATION_BATCH_MAX_CHARS,
     completed_ids: set[str] | None = None,
     on_progress: Callable[[list[str]], None] | None = None,
+    batch_translator: Callable[[list[dict[str, Any]]], dict[str, str]] | None = None,
 ) -> None:
     """Docling table item のタイトルとセルへ翻訳フィールドを追加する。
 
     Args:
         item: Docling table item。
-        client: OpenAI client。
-        settings: OpenAI 互換 API 設定。
+        client: 選択した翻訳backendのclient。
+        settings: LLM翻訳時のOpenAI互換API設定。
         ref: table item の JSON pointer。
         glossary: CSV から読み込んだ用語集。
         translation_rules: 翻訳ルール本文。
         batch_chars: 翻訳バッチの最大原文文字数。
         completed_ids: checkpointで完了済みの表要素ID。
         on_progress: 要素完了時にID配列を通知するcallback。
+        batch_translator: LibreTranslateなどLLM以外のbatch翻訳関数。
 
     Returns:
         なし。
@@ -3842,17 +4039,26 @@ def translate_table_item(
         pack_translation_blocks([targets], max_chars=batch_chars),
         estimated_translation_response_chars,
     )
-    batches = fit_batches_to_context(
-        output_fitted_batches,
-        settings.context_chars,
-        partial(build_translation_messages, translation_rules=translation_rules),
-    )
+    if batch_translator is None:
+        if settings is None:
+            raise ValueError("OpenAI settings are required for LLM translation")
+        batches = fit_batches_to_context(
+            output_fitted_batches,
+            settings.context_chars,
+            partial(build_translation_messages, translation_rules=translation_rules),
+        )
+    else:
+        batches = output_fitted_batches
     for batch in batches:
-        translations = translate_batch(
-            client,
-            settings,
-            batch,
-            translation_rules=translation_rules,
+        translations = (
+            batch_translator(batch)
+            if batch_translator is not None
+            else translate_batch(
+                client,
+                cast(OpenAISettings, settings),
+                batch,
+                translation_rules=translation_rules,
+            )
         )
         for target in batch:
             translated = translations[str(target["id"])]
@@ -5293,23 +5499,38 @@ class TranslateStage(FrozenModel):
     translation_rules_path: Path | None = None
     context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS
     batch_chars: int = TRANSLATION_BATCH_MAX_CHARS
+    translator: TranslationBackend = TranslationBackend.DEFAULT
 
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
         """翻訳 metadata を付与した文書を返す。"""
 
-        glossary = read_glossary_csv(self.glossary_path)
-        translation_rules = read_translation_rules(self.translation_rules_path)
+        if self.translator == TranslationBackend.LLM:
+            glossary = read_glossary_csv(self.glossary_path)
+            translation_rules = read_translation_rules(self.translation_rules_path)
+        else:
+            glossary = []
+            translation_rules = ""
         input_hash = sha256_json(document)
-        config_hash = sha256_json(
-            {
-                "version": 9,
-                "model": os.environ.get("OPENAI_MODEL"),
-                "context_chars": self.context_chars,
-                "batch_chars": self.batch_chars,
-                "glossary": glossary,
-                "translation_rules": translation_rules,
-            }
-        )
+        config: dict[str, Any] = {
+            "version": 10,
+            "translator": self.translator.value,
+            "batch_chars": self.batch_chars,
+        }
+        if self.translator == TranslationBackend.LLM:
+            config.update(
+                {
+                    "model": os.environ.get("OPENAI_MODEL"),
+                    "context_chars": self.context_chars,
+                    "glossary": glossary,
+                    "translation_rules": translation_rules,
+                }
+            )
+        else:
+            libretranslate_url = os.environ.get("LIBRETRANSLATE_URL")
+            config["libretranslate_url"] = (
+                libretranslate_url.rstrip("/") if libretranslate_url else None
+            )
+        config_hash = sha256_json(config)
         if stage_is_resumable(
             self.paths.manifest,
             "translate",
@@ -5374,6 +5595,7 @@ class TranslateStage(FrozenModel):
             resume_data=resume_data,
             completed_ids=completed_ids,
             on_progress=save_progress,
+            translator=self.translator,
         )
         completed_ids.update(element_ids)
         write_json(self.paths.translated_json, translated)
@@ -5620,6 +5842,7 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
         translation_rules_path=args.translation_rules,
         context_chars=args.context_chars,
         batch_chars=args.batch_chars,
+        translator=args.translator,
     ).run(cleaned)
     if args.skip_review:
         record_stage_skipped(paths.manifest, "review", "--skip-review")
@@ -5683,9 +5906,13 @@ def cli(
         int,
         typer.Option(
             min=1,
-            help="maximum source and translation characters per LLM batch",
+            help="maximum source and translation characters per translation batch",
         ),
     ] = TRANSLATION_BATCH_MAX_CHARS,
+    translator: Annotated[
+        TranslationBackend,
+        typer.Option(help="Translate backend: default=LibreTranslate, llm=OpenAI"),
+    ] = TranslationBackend.DEFAULT,
 ) -> None:
     """CLI から translate-ja-v2 パイプラインを実行する。
 
@@ -5703,6 +5930,7 @@ def cli(
         translation_rules: 翻訳ルール本文ファイルのパス。
         context_chars: OpenAI request の最大テキスト文字数。
         batch_chars: 翻訳・Reviewバッチの最大原文・訳文文字数。
+        translator: Translate工程で使う翻訳backend。
 
     Returns:
         なし。
@@ -5725,6 +5953,7 @@ def cli(
         translation_rules=translation_rules,
         context_chars=context_chars,
         batch_chars=batch_chars,
+        translator=translator,
     )
     load_dotenv_file(options.env)
     configure_logging()

@@ -24,6 +24,7 @@ uv sync
 - PATHから実行できるpandoc
 - `DOCLING_SERVER_URL` と `DOCLING_API_KEY`
 - `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL`
+- `--translator default` を統合検証する場合は `LIBRETRANSLATE_URL` と任意の `LIBRETRANSLATE_API_KEY`
 - 読み取り可能な入力PDF
 - 書き込み可能な新規出力ディレクトリ
 
@@ -48,6 +49,7 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - context上限時の隣接コードだけのpairwise fallback
 - Cleanによる `.` と `・` の圧縮とコード保護
 - 翻訳対象、コード・ページ装飾・記号の保護、見出し/本文/表の描画規則
+- `--translator` の既定値とLLM切替、LibreTranslate batch request・応答件数検証・client close
 - 用語集、翻訳ルール、意味ブロック、共有context・用語集の重複排除、batch分割
 - StructureのJSON出力指定、4,096 tokens上限、空応答・不完全JSONのrequest retry
 - 完成したTranslate・Review messagesによるcontext上限分割、推定応答JSONと最大20要素による出力上限分割
@@ -95,6 +97,7 @@ python /home/penguin/.codex/skills/.system/skill-creator/scripts/quick_validate.
 uv run python skills/translate-ja-v2/scripts/translate.py \
   --context-chars 50000 \
   --batch-chars 10000 \
+  --translator llm \
   --input ./inputs/sample.pdf \
   --output-dir ./outputs/sample-full-validation \
   --template ./skills/translate-ja-v2/examples/template.dotx \
@@ -102,7 +105,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
   --translation-rules ./skills/translate-ja-v2/examples/translation-rules.md
 ```
 
-全ステージの確認なので、`--skip-vlm`、`--skip-review`、`--skip-docx` は指定しない。出力先がすでに存在する場合は、削除せず別名の新規ディレクトリを使う。
+全ステージと3つのLLM工程を確認するため `--translator llm` を指定し、`--skip-vlm`、`--skip-review`、`--skip-docx` は指定しない。LibreTranslateはservice準備後、別の新規出力先で `--translator default` に変更してTranslateを検証する。出力先がすでに存在する場合は、削除せず別名の新規ディレクトリを使う。
 
 ## 7. 統合テストの期待値
 

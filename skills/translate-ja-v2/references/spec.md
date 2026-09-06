@@ -4,7 +4,7 @@
 
 ## 1. スコープ
 
-PDFまたはWord文書をDocling JSONへ変換し、座標正規化、VLM構造補正、決定論的clean、日本語翻訳、翻訳レビュー、Markdown、Word docxを一つのCLIで生成する。
+PDFまたはWord文書をDocling JSONへ変換し、座標正規化、VLM構造補正、決定論的clean、LibreTranslateまたはLLMによる日本語翻訳、翻訳レビュー、Markdown、Word docxを一つのCLIで生成する。
 
 実装の正本は `scripts/translate.py` とする。独自の全文書schema、ページ別stageディレクトリ、YAML設定、汎用Stage基底、factory、StageRunnerは現行仕様に含めない。複数実装の差し替えが必要になるまで追加しない。
 
@@ -29,8 +29,9 @@ Document != State != Patch
 | CLI | Typer | option解析とhelp |
 | Model | Pydantic v2 | 凍結設定modelと入力検証 |
 | Environment | python-dotenv | `.env` 読込 |
-| HTTP | HTTPX | Docling Serveのasync API |
+| HTTP | HTTPX | Docling ServeとLibreTranslate API |
 | LLM | OpenAI Python SDK | OpenAI互換Chat Completions |
+| Translation | LibreTranslate 1.9.6 | 既定の英日機械翻訳backend |
 | PDF | pypdfium2 5.x | 10ページ単位のPDF分割、ページPNGの逐次生成 |
 | Image | Pillow | PNG encode |
 | Document | Docling Serve | PDF/WordからDocling JSONと要素画像への変換 |
@@ -47,11 +48,13 @@ Python依存はリポジトリルートの `pyproject.toml` と `uv.lock` を正
 | --- | --- | --- |
 | `DOCLING_SERVER_URL` | Parse | Docling Serve base URL |
 | `DOCLING_API_KEY` | Parse | Docling Serve API key |
-| `OPENAI_BASE_URL` | Structure、Translate、Review | OpenAI互換base URL |
-| `OPENAI_API_KEY` | Structure、Translate、Review | API key |
-| `OPENAI_MODEL` | Structure、Translate、Review | 共通model名 |
+| `OPENAI_BASE_URL` | Structure、Review、Translate（`llm`） | OpenAI互換base URL |
+| `OPENAI_API_KEY` | Structure、Review、Translate（`llm`） | API key |
+| `OPENAI_MODEL` | Structure、Review、Translate（`llm`） | 共通model名 |
+| `LIBRETRANSLATE_URL` | Translate（既定） | LibreTranslate base URL。例: `http://localhost:5000` |
+| `LIBRETRANSLATE_API_KEY` | Translate（任意） | API keyを要求する構成だけ設定 |
 
-Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受理する。`--skip-vlm` でもTranslate/Reviewを使う限りOpenAI設定は必要である。
+Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受理する。OpenAI設定はStructure、Review、および `--translator llm` のTranslateで必要である。`--translator default` のTranslateだけを使う場合、OpenAI設定は不要である。
 
 ## 5. CLI
 
@@ -69,9 +72,10 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 --translation-rules PATH  翻訳・レビュー用ルール文書
 --context-chars INTEGER   OpenAI requestの最大テキスト文字数
 --batch-chars INTEGER     翻訳・Review候補batchの最大原文・訳文文字数
+--translator default|llm  Translate backend。既定のdefaultはLibreTranslate
 ```
 
-既定値は `context-chars=50000`、`batch-chars=1500` で、いずれも1以上とする。
+既定値は `context-chars=50000`、`batch-chars=1500`、`translator=default` で、文字数は1以上とする。
 
 ## 6. 固定値
 
@@ -90,9 +94,12 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 | Translate・Review最大出力 | 16,384 tokens |
 | Translate・Review推定応答上限 | 12,000文字 |
 | Translate・Review最大要素数 | 20要素/batch |
+| LibreTranslate timeout | 1,800秒 |
 | Review最大並列数 | 4バッチ |
 
 HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。Structureでは一時的な空応答と不完全JSONをAPI呼び出しからretryする。TranslateとReviewは20要素以内、推定応答JSONを12,000文字以内、完成messagesを `context-chars` 以内へ事前分割し、空応答、不正JSON、ID不一致の複数要素batchをさらに要素境界で分割する。バッチ内IDは文字列とJSON整数を受理して文字列へ正規化した後、完全一致を検証する。Translateは単一要素の生成不全も指数backoffで最大6回までretryする。Reviewは単一要素の生成不全、隣接要素の誤コピー、異常な長短、入力不足を訴えるメタ応答、日本語から英語のみへの退行を検出すると元の訳文を保持する。OpenAI SDK自体の自動retryは0にする。
+
+LibreTranslateは公式batch APIへ最大20件の `q` 配列を送り、`source=en`、`target=ja`、`format=text` を固定する。応答の `translatedText` が文字列配列で入力件数と一致し、各訳文が非空であることを検証する。一時的なHTTP失敗は最大6回retryする。
 
 ## 7. Docling変換契約
 
@@ -130,7 +137,7 @@ PDFページ画像は `artifacts/page_<6桁page>.png` とし、JSONのURIはJSON
 | Normalize | Parse JSON | `document.normalized.json` | なし | 工程 |
 | Structure | Normalize JSON、page PNG | `document.structured.json` | OpenAI互換API | 要素 |
 | Clean | Structure JSON | `document.cleaned.json` | なし | 工程 |
-| Translate | Clean JSON、用語集、ルール | `document.translated.json` | OpenAI互換API | 要素 |
+| Translate | Clean JSON、任意の用語集・ルール | `document.translated.json` | LibreTranslateまたはOpenAI互換API | 要素 |
 | Review | Translate JSON、ルール | `document.reviewed.json` | OpenAI互換API | 要素 |
 | Markdown | Reviewed/Translated JSON | `document.ja.md` | なし | 工程 |
 | Docx | Markdown、任意template | `document.ja.docx` | pandoc process | 工程 |
@@ -149,7 +156,9 @@ PDFページ画像は `artifacts/page_<6桁page>.png` とし、JSONのURIはJSON
 
 ### Translateの境界
 
-Docling原文と構造を変えず、`translate_ja_v2` metadataだけを追加する。ページヘッダー、ページフッター、文字や数字を含まない記号だけの要素は翻訳せず原文を描画値として保持する。同一contextと用語集はバッチ上部へ集約し、空fieldは送らない。APIではバッチ内連番ID、入力件数、返却必須IDを使い、応答後に元refへ戻す。完成messagesを `context-chars` 以内へ分割し、API応答のID集合は入力連番と完全一致させる。
+Docling原文と構造を変えず、`translate_ja_v2` metadataだけを追加する。ページヘッダー、ページフッター、文字や数字を含まない記号だけの要素は翻訳せず原文を描画値として保持する。LLM選択時は同一contextと用語集をバッチ上部へ集約し、空fieldは送らない。APIではバッチ内連番ID、入力件数、返却必須IDを使い、応答後に元refへ戻す。完成messagesを `context-chars` 以内へ分割し、API応答のID集合は入力連番と完全一致させる。
+
+`--translator default` はLibreTranslateを使い、原文配列以外の見出しcontext、用語集、翻訳ルールを送らない。`--translator llm` はOpenAI互換APIを使い、前段落の共有context、用語集、ルール、連番ID契約を適用する。翻訳backendの選択はStructureとReviewへ影響しない。
 
 ### Reviewの境界
 
@@ -199,7 +208,7 @@ Docling原文と構造を変えず、`translate_ja_v2` metadataだけを追加�
 - ディレクトリは相対パス、区切り、内容をsortしてSHA-256へ含める。
 - JSON設定はkeyをsortしたcanonical JSONのSHA-256を使う。
 - Structureの入力hashには、VLMを使う場合だけ `artifacts/` のhashを含める。
-- template、用語集、翻訳ルール、model、context上限、batch上限は該当stageのconfig hashへ含める。
+- template、翻訳backend、用語集、翻訳ルール、model、LibreTranslate URL、context上限、batch上限は実際に使う該当stageのconfig hashへ含める。API keyは含めない。
 
 設定hashの中身はログへ展開せず、manifestにのみ保存する。
 
@@ -217,7 +226,7 @@ Docling artifactsは一時ディレクトリへ完全展開した後にディレ
 english,japanese,desc,genre,note
 ```
 
-空の `english` は無視する。翻訳ルールファイルはUTF-8 textとしてそのままpromptへ渡す。未指定時の組み込みルールは、原文にない追加を禁止し、固有名詞、製品名、API名、コード、URL、パス、識別子、コマンドを保持し、用語集を優先する。
+空の `english` は無視する。用語集と翻訳ルールをTranslateへ渡すのは `--translator llm` の場合だけである。Reviewはbackendにかかわらず翻訳ルールを使う。未指定時の組み込みルールは、原文にない追加を禁止し、固有名詞、製品名、API名、コード、URL、パス、識別子、コマンドを保持し、用語集を優先する。
 
 ## 13. セキュリティと安全性
 

@@ -16,12 +16,12 @@ Parse → Normalize → Structure → Clean → Translate → Review
 Markdown → Docx
 ```
 
-前段の成果物を次段の入力にし、各JSONは別ファイルへ保存する。翻訳で原文を上書きせず、翻訳結果は `translate_ja_v2` metadataとして追加する。
+前段の成果物を次段の入力にし、各JSONは別ファイルへ保存する。Translateは既定でLibreTranslateを使い、`--translator llm` でOpenAI互換APIへ切り替える。翻訳で原文を上書きせず、翻訳結果は `translate_ja_v2` metadataとして追加する。
 
 ## 2. 起動
 
 1. TyperがCLI引数を解析する。
-2. `--env` のdotenvファイルを `python-dotenv` で読み込む。既存の環境変数は上書きしない。
+2. `--env` のdotenvファイルからDocling、LibreTranslate、OpenAI互換APIの接続情報を `python-dotenv` で読み込む。既存の環境変数は上書きしない。
 3. アプリログを初期化する。既定はDEBUG、依存ライブラリはWARNING以上とする。
 4. 入力パスと出力パスを絶対パスへ解決する。
 5. 出力ディレクトリを作成し、入力パスとSHA-256を `manifest.json` に記録する。
@@ -186,17 +186,26 @@ APIにはJSON object形式と最大4,096出力tokensを指定する。HTTP成功
 - 出力: `document.translated.json`
 - 進捗粒度: text ref、表タイトルref、表セルref
 
+### Backend選択
+
+- `--translator default` またはoption省略時: LibreTranslate `/translate`
+- `--translator llm`: OpenAI互換Chat Completions
+
+この選択はTranslateだけに適用する。StructureとReviewは常にOpenAI互換APIを使う。LibreTranslate時は `.env` の `LIBRETRANSLATE_URL` と任意の `LIBRETRANSLATE_API_KEY`、LLM時はOpenAI設定を読む。
+
 ### 翻訳対象
 
 texts、表タイトル、自然言語を含む表セルを翻訳する。コードブロック、ページヘッダー、ページフッター、記号だけの要素、URL、パス、コマンド、識別子、コードだけの表セルは翻訳しない。ページ装飾と記号は原文を描画値として保持する。
 
 見出しと配下要素を意味ブロックにする。同じレベルまたは上位の見出しで次のブロックを開始し、ブロック単位を保ちながら原文合計を `--batch-chars` 以内へ詰める。上限を超えるブロックは要素境界で分割し、単一要素だけで上限を超える場合はその要素を単独候補にする。表はタイトルとセルを同様に詰める。
 
-各候補を最大20要素に分け、推定翻訳応答JSONが安全上限12,000文字を超える場合も要素境界で事前分割する。さらにsystem prompt、翻訳ルール、共有文脈、共有用語集、入力JSONを含む完成messagesを作り、テキスト全体が `--context-chars` を超える候補も分割する。単一要素でもいずれかの文字数上限を超える場合はAPIを呼ばずに失敗させる。
+各候補を最大20要素に分け、推定翻訳応答が安全上限12,000文字を超える場合も要素境界で事前分割する。LLM時はさらにsystem prompt、翻訳ルール、共有文脈、共有用語集、入力JSONを含む完成messagesを作り、テキスト全体が `--context-chars` を超える候補も分割する。単一要素でもいずれかの文字数上限を超える場合はAPIを呼ばずに失敗させる。
 
-同じ見出し階層は共有文脈辞書へ一度だけ置き、各要素は短い `context_id` で参照する。用語集もバッチ内で重複を除いて一度だけ置く。空のinline code fieldは送らない。APIには長いDocling refの代わりにバッチ内の連番IDを渡し、入力件数と返却必須ID一覧も明示する。応答後に元refへ戻す。JSON objectの `translations` で同じ連番ID集合を返させ、文字列またはJSON整数のIDを正規化して検証する。IDの欠落、追加、変更、重複、空訳は採用しない。空応答または部分応答で複数要素がある場合は要素境界で二分して再実行する。単一要素でも生成不全なら指数backoffで最大6回まで再試行し、正常な訳を得られなければ失敗させる。
+LLM時は、同じ見出し階層を共有文脈辞書へ一度だけ置き、各要素は短い `context_id` で参照する。用語集もバッチ内で重複を除いて一度だけ置く。空のinline code fieldは送らない。APIには長いDocling refの代わりにバッチ内の連番IDを渡し、入力件数と返却必須ID一覧も明示する。応答後に元refへ戻す。JSON objectの `translations` で同じ連番ID集合を返させ、文字列またはJSON整数のIDを正規化して検証する。IDの欠落、追加、変更、重複、空訳は採用しない。空応答または部分応答で複数要素がある場合は要素境界で二分して再実行する。単一要素でも生成不全なら指数backoffで最大6回まで再試行し、正常な訳を得られなければ失敗させる。
 
-`--glossary` は `english,japanese,desc,genre,note` 列を持つCSVである。対象原文に `english` が含まれる行だけをpromptへ加える。`--translation-rules` を省略した場合は組み込みルールを使う。
+LibreTranslate時は `q` に最大20件の原文配列だけを入れ、`source=en`、`target=ja`、`format=text` と任意のAPI keyを送る。見出しcontext、用語集、翻訳ルール、Docling refは送らない。返却された `translatedText` の件数と非空文字列を検証し、入力順で元refへ対応付ける。一時的なHTTP失敗は指数backoffで最大6回まで再試行する。
+
+`--glossary` は `english,japanese,desc,genre,note` 列を持つCSVである。LLM時だけ、対象原文に `english` が含まれる行をpromptへ加える。`--translation-rules` を省略した場合は組み込みルールを使う。LibreTranslateのTranslateは用語集とルールを使わないが、後続Reviewはルールを使う。
 
 結果は元要素の `translate_ja_v2` に追加する。
 

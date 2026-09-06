@@ -1,6 +1,6 @@
 ---
 name: translate-ja-v2
-description: PDF/Word文書をDocling Serve、pypdfium2、OpenAI互換API、pandocで段階別JSON、ページ画像、日本語Markdown、Word docxへ変換し、manifestによる工程・要素単位Resumeを行う。Use when Codex runs or modifies scripts/translate.py, troubleshoots Parse/Normalize/Structure/Clean/Translate/Review/Markdown/Docx stages, validates translation output, or maintains the bundled DOTX template.
+description: PDF/Word文書をDocling Serve、pypdfium2、LibreTranslateまたはOpenAI互換API、pandocで段階別JSON、ページ画像、日本語Markdown、Word docxへ変換し、manifestによる工程・要素単位Resumeを行う。Use when Codex runs or modifies scripts/translate.py, troubleshoots Parse/Normalize/Structure/Clean/Translate/Review/Markdown/Docx stages, validates translation output, or maintains the bundled DOTX template.
 ---
 
 # translate-ja-v2
@@ -20,7 +20,7 @@ PDF/Word文書を解析し、構造補正、clean、日本語翻訳、レビュ�
 
 ## 実行
 
-`.env` にDocling ServeとOpenAI互換APIの接続情報を用意し、リポジトリルートから実行する。
+`.env` にDocling ServeとLibreTranslateの接続情報を用意する。StructureまたはReviewでLLMを使う場合はOpenAI互換APIの接続情報も用意し、リポジトリルートから実行する。
 
 ```bash
 uv run python skills/translate-ja-v2/scripts/translate.py \
@@ -37,7 +37,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
 2. Normalizeは座標によるtext順序と参照の補正だけを行う。
 3. Structureはコードblock、コード連結、表セルinline codeなどの構造だけをVLMで補正し、翻訳や全文再生成をさせない。
 4. Cleanは非コード本文と表セルの3文字以上連続する `.` と `・` を3文字へ縮める。
-5. 翻訳で原文を上書きせず、`translate_ja_v2` metadataへ追加する。
+5. Translateは既定でLibreTranslateを使い、`--translator llm` の場合だけOpenAI互換APIを使う。どちらも原文を上書きせず、`translate_ja_v2` metadataへ追加する。
 6. 見出しと表タイトルは英日併記、本文は日本語、コード・URL・パス・識別子は原文を描画する。
 7. PDFはpypdfium2で10ページずつ分割してDocling Serveへ直列送信し、参照とページ番号を再採番してJSONをローカル連結する。page imageもローカル生成し、Docling JSONの相対URIから正確に解決する。無関係な画像へfallbackしない。
 8. JSONと成果物をatomic保存し、hash一致を確認してからResumeする。

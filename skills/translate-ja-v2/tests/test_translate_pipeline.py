@@ -40,6 +40,7 @@ from translate import (  # noqa: E402
     fit_batches_to_output,
     fit_batches_to_context,
     load_dotenv_file,
+    LibreTranslateSettings,
     main,
     message_text_chars,
     normalize_document,
@@ -54,6 +55,7 @@ from translate import (  # noqa: E402
     read_json,
     read_glossary_csv,
     read_translation_rules,
+    require_libretranslate_settings,
     request_structure_patches,
     render_pdf_page_images,
     render_markdown,
@@ -69,7 +71,9 @@ from translate import (  # noqa: E402
     StructureStage,
     translate_document,
     translate_batch,
+    translate_batch_with_libretranslate,
     translate_text_item,
+    TranslationBackend,
     TranslateStage,
     write_json,
 )
@@ -2279,20 +2283,168 @@ def test_structure_document_falls_back_to_pairwise_when_page_prompt_is_large(
 def test_load_dotenv_file_uses_python_dotenv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`.env` は python-dotenv 経由で OpenAI/Docling 系環境変数を読み込む。"""
+    """`.env` はpython-dotenv経由で各外部APIの環境変数を読み込む。"""
 
     env_path = tmp_path / ".env"
     env_path.write_text(
-        "DOCLING_SERVER_URL=http://docling.test\nOPENAI_MODEL=test-model\n",
+        (
+            "DOCLING_SERVER_URL=http://docling.test\n"
+            "OPENAI_MODEL=test-model\n"
+            "LIBRETRANSLATE_URL=http://libretranslate.test\n"
+        ),
         encoding="utf-8",
     )
     monkeypatch.delenv("DOCLING_SERVER_URL", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("LIBRETRANSLATE_URL", raising=False)
 
     load_dotenv_file(env_path)
 
     assert os.environ["DOCLING_SERVER_URL"] == "http://docling.test"
     assert os.environ["OPENAI_MODEL"] == "test-model"
+    assert os.environ["LIBRETRANSLATE_URL"] == "http://libretranslate.test"
+
+
+def test_require_libretranslate_settings_reads_optional_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LibreTranslate接続設定を環境変数から構築する。
+
+    Args:
+        monkeypatch: 環境変数を一時変更するpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    monkeypatch.setenv("LIBRETRANSLATE_URL", "http://localhost:5000/")
+    monkeypatch.setenv("LIBRETRANSLATE_API_KEY", "secret")
+
+    settings = require_libretranslate_settings()
+
+    assert settings.base_url == "http://localhost:5000"
+    assert settings.api_key == "secret"
+
+
+def test_translate_batch_with_libretranslate_uses_batch_api() -> None:
+    """LibreTranslateへ原文配列だけを送り、入力IDへ訳文を対応付ける。
+
+    Returns:
+        なし。
+    """
+
+    response = Mock()
+    response.json.return_value = {"translatedText": ["戦略", "部隊が移動する。"]}
+    client = Mock()
+    client.post.return_value = response
+    settings = LibreTranslateSettings(
+        base_url="http://localhost:5000", api_key="secret", timeout_seconds=1
+    )
+    items = [
+        {"id": "#/texts/0", "text": "Strategy", "context": "ignored"},
+        {"id": "#/texts/1", "text": "The force moves.", "glossary": []},
+    ]
+
+    translated = translate_batch_with_libretranslate(client, settings, items)
+
+    assert translated == {
+        "#/texts/0": "戦略",
+        "#/texts/1": "部隊が移動する。",
+    }
+    client.post.assert_called_once_with(
+        "http://localhost:5000/translate",
+        json={
+            "q": ["Strategy", "The force moves."],
+            "source": "en",
+            "target": "ja",
+            "format": "text",
+            "api_key": "secret",
+        },
+    )
+    response.raise_for_status.assert_called_once_with()
+
+
+def test_translate_document_uses_default_libretranslate_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """default指定ではOpenAIを使わずLibreTranslateで文書を翻訳する。
+
+    Args:
+        monkeypatch: API clientと設定をfakeへ置き換えるpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    response = Mock()
+    response.json.return_value = {"translatedText": ["戦略", "部隊が移動する。"]}
+    client = Mock()
+    client.post.return_value = response
+    monkeypatch.setattr(
+        "translate.require_libretranslate_settings",
+        lambda: LibreTranslateSettings(
+            base_url="http://localhost:5000", timeout_seconds=1
+        ),
+    )
+    monkeypatch.setattr("translate.libretranslate_client", lambda _settings: client)
+    monkeypatch.setattr(
+        "translate.require_openai_settings",
+        lambda _context_chars: pytest.fail("OpenAI settings must not be loaded"),
+    )
+    document = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "section_header",
+                "text": "Strategy",
+            },
+            {
+                "self_ref": "#/texts/1",
+                "label": "paragraph",
+                "text": "The force moves.",
+            },
+        ]
+    }
+
+    translated = translate_document(document, translator=TranslationBackend.DEFAULT)
+
+    assert translated["texts"][0]["translate_ja_v2"]["render_text"] == (
+        "Strategy / 戦略"
+    )
+    assert translated["texts"][1]["translate_ja_v2"]["render_text"] == (
+        "部隊が移動する。"
+    )
+    request = client.post.call_args.kwargs["json"]
+    assert request == {
+        "q": ["Strategy", "The force moves."],
+        "source": "en",
+        "target": "ja",
+        "format": "text",
+    }
+    client.close.assert_called_once_with()
+
+
+def test_translate_batch_with_libretranslate_rejects_missing_result() -> None:
+    """LibreTranslate応答件数が不足したbatchを採用しない。
+
+    Returns:
+        なし。
+    """
+
+    response = Mock()
+    response.json.return_value = {"translatedText": ["戦略"]}
+    client = Mock()
+    client.post.return_value = response
+    settings = LibreTranslateSettings(
+        base_url="http://localhost:5000", timeout_seconds=1
+    )
+
+    with pytest.raises(ValueError, match="must match input count"):
+        translate_batch_with_libretranslate(
+            client,
+            settings,
+            [{"id": "1", "text": "Strategy"}, {"id": "2", "text": "Operations"}],
+        )
 
 
 def test_docling_payload_uses_fixed_ocr_settings() -> None:
@@ -2665,6 +2817,19 @@ def test_main_returns_error_for_pipeline_failure(
     input_path.write_bytes(b"%PDF-1.4")
 
     def fail(_options: PipelineOptions) -> None:
+        """既定backendを確認してpipeline失敗を再現する。
+
+        Args:
+            _options: CLIから構築されたpipeline設定。
+
+        Returns:
+            なし。
+
+        Raises:
+            RuntimeError: CLIの失敗終了を検証するため常に送出する。
+        """
+
+        assert _options.translator == TranslationBackend.DEFAULT
         raise RuntimeError("test failure")
 
     monkeypatch.setattr("translate.run_pipeline", fail)
@@ -2698,12 +2863,15 @@ def test_main_accepts_character_limits(
                 "32000",
                 "--batch-chars",
                 "800",
+                "--translator",
+                "llm",
             ]
         )
         == 0
     )
     assert captured[0].context_chars == 32000
     assert captured[0].batch_chars == 800
+    assert captured[0].translator == TranslationBackend.LLM
 
 
 def test_convert_markdown_to_docx_requires_pandoc(
@@ -2914,7 +3082,9 @@ def test_translate_stage_resumes_from_completed_element(
         )
 
     monkeypatch.setattr("translate.chat_text", fake_chat)
-    stage = TranslateStage(paths=paths, batch_chars=1)
+    stage = TranslateStage(
+        paths=paths, batch_chars=1, translator=TranslationBackend.LLM
+    )
 
     with pytest.raises(RuntimeError, match="interrupted"):
         stage.run(document)
@@ -3084,6 +3254,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         resume_data: dict[str, object] | None = None,
         completed_ids: set[str] | None = None,
         on_progress: object | None = None,
+        translator: TranslationBackend = TranslationBackend.LLM,
     ) -> dict[str, object]:
         """OpenAI 翻訳の代わりに render 用 metadata を追加する。
 
@@ -3096,12 +3267,14 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             resume_data: fakeでは未使用の部分成果物。
             completed_ids: fakeでは未使用の完了ID。
             on_progress: fakeでは未使用のcallback。
+            translator: pipelineから渡される翻訳backend。
 
         Returns:
             翻訳 metadata を追加した JSON。
         """
 
         _ = (glossary, translation_rules, resume_data, completed_ids, on_progress)
+        assert translator == TranslationBackend.DEFAULT
         stage_calls["translate"] += 1
         limits.update(context_chars=context_chars, batch_chars=batch_chars)
         copied = json.loads(json.dumps(data))
