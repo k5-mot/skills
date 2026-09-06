@@ -226,7 +226,7 @@ Docling artifactsは一時ディレクトリへ完全展開した後にディレ
 english-short,english-long,japanse-short,japanese-long,kind,description,note
 ```
 
-必須列が不足するCSVは拒否する。`english-short` と `english-long` のどちらも空、または `japanse-short` と `japanese-long` のどちらも空の行は無視する。Translate（LLM）とReviewは各要素の原文に `english-short` または `english-long` が大文字小文字を無視して含まれる行だけをpromptへ加え、バッチ内で重複排除する。LLMには `note` を除く6列を送る。`english-short` は原則として翻訳せず、英語略称のまま日本語訳へ使う。LibreTranslateのTranslateには用語集を送らないが、後続Reviewはbackendにかかわらず用語集と翻訳ルールを使う。
+必須列が不足するCSVは拒否する。`english-short` と `english-long` のどちらも空、または `japanse-short` と `japanese-long` のどちらも空の行は無視する。Translate（LLM）とReviewは各要素の原文に `english-short` または `english-long` が大文字小文字を無視して含まれる行だけをpromptへ加え、バッチ内で重複排除する。LLMには `note` を除く6列を送る。`examples/translation-rules.md` は `english-short` を原則として翻訳せず、英語略称のまま日本語訳へ使うよう指示する。この規則は組み込みルールには含めない。LibreTranslateのTranslateには用語集を送らないが、後続Reviewはbackendにかかわらず用語集と翻訳ルールを使う。
 
 ## 13. セキュリティと安全性
 

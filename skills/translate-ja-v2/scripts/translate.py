@@ -90,10 +90,8 @@ PIPELINE_STAGES = (
 )
 DEFAULT_TRANSLATION_RULES = """\
 - 原文にない説明、要約、事実追加は禁止。
-- 固有名詞、製品名、API名、コード、URL、パス、識別子、コマンドは英語のまま保持する。
-- 用語集に一致する語は対応する日本語を優先し、文脈上必要な場合だけ自然な助詞を補う。
-- 用語集の english-short は原則として翻訳せず、英語略称のまま日本語訳に使用する。
-- Markdown記号や表の区切り記号を追加しない。
+- コード、URL、パス、識別子、コマンドは原文のまま保持する。
+- 用語集に一致する語は指定訳を優先する。
 """
 GLOSSARY_FIELDS = (
     "english-short",
@@ -3347,7 +3345,7 @@ def build_translation_messages(
 入力件数: {len(request_items)}
 返却必須ID JSON: {json.dumps([item["id"] for item in request_items], ensure_ascii=False)}
 
-context_idは共有文脈の参照です。用語集はenglish-shortまたはenglish-longが原文に一致する場合だけ適用してください。english-shortは原則として英語略称のまま訳文に使用してください。translationsには必須IDを各1回含め、入力件数と同じ件数を返してください。IDの追加、削除、変更、重複は禁止です。
+context_idは共有文脈の参照です。用語集はenglish-shortまたはenglish-longが原文に一致する場合だけ適用してください。translationsには必須IDを各1回含め、入力件数と同じ件数を返してください。IDの追加、削除、変更、重複は禁止です。
 
 入力JSON:
 {json.dumps(request_items, ensure_ascii=False)}
@@ -4419,7 +4417,6 @@ def build_review_messages(
 - 原文の意味、数量、否定、固有名詞が保たれているか。
 - バッチ内で同じ概念・英語表現の日本語表記が揺れていないか。
 - 共有用語集に指定された日本語と一致しているか。
-- english-shortが原則として英語略称のまま維持されているか。
 - inline_code_spansが変更されていないか。
 
 翻訳ルール:
@@ -4434,7 +4431,7 @@ def build_review_messages(
 入力件数: {len(request_items)}
 返却必須ID JSON: {json.dumps([item["id"] for item in request_items], ensure_ascii=False)}
 
-入力順を文書順として参照してください。用語集はenglish-shortまたはenglish-longがsource_textに一致する場合だけ適用し、english-shortは原則として英語略称のまま維持してください。reviewsには必須IDを各1回含め、入力件数と同じ件数を返してください。IDの追加、削除、変更、重複は禁止です。修正不要ならtranslated_textをそのまま返してください。
+入力順を文書順として参照してください。用語集はenglish-shortまたはenglish-longがsource_textに一致する場合だけ適用してください。reviewsには必須IDを各1回含め、入力件数と同じ件数を返してください。IDの追加、削除、変更、重複は禁止です。修正不要ならtranslated_textをそのまま返してください。
 
 入力JSON:
 {json.dumps(request_items, ensure_ascii=False)}

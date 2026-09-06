@@ -708,6 +708,22 @@ def test_read_glossary_csv_requires_new_schema(tmp_path: Path) -> None:
         read_glossary_csv(glossary_path)
 
 
+def test_english_abbreviation_rule_is_external_only() -> None:
+    """英語略称ルールをexample外部ルールだけに保持する。
+
+    Returns:
+        なし。
+    """
+
+    external_rules = read_translation_rules(
+        SCRIPT_DIR.parent / "examples" / "translation-rules.md"
+    )
+    default_rules = read_translation_rules(None)
+
+    assert "english-short" in external_rules
+    assert "english-short" not in default_rules
+
+
 def test_translate_resume_keeps_completed_heading_as_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

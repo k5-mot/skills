@@ -205,7 +205,7 @@ LLM時は、同じ見出し階層を共有文脈辞書へ一度だけ置き、�
 
 LibreTranslate時は `q` に最大20件の原文配列だけを入れ、`source=en`、`target=ja`、`format=text` と任意のAPI keyを送る。見出しcontext、用語集、翻訳ルール、Docling refは送らない。返却された `translatedText` の件数と非空文字列を検証し、入力順で元refへ対応付ける。一時的なHTTP失敗は指数backoffで最大6回まで再試行する。
 
-`--glossary` は `english-short,english-long,japanse-short,japanese-long,kind,description,note` 列を持つCSVである。Translate（LLM）とReviewは対象原文に英語短縮名または正式名が含まれる行だけをpromptへ加える。`english-short` は原則として翻訳せず英語略称のまま使用する。`--translation-rules` を省略した場合は組み込みルールを使う。LibreTranslateのTranslateは用語集とルールを使わないが、後続Reviewは用語集とルールを使う。
+`--glossary` は `english-short,english-long,japanse-short,japanese-long,kind,description,note` 列を持つCSVである。Translate（LLM）とReviewは対象原文に英語短縮名または正式名が含まれる行だけをpromptへ加える。`examples/translation-rules.md` は `english-short` を原則として翻訳せず英語略称のまま使用するよう指示する。`--translation-rules` を省略した場合の最小限の組み込みルールには、この略称規則を含めない。LibreTranslateのTranslateは用語集とルールを使わないが、後続Reviewは用語集とルールを使う。
 
 結果は元要素の `translate_ja_v2` に追加する。
 
