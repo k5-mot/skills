@@ -56,7 +56,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
 | `--output-dir PATH` | いいえ | `./outputs/<入力stem>` | 段階別JSON、Markdown、docx、artifacts、manifestの出力先を指定します。 |
 | `--output PATH` | いいえ | `<output-dir>/document.ja.docx` | 最終docxだけを別のパスへ出力します。 |
 | `--template PATH` | いいえ | なし | pandocへ渡すreference DOCX/DOTXを指定します。 |
-| `--glossary PATH` | いいえ | なし | `translator=llm` のTranslateで使う、`english,japanese,desc,genre,note` 列を持つUTF-8 CSV用語集を指定します。 |
+| `--glossary PATH` | いいえ | なし | Translate（LLM）とReviewで使う、`english-short,english-long,japanse-short,japanese-long,kind,description,note` 列を持つUTF-8 CSV用語集を指定します。 |
 | `--translation-rules PATH` | いいえ | 組み込みルール | LLM TranslateとReviewへ渡すUTF-8のルール文書を指定します。 |
 | `--context-chars INTEGER` | いいえ | `50000` | 1回のOpenAI互換API requestへ含めるテキストの最大文字数を指定します。 |
 | `--batch-chars INTEGER` | いいえ | `1500` | TranslateとReviewで1回のbatchへ詰める原文・訳文の最大文字数を指定します。 |

@@ -138,7 +138,7 @@ PDFページ画像は `artifacts/page_<6桁page>.png` とし、JSONのURIはJSON
 | Structure | Normalize JSON、page PNG | `document.structured.json` | OpenAI互換API | 要素 |
 | Clean | Structure JSON | `document.cleaned.json` | なし | 工程 |
 | Translate | Clean JSON、任意の用語集・ルール | `document.translated.json` | LibreTranslateまたはOpenAI互換API | 要素 |
-| Review | Translate JSON、ルール | `document.reviewed.json` | OpenAI互換API | 要素 |
+| Review | Translate JSON、任意の用語集・ルール | `document.reviewed.json` | OpenAI互換API | 要素 |
 | Markdown | Reviewed/Translated JSON | `document.ja.md` | なし | 工程 |
 | Docx | Markdown、任意template | `document.ja.docx` | pandoc process | 工程 |
 
@@ -162,7 +162,7 @@ Docling原文と構造を変えず、`translate_ja_v2` metadataだけを追加�
 
 ### Reviewの境界
 
-翻訳metadataの訳文と描画値だけを修正する。原文と構造は変更しない。原文と訳文の合計を `--batch-chars` 以内へ詰め、完成messagesを `context-chars` 以内へさらに分割し、最大4バッチを並列実行する。API入力はバッチ内連番ID、原文、訳文、非空inline codeだけとし、前後訳、見出しcontext、英語名だけの用語情報、空fieldは送らない。応答ID集合が入力連番と一致したバッチだけを採用し、元refへ戻してから完了状態を各要素について保存する。原文が異なる前後要素の訳文と95%以上一致し、かつ原訳との一致率が80%未満の応答は、ローカルで隣接要素の誤コピーとして棄却する。原訳の1.5倍を超えかつ200文字を超える応答、100文字以上の原訳を60%未満へ短縮する応答、Review入力の不足を訴えるメタ応答、日本語を含む原訳から日本語をすべて除く応答も棄却する。
+翻訳metadataの訳文と描画値だけを修正する。原文と構造は変更しない。原文と訳文の合計を `--batch-chars` 以内へ詰め、完成messagesを `context-chars` 以内へさらに分割し、最大4バッチを並列実行する。API入力はバッチ内連番ID、原文、訳文、非空inline code、およびバッチの各原文に `english-short` または `english-long` が一致する共有用語集とする。用語集は重複排除し、`note` を除いて送る。前後訳、見出しcontext、空fieldは送らない。応答ID集合が入力連番と一致したバッチだけを採用し、元refへ戻してから完了状態を各要素について保存する。原文が異なる前後要素の訳文と95%以上一致し、かつ原訳との一致率が80%未満の応答は、ローカルで隣接要素の誤コピーとして棄却する。原訳の1.5倍を超えかつ200文字を超える応答、100文字以上の原訳を60%未満へ短縮する応答、Review入力の不足を訴えるメタ応答、日本語を含む原訳から日本語をすべて除く応答も棄却する。
 
 ### Renderの境界
 
@@ -223,10 +223,10 @@ Docling artifactsは一時ディレクトリへ完全展開した後にディレ
 用語集CSVには次のheaderを必須とする。
 
 ```csv
-english,japanese,desc,genre,note
+english-short,english-long,japanse-short,japanese-long,kind,description,note
 ```
 
-空の `english` は無視する。用語集と翻訳ルールをTranslateへ渡すのは `--translator llm` の場合だけである。Reviewはbackendにかかわらず翻訳ルールを使う。未指定時の組み込みルールは、原文にない追加を禁止し、固有名詞、製品名、API名、コード、URL、パス、識別子、コマンドを保持し、用語集を優先する。
+必須列が不足するCSVは拒否する。`english-short` と `english-long` のどちらも空、または `japanse-short` と `japanese-long` のどちらも空の行は無視する。Translate（LLM）とReviewは各要素の原文に `english-short` または `english-long` が大文字小文字を無視して含まれる行だけをpromptへ加え、バッチ内で重複排除する。LLMには `note` を除く6列を送る。`english-short` は原則として翻訳せず、英語略称のまま日本語訳へ使う。LibreTranslateのTranslateには用語集を送らないが、後続Reviewはbackendにかかわらず用語集と翻訳ルールを使う。
 
 ## 13. セキュリティと安全性
 

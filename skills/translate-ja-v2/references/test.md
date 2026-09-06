@@ -50,7 +50,7 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - Cleanによる `.` と `・` の圧縮とコード保護
 - 翻訳対象、コード・ページ装飾・記号の保護、見出し/本文/表の描画規則
 - `--translator` の既定値とLLM切替、LibreTranslate batch request・応答件数検証・client close
-- 用語集、翻訳ルール、意味ブロック、共有context・用語集の重複排除、batch分割
+- 新用語集schema、英語短縮名・正式名の一致、`note`除外、Translate・Reviewの共有用語集、翻訳ルール、意味ブロック、batch分割
 - StructureのJSON出力指定、4,096 tokens上限、空応答・不完全JSONのrequest retry
 - 完成したTranslate・Review messagesによるcontext上限分割、推定応答JSONと最大20要素による出力上限分割
 - 翻訳応答の入力件数・必須ID指示、文字列・整数バッチ内連番ID完全一致、元refへの復元、空応答、部分応答、単一要素の生成不全retry
