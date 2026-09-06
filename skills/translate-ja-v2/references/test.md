@@ -53,6 +53,9 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - 新用語集schema、英語短縮名・正式名の一致、`note`除外、Translate・Reviewの共有用語集、翻訳ルール、意味ブロック、batch分割
 - StructureのJSON出力指定、4,096 tokens上限、空応答・不完全JSONのrequest retry
 - 完成したTranslate・Review messagesによるcontext上限分割、固定要素数に依存しない推定応答JSON上限分割
+- `--max-batch-elements 0` と正数のCLI受理、pipelineへの伝播、任意の件数上限・入力順保持、負数の拒否
+- LLM Translate・Reviewでタイムアウト・HTTP 503の通常retry後に `4 → 2 → 1` と二分して成功すること、HTTP 413・context容量超過・JSONスカラー応答でも分割できること
+- 認証・設定不備は分割せず停止し、単一要素のAPI障害も例外を伝播すること（Reviewも原訳保持で成功扱いにしない）
 - 翻訳応答の入力件数・必須ID指示、文字列・整数バッチ内連番ID完全一致、元refへの復元、空応答、部分応答、単一要素の生成不全retry
 - Reviewの必要fieldだけを持つID付きbatch、修正反映、不正応答の二分、空応答・隣接訳コピー・異常な長短・メタ応答・日本語消失での原訳保持、独立batchの並列実行
 - Markdown renderer

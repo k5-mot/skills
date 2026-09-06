@@ -260,6 +260,7 @@ class PipelineOptions(FrozenModel):
         translation_rules: 翻訳ルール Markdown のパス。
         context_chars: OpenAI request の最大テキスト文字数。
         batch_chars: 翻訳・Reviewバッチの最大原文・訳文文字数。
+        max_batch_elements: 要素数上限。0は文字数と推定出力で動的に決める。
         translator: Translate工程で使う翻訳backend。
 
     Returns:
@@ -279,6 +280,7 @@ class PipelineOptions(FrozenModel):
     translation_rules: Path | None = None
     context_chars: int = Field(default=OPENAI_CONTEXT_LIMIT_CHARS, ge=1)
     batch_chars: int = Field(default=TRANSLATION_BATCH_MAX_CHARS, ge=1)
+    max_batch_elements: int = Field(default=0, ge=0)
     translator: TranslationBackend = TranslationBackend.DEFAULT
 
 
@@ -1857,6 +1859,31 @@ def is_retryable_openai_error(exc: Exception) -> bool:
     return exc_name in {"APIConnectionError", "APITimeoutError", "RateLimitError"}
 
 
+def is_splittable_openai_error(exc: Exception) -> bool:
+    """LLMの一時障害や入力容量エラーでバッチ縮小を試せるか判定する。
+
+    Args:
+        exc: 通常の再試行を終えたAPI例外。
+
+    Returns:
+        縮小を試せる場合はTrue。認証・設定不備はFalse。
+    """
+
+    if is_retryable_openai_error(exc):
+        return True
+    status = getattr(exc, "status_code", None)
+    if status == 413:
+        return True
+    return status == 400 and any(
+        marker in str(exc).lower()
+        for marker in (
+            "context_length_exceeded",
+            "maximum context length",
+            "too many tokens",
+        )
+    )
+
+
 def message_text_chars(value: Any) -> int:
     """Chat messages のテキスト部分だけを数える。
 
@@ -3263,17 +3290,30 @@ def estimated_review_response_chars(items: list[dict[str, Any]]) -> int:
 def fit_batches_to_output(
     batches: list[list[dict[str, Any]]],
     estimate_chars: Callable[[list[dict[str, Any]]], int],
+    max_batch_elements: int = 0,
 ) -> list[list[dict[str, Any]]]:
     """推定応答JSONが安全上限内になるようバッチを分割する。
 
     Args:
         batches: 入力順を保ったLLMバッチ。
         estimate_chars: 候補バッチの推定応答文字数を返す関数。
+        max_batch_elements: 任意の要素数上限。0は件数で制限しない。
 
     Returns:
         推定応答が安全上限内となるバッチ配列。
+
+    Raises:
+        ValueError: 要素数上限が負の場合。
     """
 
+    if max_batch_elements < 0:
+        raise ValueError("max_batch_elements must be non-negative")
+    if max_batch_elements:
+        batches = [
+            batch[start : start + max_batch_elements]
+            for batch in batches
+            for start in range(0, len(batch), max_batch_elements)
+        ]
     return fit_batches_to_char_limit(
         batches,
         OPENAI_SAFE_OUTPUT_CHARS,
@@ -3387,9 +3427,10 @@ def translate_batch(
 
     Raises:
         ValueError: 応答IDが入力と一致しない場合、または訳文が不正な場合。
+        Exception: 縮小や再試行で解消できないAPI障害。
 
     Side Effects:
-        OpenAI 互換 API を1回呼び出す。
+        OpenAI互換APIを呼び出し、再試行やバッチ縮小時は追加で呼び出す。
     """
 
     if not items:
@@ -3466,6 +3507,10 @@ def translate_batch(
         )
     except OpenAIEmptyResponseError as exc:
         return split_batch(exc)
+    except Exception as exc:
+        if len(items) > 1 and is_splittable_openai_error(exc):
+            return split_batch(exc)
+        raise
     try:
         try:
             payload = json.loads(response)
@@ -3473,6 +3518,8 @@ def translate_batch(
             payload = parse_json_object(response)
     except ValueError as exc:
         return split_batch(exc)
+    if not isinstance(payload, (dict, list)):
+        return split_batch(ValueError("translation response must be an object"))
     translations = payload if isinstance(payload, list) else payload.get("translations")
     if isinstance(payload, dict) and {"id", "translated_text"} <= payload.keys():
         translations = [payload]
@@ -3651,10 +3698,12 @@ def translate_text_items(
     completed_ids: set[str] | None = None,
     on_progress: Callable[[list[str]], None] | None = None,
     batch_translator: Callable[[list[dict[str, Any]]], dict[str, str]] | None = None,
+    max_batch_elements: int = 0,
 ) -> None:
     """見出し階層と後続本文を意味ブロック化して一括翻訳する。
 
     Args:
+        max_batch_elements: 要素数上限。0は件数で制限しない。
         values: Docling texts 配列。
         client: 選択した翻訳backendのclient。
         settings: LLM翻訳時のOpenAI互換API設定。
@@ -3743,6 +3792,7 @@ def translate_text_items(
     output_fitted_batches = fit_batches_to_output(
         pack_translation_blocks(blocks, max_chars=batch_chars),
         estimated_translation_response_chars,
+        max_batch_elements,
     )
     if batch_translator is None:
         if settings is None:
@@ -3785,10 +3835,12 @@ def translate_document(
     completed_ids: set[str] | None = None,
     on_progress: Callable[[dict[str, Any], list[str]], None] | None = None,
     translator: TranslationBackend = TranslationBackend.LLM,
+    max_batch_elements: int = 0,
 ) -> dict[str, Any]:
     """Docling JSON の各要素へ日本語翻訳フィールドを追加する。
 
     Args:
+        max_batch_elements: 要素数上限。0は件数で制限しない。
         data: 構造補正済み Docling JSON。
         glossary: CSV から読み込んだ用語集。
         translation_rules: 翻訳ルール本文。
@@ -3846,6 +3898,7 @@ def translate_document(
                 completed,
                 notify,
                 batch_translator,
+                max_batch_elements=max_batch_elements,
             )
         tables = result.get("tables")
         if isinstance(tables, list):
@@ -3864,6 +3917,7 @@ def translate_document(
                     completed,
                     notify,
                     batch_translator,
+                    max_batch_elements=max_batch_elements,
                 )
     finally:
         if translator == TranslationBackend.DEFAULT:
@@ -3990,10 +4044,12 @@ def translate_table_item(
     completed_ids: set[str] | None = None,
     on_progress: Callable[[list[str]], None] | None = None,
     batch_translator: Callable[[list[dict[str, Any]]], dict[str, str]] | None = None,
+    max_batch_elements: int = 0,
 ) -> None:
     """Docling table item のタイトルとセルへ翻訳フィールドを追加する。
 
     Args:
+        max_batch_elements: 要素数上限。0は件数で制限しない。
         item: Docling table item。
         client: 選択した翻訳backendのclient。
         settings: LLM翻訳時のOpenAI互換API設定。
@@ -4088,6 +4144,7 @@ def translate_table_item(
     output_fitted_batches = fit_batches_to_output(
         pack_translation_blocks([targets], max_chars=batch_chars),
         estimated_translation_response_chars,
+        max_batch_elements,
     )
     if batch_translator is None:
         if settings is None:
@@ -4147,10 +4204,12 @@ def review_document(
     resume_data: dict[str, Any] | None = None,
     completed_ids: set[str] | None = None,
     on_progress: Callable[[dict[str, Any], list[str]], None] | None = None,
+    max_batch_elements: int = 0,
 ) -> tuple[dict[str, Any], int]:
     """翻訳済み metadata を近接要素と照合して校正する。
 
     Args:
+        max_batch_elements: 要素数上限。0は件数で制限しない。
         data: 翻訳 metadata 付き Docling JSON。
         glossary: CSVから読み込んだ用語集。
         translation_rules: LLM に渡す翻訳ルール。
@@ -4181,6 +4240,7 @@ def review_document(
     output_fitted_batches = fit_batches_to_output(
         pack_translation_blocks([pending_targets], max_chars=batch_chars),
         estimated_review_response_chars,
+        max_batch_elements,
     )
     batches = fit_batches_to_context(
         output_fitted_batches,
@@ -4454,6 +4514,10 @@ def review_batch(
 
     Raises:
         ValueError: 入力IDが重複している場合。
+        Exception: 縮小や再試行で解消できないAPI障害。
+
+    Side Effects:
+        OpenAI互換APIを呼び出し、再試行やバッチ縮小時は追加で呼び出す。
     """
 
     if not items:
@@ -4512,6 +4576,10 @@ def review_batch(
         )
     except OpenAIEmptyResponseError as exc:
         return split_or_keep_original(exc)
+    except Exception as exc:
+        if len(items) > 1 and is_splittable_openai_error(exc):
+            return split_or_keep_original(exc)
+        raise
     try:
         try:
             payload = json.loads(response)
@@ -5558,6 +5626,7 @@ class TranslateStage(FrozenModel):
     translation_rules_path: Path | None = None
     context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS
     batch_chars: int = TRANSLATION_BATCH_MAX_CHARS
+    max_batch_elements: int = Field(default=0, ge=0)
     translator: TranslationBackend = TranslationBackend.DEFAULT
 
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
@@ -5571,9 +5640,10 @@ class TranslateStage(FrozenModel):
             translation_rules = ""
         input_hash = sha256_json(document)
         config: dict[str, Any] = {
-            "version": 11,
+            "version": 12,
             "translator": self.translator.value,
             "batch_chars": self.batch_chars,
+            "max_batch_elements": self.max_batch_elements,
         }
         if self.translator == TranslationBackend.LLM:
             config.update(
@@ -5651,6 +5721,7 @@ class TranslateStage(FrozenModel):
             translation_rules=translation_rules,
             context_chars=self.context_chars,
             batch_chars=self.batch_chars,
+            max_batch_elements=self.max_batch_elements,
             resume_data=resume_data,
             completed_ids=completed_ids,
             on_progress=save_progress,
@@ -5677,6 +5748,7 @@ class ReviewStage(FrozenModel):
     translation_rules_path: Path | None = None
     context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS
     batch_chars: int = TRANSLATION_BATCH_MAX_CHARS
+    max_batch_elements: int = Field(default=0, ge=0)
 
     def run(self, document: dict[str, Any]) -> dict[str, Any]:
         """レビュー済み文書を返す。"""
@@ -5686,10 +5758,11 @@ class ReviewStage(FrozenModel):
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 9,
+                "version": 10,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,
+                "max_batch_elements": self.max_batch_elements,
                 "translation_rules": translation_rules,
                 "glossary": glossary,
             }
@@ -5755,6 +5828,7 @@ class ReviewStage(FrozenModel):
             translation_rules=translation_rules,
             context_chars=self.context_chars,
             batch_chars=self.batch_chars,
+            max_batch_elements=self.max_batch_elements,
             resume_data=resume_data,
             completed_ids=completed_ids,
             on_progress=save_progress,
@@ -5905,6 +5979,7 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
         translation_rules_path=args.translation_rules,
         context_chars=args.context_chars,
         batch_chars=args.batch_chars,
+        max_batch_elements=args.max_batch_elements,
         translator=args.translator,
     ).run(cleaned)
     if args.skip_review:
@@ -5917,6 +5992,7 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
             translation_rules_path=args.translation_rules,
             context_chars=args.context_chars,
             batch_chars=args.batch_chars,
+            max_batch_elements=args.max_batch_elements,
         ).run(translated)
     markdown_path = RenderStage(paths=paths).run(render_source)
     if not args.skip_docx:
@@ -5973,6 +6049,9 @@ def cli(
             help="maximum source and translation characters per translation batch",
         ),
     ] = TRANSLATION_BATCH_MAX_CHARS,
+    max_batch_elements: Annotated[
+        int, typer.Option(min=0, help="maximum batch elements; 0 uses character limits")
+    ] = 0,
     translator: Annotated[
         TranslationBackend,
         typer.Option(help="Translate backend: default=LibreTranslate, llm=OpenAI"),
@@ -5994,6 +6073,7 @@ def cli(
         translation_rules: 翻訳ルール本文ファイルのパス。
         context_chars: OpenAI request の最大テキスト文字数。
         batch_chars: 翻訳・Reviewバッチの最大原文・訳文文字数。
+        max_batch_elements: 要素数上限。0は文字数と推定出力で動的に決める。
         translator: Translate工程で使う翻訳backend。
 
     Returns:
@@ -6017,6 +6097,7 @@ def cli(
         translation_rules=translation_rules,
         context_chars=context_chars,
         batch_chars=batch_chars,
+        max_batch_elements=max_batch_elements,
         translator=translator,
     )
     load_dotenv_file(options.env)

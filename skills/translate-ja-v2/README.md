@@ -29,6 +29,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
   --translator default \
   --context-chars 50000 \
   --batch-chars 20000 \
+  --max-batch-elements 0 \
   --input ./inputs/sample.pdf \
   --output-dir ./outputs/sample \
   --template ./skills/translate-ja-v2/examples/template.dotx
@@ -41,6 +42,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
   --translator llm \
   --context-chars 50000 \
   --batch-chars 20000 \
+  --max-batch-elements 0 \
   --input ./inputs/sample.pdf \
   --output-dir ./outputs/sample \
   --template ./skills/translate-ja-v2/examples/template.dotx \
@@ -60,6 +62,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
 | `--translation-rules PATH` | いいえ | 組み込みルール | LLM TranslateとReviewへ渡すUTF-8のルール文書を指定します。 |
 | `--context-chars INTEGER` | いいえ | `50000` | 1回のOpenAI互換API requestへ含めるテキストの最大文字数を指定します。 |
 | `--batch-chars INTEGER` | いいえ | `1500` | TranslateとReviewで1回のbatchへ詰める原文・訳文の最大文字数を指定します。 |
+| `--max-batch-elements INTEGER` | いいえ | `0` | Translate（両backend）とReviewの1バッチの要素数上限。`0` は固定件数で制限せず、文字数・推定応答量から動的に分割します。正数ならその件数も上限になります。Structureには適用しません。 |
 | `--translator default\|llm` | いいえ | `default` | Translate backendを選びます。`default` はLibreTranslate、`llm` はOpenAI互換APIです。StructureとReviewには影響しません。 |
 | `--env PATH` | いいえ | `.env` | 読み込むdotenvファイルを指定します。既存の環境変数は上書きしません。 |
 | `--force` | いいえ | 無効 | 完了済みParse成果物があってもDocling変換から再実行します。 |
@@ -68,7 +71,9 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
 | `--skip-docx` | いいえ | 無効 | pandocによるdocx生成を省略し、JSONとMarkdownまで生成します。 |
 | `--help` | いいえ | なし | 利用可能な引数とhelpを表示して終了します。 |
 
-`--context-chars 50000` では、`--batch-chars 20000`〜`30000` が呼び出し回数と安定性の実用的な範囲です。`50000` も指定できますが、推定応答12,000文字と完成LLM prompt 50,000文字の制限で再分割されるため、`30000` からの削減効果は小さくなります。固定の要素数上限はなく、値を変えるとTranslateとReviewの設定hashが変わり、同じ出力先でも両工程を再実行します。
+`--context-chars 50000 --max-batch-elements 0` では、`--batch-chars 20000`〜`30000` が呼び出し回数と安定性の実用的な範囲です。`50000` も指定できますが、推定応答12,000文字と完成LLM prompt 50,000文字の制限で再分割されるため、`30000` からの削減効果は小さくなります。`0` は文字数制限も無効にする指定ではありません。バッチ文字数・件数上限を変えるとTranslateとReviewの設定hashが変わり、同じ出力先でも両工程を再実行します。
+
+LLMを使うTranslate・Reviewでは、一時的なAPI障害やタイムアウトが通常の再試行後も続く場合、失敗したバッチを二分して再実行します。入力容量超過、空応答、不正JSON、ID不一致でも二分し、必要なら1要素まで縮小します。例えば8要素なら `8 → 4 + 4 → 2 + 2 …` と分割します。1要素でもAPI障害が続けば未完了のまま停止し、認証・設定エラーは分割せず停止します。Reviewの単一要素の生成不全では既存仕様どおり原訳を保持します。縮小は失敗したバッチだけに適用し、後続バッチの上限は変更しません。LibreTranslateとStructureにはこの二分フォールバックを適用しません。
 
 同じコマンドを再実行すると、`manifest.json` と成果物hashを検証して続きからResumeします。詳細は [workflow.md](references/workflow.md)、実装仕様は [spec.md](references/spec.md)、検証手順は [test.md](references/test.md)、DOTX仕様は [template-format.md](references/template-format.md) を参照してください。
 

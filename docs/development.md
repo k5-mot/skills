@@ -27,6 +27,7 @@ pnpm dlx @fission-ai/openspec@latest init --tools agents --profile custom --forc
 
 ## translate-ja-v2 Runtime Settings
 
+- Translate（両backend）とReviewの `--max-batch-elements` は既定値 `0` で固定件数制限なし、正数で任意の件数上限を指定する。文字数・推定応答量による動的分割は引き続き有効である。LLM Translate・Reviewは通常retry後の一時的API障害、入力容量超過、不正生成応答で失敗したバッチを二分する。単一要素のAPI障害や認証・設定不備は停止し、後続バッチの件数上限は変更しない。詳細は [実装仕様](../skills/translate-ja-v2/references/spec.md) を参照する。
 - Pipeline phases are concrete `ParseStage`, `NormalizeStage`, `StructureStage`, `TranslateStage`, `ReviewStage`, `RenderStage`, and `DocxStage` classes in `scripts/translate.py`; `run_pipeline()` owns their execution order. Do not add a common stage base class, factory, or generic runner unless interchangeable implementations require one.
 - Each input uses `outputs/<stem>/`; stage files are named `document.json`, `document.normalized.json`, `document.structured.json`, `document.translated.json`, `document.reviewed.json`, `document.ja.md`, and `document.ja.docx`.
 - Docling PDF/Word conversion must use `/v1/convert/file/async`; do not call `/v1/convert/file` for PDF-to-JSON conversion.

@@ -72,10 +72,11 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 --translation-rules PATH  翻訳・レビュー用ルール文書
 --context-chars INTEGER   OpenAI requestの最大テキスト文字数
 --batch-chars INTEGER     翻訳・Review候補batchの最大原文・訳文文字数
+--max-batch-elements INTEGER  Translate・Reviewの件数上限。0は固定件数制限なし
 --translator default|llm  Translate backend。既定のdefaultはLibreTranslate
 ```
 
-既定値は `context-chars=50000`、`batch-chars=1500`、`translator=default` で、文字数は1以上とする。
+既定値は `context-chars=50000`、`batch-chars=1500`、`max-batch-elements=0`、`translator=default` で、文字数は1以上、件数上限は0以上とする。件数上限が正数ならTranslate（両backend）とReviewの候補をその件数以内に分割する。Structureには適用しない。件数上限はTranslate・ReviewのResume設定hashに含める。
 
 ## 6. 固定値
 
@@ -96,7 +97,9 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 | LibreTranslate timeout | 1,800秒 |
 | Review最大並列数 | 4バッチ |
 
-HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。Structureでは一時的な空応答と不完全JSONをAPI呼び出しからretryする。TranslateとReviewは `batch-chars`、推定応答JSON 12,000文字、完成messagesの `context-chars` を順に満たすよう要素境界で事前分割し、固定の要素数上限は設けない。空応答、不正JSON、ID不一致の複数要素batchはさらに要素境界で分割する。バッチ内IDは文字列とJSON整数を受理して文字列へ正規化した後、完全一致を検証する。Translateは単一要素の生成不全も指数backoffで最大6回までretryする。Reviewは単一要素の生成不全、隣接要素の誤コピー、異常な長短、入力不足を訴えるメタ応答、日本語から英語のみへの退行を検出すると元の訳文を保持する。OpenAI SDK自体の自動retryは0にする。
+HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。Structureでは一時的な空応答と不完全JSONをAPI呼び出しからretryする。TranslateとReviewは `batch-chars`、任意の `max-batch-elements`、推定応答JSON 12,000文字、完成messagesの `context-chars` を順に満たすよう要素境界で事前分割する。既定の `max-batch-elements=0` では固定件数制限を設けない。空応答、不正JSON、ID不一致の複数要素batchはさらに要素境界で二分する。バッチ内IDは文字列とJSON整数を受理して文字列へ正規化した後、完全一致を検証する。Translateは単一要素の生成不全も指数backoffで最大6回までretryする。Reviewは単一要素の生成不全、隣接要素の誤コピー、異常な長短、入力不足を訴えるメタ応答、日本語から英語のみへの退行を検出すると元の訳文を保持する。OpenAI SDK自体の自動retryは0にする。
+
+LLM Translate・Reviewでは、一時的なAPI障害が最大6回の試行後も続く場合、失敗した複数要素バッチを件数で二分して再実行する。HTTP 413、およびHTTP 400で `context_length_exceeded`、`maximum context length`、`too many tokens` を含む入力容量エラーは同サイズでのretryをせず二分する。縮小後も失敗すれば再帰的に二分するが、単一要素のAPI障害は例外を伝播して未完了のまま停止する。認証エラーや上記以外の設定・リクエスト不備では分割しない。成功した子バッチの結果は元IDへ対応付けて結合し、親バッチ全体が成功した時点で進捗を保存する。後続バッチへ学習した件数上限を引き継ぐ処理は行わない。この二分フォールバックはStructure・LibreTranslateには適用しない。
 
 LibreTranslateは公式batch APIへ `batch-chars` と推定応答上限で分割した `q` 配列を送り、`source=en`、`target=ja`、`format=text` を固定する。応答の `translatedText` が文字列配列で入力件数と一致し、各訳文が非空であることを検証する。一時的なHTTP失敗は最大6回retryする。
 

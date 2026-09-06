@@ -15,6 +15,8 @@ from unittest.mock import Mock
 import pypdfium2 as pdfium
 import pytest
 import httpx
+from openai import APIStatusError, APITimeoutError
+from typer import BadParameter
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -929,8 +931,15 @@ def test_fit_batches_to_output_measures_estimated_response(
     assert all(estimate_chars(batch) <= 12000 for batch in batches)
 
 
-def test_fit_batches_to_output_does_not_limit_item_count() -> None:
-    """短い要素は固定件数で分けず推定応答上限まで同じbatchに保つ。
+@pytest.mark.parametrize(("limit", "sizes"), [(0, [41]), (10, [10, 10, 10, 10, 1])])
+def test_fit_batches_to_output_respects_optional_item_limit(
+    limit: int, sizes: list[int]
+) -> None:
+    """0では動的に詰め、正数では指定件数以内に保つ。
+
+    Args:
+        limit: 任意の要素数上限。
+        sizes: 期待する各バッチの件数。
 
     Returns:
         なし。
@@ -938,9 +947,23 @@ def test_fit_batches_to_output_does_not_limit_item_count() -> None:
 
     items = [{"id": str(index), "text": "a"} for index in range(41)]
 
-    batches = fit_batches_to_output([items], estimated_translation_response_chars)
+    batches = fit_batches_to_output(
+        [items], estimated_translation_response_chars, limit
+    )
 
-    assert [len(batch) for batch in batches] == [41]
+    assert [len(batch) for batch in batches] == sizes
+    assert [item for batch in batches for item in batch] == items
+
+
+def test_fit_batches_to_output_rejects_negative_item_limit() -> None:
+    """負の件数上限を設定ミスとして拒否する。
+
+    Returns:
+        なし。
+    """
+
+    with pytest.raises(ValueError, match="non-negative"):
+        fit_batches_to_output([], estimated_translation_response_chars, -1)
 
 
 def test_review_messages_only_send_required_fields() -> None:
@@ -1402,6 +1425,140 @@ def test_chat_text_retries_retryable_openai_errors(
     assert result == "再試行後"
     assert client.completions.calls == 2
     assert delays == [5.0]
+
+
+@pytest.mark.parametrize("stage", ["translate", "review"])
+@pytest.mark.parametrize("failure", ["503", "timeout", "413", "context", "scalar"])
+def test_llm_batch_shrinks_failed_requests(
+    monkeypatch: pytest.MonkeyPatch, stage: str, failure: str
+) -> None:
+    """失敗したLLMバッチを再試行後に二分し、元IDへ結果を復元する。
+
+    Args:
+        monkeypatch: 待機時間と試行回数をテスト用に差し替えるfixture。
+        stage: 翻訳またはレビュー。
+        failure: 一時障害、入力容量超過、または不正な生成応答。
+
+    Returns:
+        なし。
+    """
+
+    sizes: list[int] = []
+    request = httpx.Request("POST", "http://example.test/chat/completions")
+
+    def complete(**kwargs: Any) -> Any:
+        """複数要素の呼び出しを失敗させ、単一要素だけ成功させる。
+
+        Args:
+            **kwargs: Chat Completionsの引数。
+
+        Returns:
+            単一要素のJSON応答、または不正応答。
+
+        Raises:
+            APIStatusError: 指定したHTTP障害。
+            APITimeoutError: 指定したタイムアウト。
+        """
+
+        items = json.loads(
+            kwargs["messages"][-1]["content"].rsplit("入力JSON:\n", 1)[1]
+        )
+        sizes.append(len(items))
+        if len(items) > 1:
+            if failure == "scalar":
+                return _completion("null")
+            if failure == "timeout":
+                raise APITimeoutError(request=request)
+            status = 400 if failure == "context" else int(failure)
+            raise APIStatusError(
+                "context_length_exceeded" if failure == "context" else "test failure",
+                response=httpx.Response(status, request=request),
+                body=None,
+            )
+        field = "translated_text" if stage == "translate" else "reviewed_text"
+        key = "translations" if stage == "translate" else "reviews"
+        return _completion(
+            json.dumps({key: [{"id": items[0]["id"], field: "正常な訳文"}]})
+        )
+
+    client = Mock()
+    client.chat.completions.create.side_effect = complete
+    monkeypatch.setattr("translate.OPENAI_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr("translate.time.sleep", Mock())
+    settings = OpenAISettings(
+        base_url="http://example.test", api_key="test", model="fake", timeout_seconds=1
+    )
+    items = [
+        {
+            "id": f"original-{i}",
+            "text": "source",
+            "source_text": "source",
+            "translated_text": "現在の訳文",
+            "style": "本文",
+        }
+        for i in range(4)
+    ]
+    run_batch = translate_batch if stage == "translate" else review_batch
+
+    assert run_batch(client, settings, items) == {
+        item["id"]: "正常な訳文" for item in items
+    }
+    expected = [4, 2, 1, 1, 2, 1, 1]
+    if failure in {"503", "timeout"}:
+        expected = [4, 4, 2, 2, 1, 1, 2, 2, 1, 1]
+    assert sizes == expected
+
+
+@pytest.mark.parametrize("stage", ["translate", "review"])
+@pytest.mark.parametrize(
+    ("status", "count", "attempts"), [(401, 4, 1), (400, 4, 1), (503, 1, 2)]
+)
+def test_llm_batch_stops_on_unsplittable_api_failure(
+    monkeypatch: pytest.MonkeyPatch, stage: str, status: int, count: int, attempts: int
+) -> None:
+    """認証・設定不備と単一要素のAPI障害は分割せず失敗を通知する。
+
+    Args:
+        monkeypatch: 再試行の待機を省略するfixture。
+        stage: 翻訳またはレビュー。
+        status: 失敗するHTTPステータス。
+        count: 入力要素数。
+        attempts: 期待するAPI試行回数。
+
+    Returns:
+        なし。
+    """
+
+    client = Mock()
+    error = APIStatusError(
+        "test failure",
+        response=httpx.Response(
+            status, request=httpx.Request("POST", "http://example.test")
+        ),
+        body=None,
+    )
+    client.chat.completions.create.side_effect = error
+    monkeypatch.setattr("translate.OPENAI_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr("translate.time.sleep", Mock())
+    settings = OpenAISettings(
+        base_url="http://example.test", api_key="test", model="fake", timeout_seconds=1
+    )
+    items = [
+        {
+            "id": str(i),
+            "text": "source",
+            "source_text": "source",
+            "translated_text": "訳文",
+            "style": "本文",
+        }
+        for i in range(count)
+    ]
+    run_batch = translate_batch if stage == "translate" else review_batch
+
+    with pytest.raises(APIStatusError) as caught:
+        run_batch(client, settings, items)
+    assert caught.value is error
+    assert client.chat.completions.create.call_count == attempts
 
 
 def test_chat_text_reports_empty_content() -> None:
@@ -2929,16 +3086,35 @@ def test_main_returns_error_for_pipeline_failure(
     assert main(["--input", str(input_path)]) == 1
 
 
+@pytest.mark.parametrize("max_batch_elements", [0, 7])
 def test_main_accepts_character_limits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, max_batch_elements: int
 ) -> None:
-    """Typer CLI は文字数上限を PipelineOptions へ渡す。"""
+    """CLIの文字数・件数上限を実行設定へ渡す。
+
+    Args:
+        tmp_path: 一時入力を置くディレクトリ。
+        monkeypatch: pipelineを差し替えるfixture。
+        max_batch_elements: 確認する件数上限。
+
+    Returns:
+        なし。
+    """
 
     input_path = tmp_path / "source.pdf"
     input_path.write_bytes(b"%PDF-1.4")
     captured: list[PipelineOptions] = []
 
     def capture(options: PipelineOptions) -> object:
+        """外部APIを呼ばずに実行設定を保存する。
+
+        Args:
+            options: CLIから渡された設定。
+
+        Returns:
+            出力パスを持つ最小の実行結果。
+        """
+
         captured.append(options)
         return type(
             "Result", (), {"markdown": Path("out.md"), "docx": Path("out.docx")}
@@ -2955,6 +3131,8 @@ def test_main_accepts_character_limits(
                 "32000",
                 "--batch-chars",
                 "800",
+                "--max-batch-elements",
+                str(max_batch_elements),
                 "--translator",
                 "llm",
             ]
@@ -2963,7 +3141,31 @@ def test_main_accepts_character_limits(
     )
     assert captured[0].context_chars == 32000
     assert captured[0].batch_chars == 800
+    assert captured[0].max_batch_elements == max_batch_elements
     assert captured[0].translator == TranslationBackend.LLM
+
+
+def test_main_rejects_negative_batch_elements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """負の件数上限では外部処理を始めずCLIエラーにする。
+
+    Args:
+        tmp_path: 一時入力を置くディレクトリ。
+        monkeypatch: pipelineの呼び出しを監視するfixture。
+
+    Returns:
+        なし。
+    """
+
+    input_path = tmp_path / "source.pdf"
+    input_path.write_bytes(b"%PDF-1.4")
+    pipeline = Mock()
+    monkeypatch.setattr("translate.run_pipeline", pipeline)
+
+    with pytest.raises(BadParameter, match="x>=0"):
+        main(["--input", str(input_path), "--max-batch-elements", "-1"])
+    pipeline.assert_not_called()
 
 
 def test_convert_markdown_to_docx_requires_pandoc(
@@ -3347,6 +3549,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         completed_ids: set[str] | None = None,
         on_progress: object | None = None,
         translator: TranslationBackend = TranslationBackend.LLM,
+        max_batch_elements: int = 0,
     ) -> dict[str, object]:
         """OpenAI 翻訳の代わりに render 用 metadata を追加する。
 
@@ -3360,6 +3563,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             completed_ids: fakeでは未使用の完了ID。
             on_progress: fakeでは未使用のcallback。
             translator: pipelineから渡される翻訳backend。
+            max_batch_elements: pipelineから渡される要素数上限。
 
         Returns:
             翻訳 metadata を追加した JSON。
@@ -3367,6 +3571,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
 
         _ = (glossary, translation_rules, resume_data, completed_ids, on_progress)
         assert translator == TranslationBackend.DEFAULT
+        assert max_batch_elements == 7
         stage_calls["translate"] += 1
         limits.update(context_chars=context_chars, batch_chars=batch_chars)
         copied = json.loads(json.dumps(data))
@@ -3403,6 +3608,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         resume_data: dict[str, object] | None = None,
         completed_ids: set[str] | None = None,
         on_progress: object | None = None,
+        max_batch_elements: int = 0,
     ) -> tuple[dict[str, object], int]:
         """OpenAI レビューの代わりに入力をそのまま返す。
 
@@ -3415,6 +3621,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             resume_data: fakeでは未使用の部分成果物。
             completed_ids: fakeでは未使用の完了ID。
             on_progress: fakeでは未使用のcallback。
+            max_batch_elements: pipelineから渡される要素数上限。
 
         Returns:
             入力JSONと変更件数0。
@@ -3422,6 +3629,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
 
         _ = (glossary, translation_rules, resume_data, completed_ids, on_progress)
         stage_calls["review"] += 1
+        assert max_batch_elements == 7
         limits["review_context_chars"] = context_chars
         limits["review_batch_chars"] = batch_chars
         return data, 0
@@ -3442,6 +3650,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             force=True,
             context_chars=32000,
             batch_chars=800,
+            max_batch_elements=7,
         )
     )
 
@@ -3475,6 +3684,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             skip_vlm=True,
             context_chars=32000,
             batch_chars=800,
+            max_batch_elements=7,
         )
     )
     assert stage_calls == {"parse": 1, "translate": 1, "review": 1, "docx": 1}
