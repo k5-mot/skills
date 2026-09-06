@@ -91,9 +91,21 @@ PIPELINE_STAGES = (
 DEFAULT_TRANSLATION_RULES = """\
 - 原文にない説明、要約、事実追加は禁止。
 - 固有名詞、製品名、API名、コード、URL、パス、識別子、コマンドは英語のまま保持する。
-- 用語集に一致する語は japanese を優先し、文脈上必要な場合だけ自然な助詞を補う。
+- 用語集に一致する語は対応する日本語を優先し、文脈上必要な場合だけ自然な助詞を補う。
+- 用語集の english-short は原則として翻訳せず、英語略称のまま日本語訳に使用する。
 - Markdown記号や表の区切り記号を追加しない。
 """
+GLOSSARY_FIELDS = (
+    "english-short",
+    "english-long",
+    "japanse-short",
+    "japanese-long",
+    "kind",
+    "description",
+    "note",
+)
+GLOSSARY_MATCH_FIELDS = ("english-short", "english-long")
+GLOSSARY_PROMPT_FIELDS = tuple(field for field in GLOSSARY_FIELDS if field != "note")
 
 
 class OpenAIEmptyResponseError(RuntimeError):
@@ -501,23 +513,30 @@ def read_glossary_csv(path: Path | None) -> list[dict[str, str]]:
     """翻訳用語集 CSV を読み込む。
 
     Args:
-        path: english,japanese,desc,genre,note 列を持つ CSV パス。
+        path: GLOSSARY_FIELDSの列を持つCSVパス。
 
     Returns:
-        空でない english と japanese を持つ用語 dict 配列。
+        英語名と日本語名を一つ以上持つ用語dict配列。
+
+    Raises:
+        ValueError: 必須列が不足している場合。
     """
 
     if path is None:
         return []
     with path.open("r", encoding="utf-8-sig", newline="") as file:
         reader = csv.DictReader(file)
+        missing = set(GLOSSARY_FIELDS) - set(reader.fieldnames or [])
+        if missing:
+            raise ValueError(
+                f"glossary CSV is missing required columns: {sorted(missing)}"
+            )
         result: list[dict[str, str]] = []
         for row in reader:
-            entry = {
-                key: str(row.get(key) or "").strip()
-                for key in ("english", "japanese", "desc", "genre", "note")
-            }
-            if entry["english"] and entry["japanese"]:
+            entry = {key: str(row.get(key) or "").strip() for key in GLOSSARY_FIELDS}
+            has_english = any(entry[field] for field in GLOSSARY_MATCH_FIELDS)
+            has_japanese = bool(entry["japanse-short"] or entry["japanese-long"])
+            if has_english and has_japanese:
                 result.append(entry)
         return result
 
@@ -1811,7 +1830,7 @@ def is_retryable_libretranslate_error(exc: Exception) -> bool:
 
     import httpx
 
-    if isinstance(exc, (httpx.NetworkError, httpx.TimeoutException)):
+    if isinstance(exc, httpx.TransportError):
         return True
     response = getattr(exc, "response", None)
     return getattr(response, "status_code", None) in {
@@ -2978,15 +2997,57 @@ def glossary_hits(source: str, glossary: list[dict[str, str]]) -> list[dict[str,
         glossary: read_glossary_csv が返す用語集。
 
     Returns:
-        原文に english が含まれる entry 配列。
+        原文にenglish-shortまたはenglish-longが含まれるentry配列。
     """
 
     lowered = source.lower()
     return [
         entry
         for entry in glossary
-        if entry.get("english") and entry["english"].lower() in lowered
+        if any(
+            entry.get(field) and str(entry[field]).lower() in lowered
+            for field in GLOSSARY_MATCH_FIELDS
+        )
     ]
+
+
+def glossary_term_names(entries: list[dict[str, str]]) -> list[str]:
+    """一致した用語集行を成果物用の代表英語名へ変換する。
+
+    Args:
+        entries: 原文に一致した用語集entry。
+
+    Returns:
+        english-longを優先した代表英語名配列。
+    """
+
+    return [
+        str(entry.get("english-long") or entry.get("english-short"))
+        for entry in entries
+    ]
+
+
+def shared_prompt_glossary(items: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """バッチ内用語集を重複排除し、noteを除いてLLM送信用にする。
+
+    Args:
+        items: glossaryに一致済みentryを持つLLM入力要素。
+
+    Returns:
+        入力順を保った共有用語集配列。
+    """
+
+    glossary_by_json: dict[str, dict[str, str]] = {}
+    for item in items:
+        for term in item.get("glossary") or []:
+            if not isinstance(term, dict):
+                continue
+            prompt_term = {
+                field: str(term.get(field) or "") for field in GLOSSARY_PROMPT_FIELDS
+            }
+            key = json.dumps(prompt_term, ensure_ascii=False, sort_keys=True)
+            glossary_by_json.setdefault(key, prompt_term)
+    return list(glossary_by_json.values())
 
 
 def translate_text(
@@ -3244,7 +3305,6 @@ def build_translation_messages(
 
     contexts: dict[str, str] = {}
     context_ids: dict[str, str] = {}
-    glossary_by_json: dict[str, dict[str, str]] = {}
     request_items: list[dict[str, Any]] = []
     for local_id, item in enumerate(items, start=1):
         request_item: dict[str, Any] = {
@@ -3263,11 +3323,8 @@ def build_translation_messages(
         spans = item.get("inline_code_spans")
         if isinstance(spans, list) and spans:
             request_item["inline_code_spans"] = spans
-        for term in item.get("glossary") or []:
-            if isinstance(term, dict):
-                key = json.dumps(term, ensure_ascii=False, sort_keys=True)
-                glossary_by_json.setdefault(key, cast(dict[str, str], term))
         request_items.append(request_item)
+    glossary = shared_prompt_glossary(items)
 
     system = (
         "あなたは専門文書の日英翻訳者です。原文にない説明、要約、事実追加は禁止です。"
@@ -3282,7 +3339,7 @@ def build_translation_messages(
 {json.dumps(contexts, ensure_ascii=False)}
 
 共有用語集JSON:
-{json.dumps(list(glossary_by_json.values()), ensure_ascii=False)}
+{json.dumps(glossary, ensure_ascii=False)}
 
 返却JSON:
 {{"translations":[{{"id":"入力と同じID","translated_text":"日本語訳"}}]}}
@@ -3290,7 +3347,7 @@ def build_translation_messages(
 入力件数: {len(request_items)}
 返却必須ID JSON: {json.dumps([item["id"] for item in request_items], ensure_ascii=False)}
 
-context_idは共有文脈の参照です。用語集はenglishが原文に一致する場合だけ適用してください。translationsには必須IDを各1回含め、入力件数と同じ件数を返してください。IDの追加、削除、変更、重複は禁止です。
+context_idは共有文脈の参照です。用語集はenglish-shortまたはenglish-longが原文に一致する場合だけ適用してください。english-shortは原則として英語略称のまま訳文に使用してください。translationsには必須IDを各1回含め、入力件数と同じ件数を返してください。IDの追加、削除、変更、重複は禁止です。
 
 入力JSON:
 {json.dumps(request_items, ensure_ascii=False)}
@@ -3575,7 +3632,7 @@ def apply_text_translation(
                 "text_ja": translated,
                 "render_text": f"{text} / {translated}",
                 "translated": True,
-                "glossary_terms": [term["english"] for term in terms],
+                "glossary_terms": glossary_term_names(terms),
             }
         )
         return
@@ -3586,7 +3643,7 @@ def apply_text_translation(
             "text_ja": translated,
             "render_text": translated,
             "translated": True,
-            "glossary_terms": [term["english"] for term in terms],
+            "glossary_terms": glossary_term_names(terms),
         }
     )
 
@@ -3905,7 +3962,7 @@ def translate_text_item(
                 "text_ja": ja,
                 "render_text": f"{text} / {ja}",
                 "translated": True,
-                "glossary_terms": [term["english"] for term in terms],
+                "glossary_terms": glossary_term_names(terms),
             }
         )
         return
@@ -3924,7 +3981,7 @@ def translate_text_item(
             "text_ja": ja,
             "render_text": ja,
             "translated": True,
-            "glossary_terms": [term["english"] for term in terms],
+            "glossary_terms": glossary_term_names(terms),
         }
     )
 
@@ -4070,7 +4127,7 @@ def translate_table_item(
                         "caption_en": caption,
                         "caption_ja": translated,
                         "caption_render": f"{caption} / {translated}",
-                        "glossary_terms": [term["english"] for term in terms],
+                        "glossary_terms": glossary_term_names(terms),
                     }
                 )
                 continue
@@ -4081,7 +4138,7 @@ def translate_table_item(
                     "text_ja": translated,
                     "render_text": translated,
                     "translated": True,
-                    "glossary_terms": [term["english"] for term in terms],
+                    "glossary_terms": glossary_term_names(terms),
                 }
             )
         if on_progress:
@@ -4090,6 +4147,7 @@ def translate_table_item(
 
 def review_document(
     data: dict[str, Any],
+    glossary: list[dict[str, str]] | None = None,
     translation_rules: str = DEFAULT_TRANSLATION_RULES,
     context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS,
     batch_chars: int = TRANSLATION_BATCH_MAX_CHARS,
@@ -4101,6 +4159,7 @@ def review_document(
 
     Args:
         data: 翻訳 metadata 付き Docling JSON。
+        glossary: CSVから読み込んだ用語集。
         translation_rules: LLM に渡す翻訳ルール。
         context_chars: OpenAI request の最大テキスト文字数。
         batch_chars: 1バッチに含める原文と訳文の最大文字数。
@@ -4116,6 +4175,8 @@ def review_document(
     targets = collect_review_targets(result)
     if not targets:
         return result, 0
+    for target in targets:
+        target["glossary"] = glossary_hits(str(target["source_text"]), glossary or [])
     settings = require_openai_settings(context_chars)
     client = openai_client(settings)
     completed = completed_ids if completed_ids is not None else set()
@@ -4345,6 +4406,7 @@ def build_review_messages(
         if isinstance(spans, list) and spans:
             request_item["inline_code_spans"] = spans
         request_items.append(request_item)
+    glossary = shared_prompt_glossary(items)
 
     system = (
         "あなたは専門文書の日英翻訳レビュー担当者です。"
@@ -4356,10 +4418,15 @@ def build_review_messages(
 レビュー観点:
 - 原文の意味、数量、否定、固有名詞が保たれているか。
 - バッチ内で同じ概念・英語表現の日本語表記が揺れていないか。
+- 共有用語集に指定された日本語と一致しているか。
+- english-shortが原則として英語略称のまま維持されているか。
 - inline_code_spansが変更されていないか。
 
 翻訳ルール:
 {translation_rules.strip()}
+
+共有用語集JSON:
+{json.dumps(glossary, ensure_ascii=False)}
 
 返却JSON:
 {{"reviews":[{{"id":"入力と同じID","reviewed_text":"レビュー後の日本語訳"}}]}}
@@ -4367,7 +4434,7 @@ def build_review_messages(
 入力件数: {len(request_items)}
 返却必須ID JSON: {json.dumps([item["id"] for item in request_items], ensure_ascii=False)}
 
-入力順を文書順として参照してください。reviewsには必須IDを各1回含め、入力件数と同じ件数を返してください。IDの追加、削除、変更、重複は禁止です。修正不要ならtranslated_textをそのまま返してください。
+入力順を文書順として参照してください。用語集はenglish-shortまたはenglish-longがsource_textに一致する場合だけ適用し、english-shortは原則として英語略称のまま維持してください。reviewsには必須IDを各1回含め、入力件数と同じ件数を返してください。IDの追加、削除、変更、重複は禁止です。修正不要ならtranslated_textをそのまま返してください。
 
 入力JSON:
 {json.dumps(request_items, ensure_ascii=False)}
@@ -5614,6 +5681,7 @@ class ReviewStage(FrozenModel):
     """翻訳済み文書をレビューする。"""
 
     paths: StagePaths
+    glossary_path: Path | None = None
     translation_rules_path: Path | None = None
     context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS
     batch_chars: int = TRANSLATION_BATCH_MAX_CHARS
@@ -5622,14 +5690,16 @@ class ReviewStage(FrozenModel):
         """レビュー済み文書を返す。"""
 
         translation_rules = read_translation_rules(self.translation_rules_path)
+        glossary = read_glossary_csv(self.glossary_path)
         input_hash = sha256_json(document)
         config_hash = sha256_json(
             {
-                "version": 7,
+                "version": 8,
                 "model": os.environ.get("OPENAI_MODEL"),
                 "context_chars": self.context_chars,
                 "batch_chars": self.batch_chars,
                 "translation_rules": translation_rules,
+                "glossary": glossary,
             }
         )
         if stage_is_resumable(
@@ -5689,6 +5759,7 @@ class ReviewStage(FrozenModel):
 
         reviewed, changes = review_document(
             document,
+            glossary=glossary,
             translation_rules=translation_rules,
             context_chars=self.context_chars,
             batch_chars=self.batch_chars,
@@ -5850,6 +5921,7 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
     else:
         render_source = ReviewStage(
             paths=paths,
+            glossary_path=args.glossary,
             translation_rules_path=args.translation_rules,
             context_chars=args.context_chars,
             batch_chars=args.batch_chars,
@@ -5893,7 +5965,7 @@ def cli(
     env: Annotated[Path, typer.Option(help="dotenv path")] = Path(".env"),
     glossary: Annotated[
         Path | None,
-        typer.Option(help="CSV glossary with english,japanese,desc,genre,note"),
+        typer.Option(help="CSV glossary with short/long English and Japanese terms"),
     ] = None,
     translation_rules: Annotated[
         Path | None, typer.Option(help="translation rules text file")

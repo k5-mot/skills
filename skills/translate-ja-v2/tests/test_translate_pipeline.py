@@ -14,6 +14,7 @@ from unittest.mock import Mock
 
 import pypdfium2 as pdfium
 import pytest
+import httpx
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -55,6 +56,7 @@ from translate import (  # noqa: E402
     read_json,
     read_glossary_csv,
     read_translation_rules,
+    is_retryable_libretranslate_error,
     require_libretranslate_settings,
     request_structure_patches,
     render_pdf_page_images,
@@ -641,9 +643,9 @@ def test_translate_document_passes_glossary_hits_and_rules(
     glossary_path = tmp_path / "glossary.csv"
     glossary_path.write_text(
         (
-            "english,japanese,desc,genre,note\n"
-            "Strategic Command,戦略軍,Command organization,proper noun,keep English when needed\n"
-            "Unmatched Term,未使用語,Not in source,term,\n"
+            "english-short,english-long,japanse-short,japanese-long,kind,description,note\n"
+            "STRATCOM,Strategic Command,STRATCOM,戦略軍,proper noun,Command organization,secret note\n"
+            "UT,Unmatched Term,UT,未使用語,term,Not in source,unused note\n"
         ),
         encoding="utf-8",
     )
@@ -680,12 +682,30 @@ def test_translate_document_passes_glossary_hits_and_rules(
 
     assert "Strategic Command" in prompt
     assert "Unmatched Term" not in prompt
+    assert "secret note" not in prompt
     assert "固有名詞は英語のまま和訳する" in prompt
     assert client.completions.calls[0]["max_tokens"] == OPENAI_BATCH_MAX_OUTPUT_TOKENS
     assert client.completions.calls[0]["response_format"] == {"type": "json_object"}
     assert translated["texts"][0]["translate_ja_v2"]["glossary_terms"] == [
         "Strategic Command"
     ]
+
+
+def test_read_glossary_csv_requires_new_schema(tmp_path: Path) -> None:
+    """旧schemaや不足列を持つ用語集を早期に拒否する。
+
+    Args:
+        tmp_path: 一時用語集を作るpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    glossary_path = tmp_path / "glossary.csv"
+    glossary_path.write_text("english,japanese\nforce,部隊\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        read_glossary_csv(glossary_path)
 
 
 def test_translate_resume_keeps_completed_heading_as_context(
@@ -781,11 +801,13 @@ def test_translation_messages_deduplicate_shared_context_and_glossary() -> None:
     """
 
     term = {
-        "english": "force",
-        "japanese": "部隊",
-        "desc": "",
-        "genre": "",
-        "note": "",
+        "english-short": "FRC",
+        "english-long": "force",
+        "japanse-short": "FRC",
+        "japanese-long": "部隊",
+        "kind": "term",
+        "description": "military unit",
+        "note": "internal note",
     }
     items = [
         {
@@ -801,7 +823,8 @@ def test_translation_messages_deduplicate_shared_context_and_glossary() -> None:
     prompt = str(build_translation_messages(items, "rule")[1]["content"])
 
     assert prompt.count("Strategy > Operations") == 1
-    assert prompt.count('"english": "force"') == 1
+    assert prompt.count('"english-long": "force"') == 1
+    assert "internal note" not in prompt
     assert prompt.count('"context_id": "c1"') == 2
     assert "inline_code_spans" not in prompt
     assert "入力件数: 2" in prompt
@@ -902,7 +925,7 @@ def test_fit_batches_to_output_limits_item_count() -> None:
 
 
 def test_review_messages_only_send_required_fields() -> None:
-    """Review promptは原文・訳文・IDと非空inline codeだけを送る。
+    """Review promptは対象用語を共有し、要素payloadを最小限にする。
 
     Returns:
         なし。
@@ -916,6 +939,17 @@ def test_review_messages_only_send_required_fields() -> None:
                     "kind": "body",
                     "context": "Section",
                     "glossary_terms": ["force"],
+                    "glossary": [
+                        {
+                            "english-short": "FRC",
+                            "english-long": "force",
+                            "japanse-short": "FRC",
+                            "japanese-long": "部隊",
+                            "kind": "term",
+                            "description": "military unit",
+                            "note": "internal note",
+                        }
+                    ],
                     "previous_text_ja": "前",
                     "source_text": "Run api.call()",
                     "translated_text": "api.call() を実行",
@@ -934,6 +968,8 @@ def test_review_messages_only_send_required_fields() -> None:
     assert "previous_text_ja" not in prompt
     assert "next_text_ja" not in prompt
     assert "glossary_terms" not in prompt
+    assert prompt.count('"english-long": "force"') == 1
+    assert "internal note" not in prompt
     assert "Section" not in prompt
     assert "入力件数: 1" in prompt
     assert '返却必須ID JSON: ["1"]' in prompt
@@ -1527,7 +1563,29 @@ def test_review_document_checks_batch_consistency_without_neighbor_payload(
         ]
     }
 
-    reviewed, changes = review_document(document)
+    reviewed, changes = review_document(
+        document,
+        glossary=[
+            {
+                "english-short": "DoD",
+                "english-long": "Department of Defense",
+                "japanse-short": "DoD",
+                "japanese-long": "国防総省",
+                "kind": "organization",
+                "description": "US department",
+                "note": "review-only note",
+            },
+            {
+                "english-short": "NATO",
+                "english-long": "North Atlantic Treaty Organization",
+                "japanse-short": "NATO",
+                "japanese-long": "北大西洋条約機構",
+                "kind": "organization",
+                "description": "alliance",
+                "note": "unmatched note",
+            },
+        ],
+    )
     prompt = calls[0][-1]["content"]
 
     assert changes == 1
@@ -1536,6 +1594,9 @@ def test_review_document_checks_batch_consistency_without_neighbor_payload(
     assert "next_text_ja" not in prompt
     assert "previous_text_ja" not in prompt
     assert "glossary_terms" not in prompt
+    assert '"english-short": "DoD"' in prompt
+    assert "NATO" not in prompt
+    assert "review-only note" not in prompt
     assert '"source_text": "Department of Defense"' in prompt
     assert '"translated_text": "防衛省"' in prompt
     assert "日本語表記が揺れていないか" in prompt
@@ -2324,6 +2385,18 @@ def test_require_libretranslate_settings_reads_optional_api_key(
 
     assert settings.base_url == "http://localhost:5000"
     assert settings.api_key == "secret"
+
+
+def test_libretranslate_remote_disconnect_is_retryable() -> None:
+    """応答前の接続切断を一時的なTransport失敗として扱う。
+
+    Returns:
+        なし。
+    """
+
+    error = httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+    assert is_retryable_libretranslate_error(error)
 
 
 def test_translate_batch_with_libretranslate_uses_batch_api() -> None:
@@ -3304,6 +3377,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
 
     def fake_review(
         data: dict[str, object],
+        glossary: list[dict[str, str]] | None = None,
         translation_rules: str = "",
         context_chars: int = 0,
         batch_chars: int = 0,
@@ -3315,6 +3389,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
 
         Args:
             data: レビュー対象JSON。
+            glossary: fakeでは未使用の用語集。
             translation_rules: fakeでは未使用の翻訳ルール。
             context_chars: fakeで記録するcontext上限。
             batch_chars: fakeで記録するbatch上限。
@@ -3326,7 +3401,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             入力JSONと変更件数0。
         """
 
-        _ = (translation_rules, resume_data, completed_ids, on_progress)
+        _ = (glossary, translation_rules, resume_data, completed_ids, on_progress)
         stage_calls["review"] += 1
         limits["review_context_chars"] = context_chars
         limits["review_batch_chars"] = batch_chars
