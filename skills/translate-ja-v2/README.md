@@ -68,7 +68,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
 | `--skip-docx` | いいえ | 無効 | pandocによるdocx生成を省略し、JSONとMarkdownまで生成します。 |
 | `--help` | いいえ | なし | 利用可能な引数とhelpを表示して終了します。 |
 
-`--context-chars 50000` では、`--batch-chars 20000`〜`30000` が呼び出し回数と安定性の実用的な範囲です。`50000` も指定できますが、最大20要素、推定応答12,000文字、完成LLM prompt 50,000文字の制限で再分割されるため、`30000` からの削減効果は小さくなります。値を変えるとTranslateとReviewの設定hashが変わり、同じ出力先でも両工程を再実行します。
+`--context-chars 50000` では、`--batch-chars 20000`〜`30000` が呼び出し回数と安定性の実用的な範囲です。`50000` も指定できますが、推定応答12,000文字と完成LLM prompt 50,000文字の制限で再分割されるため、`30000` からの削減効果は小さくなります。固定の要素数上限はなく、値を変えるとTranslateとReviewの設定hashが変わり、同じ出力先でも両工程を再実行します。
 
 同じコマンドを再実行すると、`manifest.json` と成果物hashを検証して続きからResumeします。詳細は [workflow.md](references/workflow.md)、実装仕様は [spec.md](references/spec.md)、検証手順は [test.md](references/test.md)、DOTX仕様は [template-format.md](references/template-format.md) を参照してください。
 

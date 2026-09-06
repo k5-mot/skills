@@ -199,11 +199,11 @@ texts、表タイトル、自然言語を含む表セルを翻訳する。コー
 
 見出しと配下要素を意味ブロックにする。同じレベルまたは上位の見出しで次のブロックを開始し、ブロック単位を保ちながら原文合計を `--batch-chars` 以内へ詰める。上限を超えるブロックは要素境界で分割し、単一要素だけで上限を超える場合はその要素を単独候補にする。表はタイトルとセルを同様に詰める。
 
-各候補を最大20要素に分け、推定翻訳応答が安全上限12,000文字を超える場合も要素境界で事前分割する。LLM時はさらにsystem prompt、翻訳ルール、共有文脈、共有用語集、入力JSONを含む完成messagesを作り、テキスト全体が `--context-chars` を超える候補も分割する。単一要素でもいずれかの文字数上限を超える場合はAPIを呼ばずに失敗させる。
+各候補は固定の要素数上限を設けず、推定翻訳応答が安全上限12,000文字を超える場合に要素境界で事前分割する。LLM時はさらにsystem prompt、翻訳ルール、共有文脈、共有用語集、入力JSONを含む完成messagesを作り、テキスト全体が `--context-chars` を超える候補も分割する。単一要素でもいずれかの文字数上限を超える場合はAPIを呼ばずに失敗させる。
 
 LLM時は、同じ見出し階層を共有文脈辞書へ一度だけ置き、各要素は短い `context_id` で参照する。用語集は各原文に `english-short` または `english-long` が大文字小文字を無視して含まれる行だけを選び、`note` を除いてバッチ内で重複排除する。空のinline code fieldは送らない。APIには長いDocling refの代わりにバッチ内の連番IDを渡し、入力件数と返却必須ID一覧も明示する。応答後に元refへ戻す。JSON objectの `translations` で同じ連番ID集合を返させ、文字列またはJSON整数のIDを正規化して検証する。IDの欠落、追加、変更、重複、空訳は採用しない。空応答または部分応答で複数要素がある場合は要素境界で二分して再実行する。単一要素でも生成不全なら指数backoffで最大6回まで再試行し、正常な訳を得られなければ失敗させる。
 
-LibreTranslate時は `q` に最大20件の原文配列だけを入れ、`source=en`、`target=ja`、`format=text` と任意のAPI keyを送る。見出しcontext、用語集、翻訳ルール、Docling refは送らない。返却された `translatedText` の件数と非空文字列を検証し、入力順で元refへ対応付ける。一時的なHTTP失敗は指数backoffで最大6回まで再試行する。
+LibreTranslate時は `q` に `batch-chars` と推定応答上限で分割した原文配列だけを入れ、`source=en`、`target=ja`、`format=text` と任意のAPI keyを送る。見出しcontext、用語集、翻訳ルール、Docling refは送らない。返却された `translatedText` の件数と非空文字列を検証し、入力順で元refへ対応付ける。一時的なHTTP失敗は指数backoffで最大6回まで再試行する。
 
 `--glossary` は `english-short,english-long,japanse-short,japanese-long,kind,description,note` 列を持つCSVである。Translate（LLM）とReviewは対象原文に英語短縮名または正式名が含まれる行だけをpromptへ加える。内容追加の禁止、コード等の保持、用語集の優先、英語略称の保持、文体は `examples/translation-rules.md` に定める。組み込みルールは日本語への翻訳と外部翻訳ルールへの準拠だけとする。LibreTranslateのTranslateは用語集とルールを使わないが、後続Reviewは用語集とルールを使う。
 
@@ -223,7 +223,7 @@ LibreTranslate時は `q` に最大20件の原文配列だけを入れ、`source=
 - 出力: `document.reviewed.json`
 - 進捗粒度: 翻訳済みtext、表タイトル、表セルのref
 
-翻訳済み要素を原文と訳文の合計が `--batch-chars` 以内となる候補へ詰める。20要素を超える候補、現在の訳文を使った推定Review応答JSONが安全上限12,000文字を超える候補、完成messagesが `--context-chars` を超える候補は要素境界でさらに分割し、最大4バッチを並列実行する。
+翻訳済み要素を原文と訳文の合計が `--batch-chars` 以内となる候補へ詰める。固定の要素数上限は設けず、現在の訳文を使った推定Review応答JSONが安全上限12,000文字を超える候補、完成messagesが `--context-chars` を超える候補は要素境界でさらに分割し、最大4バッチを並列実行する。
 
 APIへ送る各要素はバッチ内連番ID、原文、現在の訳文、存在する場合だけ保護対象inline codeを持つ。さらに、各原文へ `english-short` または `english-long` が一致した用語集をバッチ上部へ集約し、重複と `note` を除いて送る。入力件数と返却必須ID一覧を明示し、入力配列の順序を文書順として表記ゆれと用語準拠を確認させる。長いDocling ref、見出し文脈、直前・直後の訳文、空fieldは送らない。連番IDは応答後に元refへ戻す。前後要素の原文と訳文はAPI入力ではなく、誤コピーを棄却するローカル検証だけに使う。
 

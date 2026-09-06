@@ -93,13 +93,12 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 | Structure最大出力 | 4,096 tokens |
 | Translate・Review最大出力 | 16,384 tokens |
 | Translate・Review推定応答上限 | 12,000文字 |
-| Translate・Review最大要素数 | 20要素/batch |
 | LibreTranslate timeout | 1,800秒 |
 | Review最大並列数 | 4バッチ |
 
-HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。Structureでは一時的な空応答と不完全JSONをAPI呼び出しからretryする。TranslateとReviewは20要素以内、推定応答JSONを12,000文字以内、完成messagesを `context-chars` 以内へ事前分割し、空応答、不正JSON、ID不一致の複数要素batchをさらに要素境界で分割する。バッチ内IDは文字列とJSON整数を受理して文字列へ正規化した後、完全一致を検証する。Translateは単一要素の生成不全も指数backoffで最大6回までretryする。Reviewは単一要素の生成不全、隣接要素の誤コピー、異常な長短、入力不足を訴えるメタ応答、日本語から英語のみへの退行を検出すると元の訳文を保持する。OpenAI SDK自体の自動retryは0にする。
+HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。Structureでは一時的な空応答と不完全JSONをAPI呼び出しからretryする。TranslateとReviewは `batch-chars`、推定応答JSON 12,000文字、完成messagesの `context-chars` を順に満たすよう要素境界で事前分割し、固定の要素数上限は設けない。空応答、不正JSON、ID不一致の複数要素batchはさらに要素境界で分割する。バッチ内IDは文字列とJSON整数を受理して文字列へ正規化した後、完全一致を検証する。Translateは単一要素の生成不全も指数backoffで最大6回までretryする。Reviewは単一要素の生成不全、隣接要素の誤コピー、異常な長短、入力不足を訴えるメタ応答、日本語から英語のみへの退行を検出すると元の訳文を保持する。OpenAI SDK自体の自動retryは0にする。
 
-LibreTranslateは公式batch APIへ最大20件の `q` 配列を送り、`source=en`、`target=ja`、`format=text` を固定する。応答の `translatedText` が文字列配列で入力件数と一致し、各訳文が非空であることを検証する。一時的なHTTP失敗は最大6回retryする。
+LibreTranslateは公式batch APIへ `batch-chars` と推定応答上限で分割した `q` 配列を送り、`source=en`、`target=ja`、`format=text` を固定する。応答の `translatedText` が文字列配列で入力件数と一致し、各訳文が非空であることを検証する。一時的なHTTP失敗は最大6回retryする。
 
 ## 7. Docling変換契約
 

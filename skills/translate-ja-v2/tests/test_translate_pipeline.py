@@ -929,8 +929,8 @@ def test_fit_batches_to_output_measures_estimated_response(
     assert all(estimate_chars(batch) <= 12000 for batch in batches)
 
 
-def test_fit_batches_to_output_limits_item_count() -> None:
-    """短い要素でも1バッチを20要素以内へ事前分割する。
+def test_fit_batches_to_output_does_not_limit_item_count() -> None:
+    """短い要素は固定件数で分けず推定応答上限まで同じbatchに保つ。
 
     Returns:
         なし。
@@ -940,7 +940,7 @@ def test_fit_batches_to_output_limits_item_count() -> None:
 
     batches = fit_batches_to_output([items], estimated_translation_response_chars)
 
-    assert [len(batch) for batch in batches] == [20, 20, 1]
+    assert [len(batch) for batch in batches] == [41]
 
 
 def test_review_messages_only_send_required_fields() -> None:
