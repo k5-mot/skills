@@ -89,9 +89,8 @@ PIPELINE_STAGES = (
     "docx",
 )
 DEFAULT_TRANSLATION_RULES = """\
-- 原文にない説明、要約、事実追加は禁止。
-- コード、URL、パス、識別子、コマンドは原文のまま保持する。
-- 用語集に一致する語は指定訳を優先する。
+- 日本語へ翻訳する。
+- 指定された外部翻訳ルールに従う。
 """
 GLOSSARY_FIELDS = (
     "english-short",
@@ -3074,7 +3073,8 @@ def translate_text(
     if not source.strip():
         return ""
     system = (
-        "あなたは専門文書の日英翻訳者です。原文にない説明、要約、事実追加は禁止です。"
+        "あなたは専門文書を日本語へ翻訳する翻訳者です。"
+        "ユーザーメッセージの翻訳ルールに従ってください。"
     )
     terms = glossary or []
     user = f"""次の{style}を日本語へ翻訳してください。
@@ -3325,8 +3325,9 @@ def build_translation_messages(
     glossary = shared_prompt_glossary(items)
 
     system = (
-        "あなたは専門文書の日英翻訳者です。原文にない説明、要約、事実追加は禁止です。"
+        "あなたは専門文書を日本語へ翻訳する翻訳者です。"
         "入力IDを変更せずJSONだけを返してください。inline_code_spansは変更しません。"
+        "ユーザーメッセージの翻訳ルールに従ってください。"
     )
     user = f"""次の要素を日本語へ翻訳してください。
 
@@ -4408,8 +4409,8 @@ def build_review_messages(
 
     system = (
         "あなたは専門文書の日英翻訳レビュー担当者です。"
-        "原文にない説明、要約、事実追加は禁止です。"
         "入力IDを変更せずJSONだけを返してください。"
+        "ユーザーメッセージの翻訳ルールに従ってください。"
     )
     user = f"""翻訳済み要素をレビューし、必要な場合だけ日本語訳を修正してください。
 

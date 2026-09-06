@@ -721,7 +721,10 @@ def test_english_abbreviation_rule_is_external_only() -> None:
     default_rules = read_translation_rules(None)
 
     assert "english-short" in external_rules
-    assert "english-short" not in default_rules
+    assert default_rules.splitlines() == [
+        "- 日本語へ翻訳する。",
+        "- 指定された外部翻訳ルールに従う。",
+    ]
 
 
 def test_translate_resume_keeps_completed_heading_as_context(
