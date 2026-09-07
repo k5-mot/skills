@@ -260,7 +260,7 @@ texts、tables、picturesを文書順に集め、次の形式へ変換する。
 - 入力: `document.ja.md` と任意のreference DOTX/DOCX
 - 出力: `document.ja.docx` または `--output` のパス
 
-Markdownのディレクトリを作業ディレクトリにしてpandocを呼ぶ。これにより `artifacts/...` の相対画像URIを解決できる。`--template` 指定時は `--reference-doc` として渡す。pandocが見つからない場合はエラーにする。`--skip-docx` では工程を `skipped` と記録する。
+Markdownのディレクトリを作業ディレクトリにしてpandocを呼ぶ。これにより `artifacts/...` の相対画像URIを解決できる。`--template` 指定時は `--reference-doc` として渡す。生成後、本文直下で見出し段落が連続する組だけを検出し、前側見出しの段落後余白と後側見出しの段落前余白を0にする。空段落は挿入・削除せず、見出しの次が本文・表・画像ならテンプレートの通常余白を維持する。pandocが見つからない場合はエラーにする。`--skip-docx` では工程を `skipped` と記録する。
 
 ## 13. ログ
 

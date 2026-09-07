@@ -22,6 +22,7 @@ import tempfile
 import time
 import uuid
 import zipfile
+import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from time import perf_counter
@@ -5090,6 +5091,113 @@ def convert_markdown_to_docx(
         command.extend(["--reference-doc", str(template_path)])
     docx_path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(command, check=True, cwd=markdown_path.parent)
+    adjusted = suppress_spacing_between_consecutive_headings(docx_path)
+    LOGGER.debug("Adjusted consecutive heading spacing pairs=%s", adjusted)
+
+
+def suppress_spacing_between_consecutive_headings(docx_path: Path) -> int:
+    """DOCX内で連続する見出し間の段落前後余白を0にする。
+
+    Args:
+        docx_path: pandocが生成したDOCXファイル。
+
+    Returns:
+        見出し間の余白を上書きした組数。
+
+    Side Effects:
+        変更対象があればDOCX内のword/document.xmlをatomicに置換する。
+
+    Raises:
+        zipfile.BadZipFile: 入力が有効なDOCX ZIPでない場合。
+        KeyError: DOCXにword/document.xmlがない場合。
+        ET.ParseError: document.xmlが不正な場合。
+    """
+
+    word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    paragraph_tag = f"{{{word_namespace}}}p"
+    paragraph_properties_tag = f"{{{word_namespace}}}pPr"
+    paragraph_style_tag = f"{{{word_namespace}}}pStyle"
+    spacing_tag = f"{{{word_namespace}}}spacing"
+    value_attribute = f"{{{word_namespace}}}val"
+    after_attribute = f"{{{word_namespace}}}after"
+    before_attribute = f"{{{word_namespace}}}before"
+
+    with zipfile.ZipFile(docx_path, "r") as source:
+        document_xml = source.read("word/document.xml")
+        for _, namespace in ET.iterparse(BytesIO(document_xml), events=("start-ns",)):
+            prefix, uri = namespace
+            if prefix != "xml":
+                ET.register_namespace(prefix, uri)
+        root = ET.fromstring(document_xml)
+        body = root.find(f".//{{{word_namespace}}}body")
+        if body is None:
+            return 0
+        children = list(body)
+        adjusted = 0
+        for current, following in zip(children, children[1:], strict=False):
+            if current.tag != paragraph_tag or following.tag != paragraph_tag:
+                continue
+            current_style = current.find(
+                f"{paragraph_properties_tag}/{paragraph_style_tag}"
+            )
+            following_style = following.find(
+                f"{paragraph_properties_tag}/{paragraph_style_tag}"
+            )
+            current_name = (
+                current_style.get(value_attribute) if current_style is not None else ""
+            )
+            following_name = (
+                following_style.get(value_attribute)
+                if following_style is not None
+                else ""
+            )
+            if not (
+                re.fullmatch(r"(?i)heading[ _-]?[1-6]", current_name or "")
+                and re.fullmatch(r"(?i)heading[ _-]?[1-6]", following_name or "")
+            ):
+                continue
+            properties = current.find(paragraph_properties_tag)
+            if properties is None:
+                properties = ET.Element(paragraph_properties_tag)
+                current.insert(0, properties)
+            spacing = properties.find(spacing_tag)
+            if spacing is None:
+                spacing = ET.SubElement(properties, spacing_tag)
+            spacing.set(after_attribute, "0")
+            following_properties = following.find(paragraph_properties_tag)
+            if following_properties is None:
+                following_properties = ET.Element(paragraph_properties_tag)
+                following.insert(0, following_properties)
+            following_spacing = following_properties.find(spacing_tag)
+            if following_spacing is None:
+                following_spacing = ET.SubElement(following_properties, spacing_tag)
+            following_spacing.set(before_attribute, "0")
+            adjusted += 1
+        if adjusted == 0:
+            return 0
+        updated_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+        handle, temporary_name = tempfile.mkstemp(
+            prefix=f".{docx_path.name}.", suffix=".tmp", dir=docx_path.parent
+        )
+        os.close(handle)
+        temporary_path = Path(temporary_name)
+        try:
+            with zipfile.ZipFile(temporary_path, "w") as target:
+                for member in source.infolist():
+                    content = (
+                        updated_xml
+                        if member.filename == "word/document.xml"
+                        else source.read(member)
+                    )
+                    target.writestr(member, content)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(temporary_path, docx_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return adjusted
 
 
 def update_manifest(path: Path, event: dict[str, Any]) -> None:
@@ -6014,7 +6122,7 @@ class DocxStage(FrozenModel):
         input_hash = sha256_file(markdown_path)
         config_hash = sha256_json(
             {
-                "version": 1,
+                "version": 2,
                 "template_sha256": (
                     sha256_file(self.template) if self.template is not None else None
                 ),

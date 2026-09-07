@@ -8,6 +8,7 @@ import os
 import sys
 from threading import Barrier
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
@@ -73,6 +74,7 @@ from translate import (  # noqa: E402
     structure_document,
     structure_page_with_vlm,
     StructureStage,
+    suppress_spacing_between_consecutive_headings,
     translate_document,
     translate_batch,
     translate_batch_with_libretranslate,
@@ -3263,7 +3265,12 @@ def test_convert_markdown_to_docx_runs_pandoc_from_markdown_directory(
     markdown_path.write_text("![image](artifacts/image.png)\n", encoding="utf-8")
     template_path.write_bytes(b"template")
     calls: list[dict[str, Any]] = []
+    adjusted: list[Path] = []
     monkeypatch.setattr("translate.shutil.which", lambda _name: "/usr/bin/pandoc")
+    monkeypatch.setattr(
+        "translate.suppress_spacing_between_consecutive_headings",
+        lambda path: adjusted.append(path) or 0,
+    )
 
     def fake_run(command: list[str], *, check: bool, cwd: Path) -> None:
         """subprocess.run の呼び出し内容を記録する。"""
@@ -3292,6 +3299,51 @@ def test_convert_markdown_to_docx_runs_pandoc_from_markdown_directory(
             "cwd": markdown_path.resolve().parent,
         }
     ]
+    assert adjusted == [docx_path.resolve()]
+
+
+def test_docx_suppresses_spacing_only_between_consecutive_headings(
+    tmp_path: Path,
+) -> None:
+    """連続見出し間だけ段落前後余白を0にする。
+
+    Args:
+        tmp_path: 最小DOCXを保存するpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    docx_path = tmp_path / "headings.docx"
+    document_xml = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading2"/><w:spacing w:after="160"/></w:pPr><w:r><w:t>Two</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="BodyText"/></w:pPr><w:r><w:t>Body</w:t></w:r></w:p>
+  </w:body>
+</w:document>
+"""
+    with zipfile.ZipFile(docx_path, "w") as archive:
+        archive.writestr("word/document.xml", document_xml)
+        archive.writestr("custom/preserved.txt", b"preserved")
+
+    adjusted = suppress_spacing_between_consecutive_headings(docx_path)
+
+    namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    with zipfile.ZipFile(docx_path) as archive:
+        root = ET.fromstring(archive.read("word/document.xml"))
+        assert archive.read("custom/preserved.txt") == b"preserved"
+    paragraphs = root.findall(".//w:body/w:p", namespace)
+    first_spacing = paragraphs[0].find("w:pPr/w:spacing", namespace)
+    second_spacing = paragraphs[1].find("w:pPr/w:spacing", namespace)
+
+    assert adjusted == 1
+    assert first_spacing is not None
+    assert first_spacing.get(f"{{{namespace['w']}}}after") == "0"
+    assert second_spacing is not None
+    assert second_spacing.get(f"{{{namespace['w']}}}before") == "0"
+    assert second_spacing.get(f"{{{namespace['w']}}}after") == "160"
 
 
 def test_structure_stage_resumes_from_completed_page_elements(

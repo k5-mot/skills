@@ -62,7 +62,7 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - Docling async API、固定payload、pollingログ
 - 23ページPDFの10、10、3ページ分割と直列変換、JSON参照・ページ番号・artifact URIの連結
 - PDFページ画像のローカル生成とURI更新
-- pandoc必須判定と相対画像の作業ディレクトリ
+- pandoc必須判定、相対画像の作業ディレクトリ、連続見出し間だけの段落後余白抑制
 - Structure、Translate、Reviewの要素単位Resume
 - 全ステージのpipeline wiring
 
@@ -181,6 +181,7 @@ manifest.json
 - `document.ja.md` に見出し、本文、表、コード、画像が文書内容に応じて出力される。
 - 画像リンクが `artifacts/...` の相対パスである。
 - pandocが画像を解決し、`document.ja.docx` を生成する。
+- 連続する見出し間だけ段落前後余白が0で、見出しから本文への通常余白は維持される。
 - `document.ja.docx` を `unzip -t` で検査してerrorがない。
 
 ### Manifest
