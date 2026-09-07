@@ -12,70 +12,48 @@ PDFまたはWord文書をDocling JSONへ変換し、座標正規化、VLM構造�
 
 ```mermaid
 flowchart TD
-    INPUT["PDF / Word"] --> INPUT_TYPE{"入力形式"}
+    SOURCE["*.pdf / *.docx"] --> PARSE["Parse"]
+    PARSE --> RAW["&lt;stem&gt;.json"]
+    PARSE --> ARTIFACTS["artifacts/"]
 
-    INPUT_TYPE -->|PDF| SPLIT["10ページ単位に分割"]
-    SPLIT --> DOCLING_PDF["Docling Serveで直列変換"]
-    DOCLING_PDF --> MERGE["Docling JSONをローカル連結"]
-    SPLIT --> PAGE_IMAGE["ページPNGをローカル生成"]
-    INPUT_TYPE -->|Word| DOCLING_WORD["Docling Serveで変換"]
-    MERGE --> PARSED["Parse<br/>&lt;stem&gt;.json + artifacts/"]
-    PAGE_IMAGE --> PARSED
-    DOCLING_WORD --> PARSED
-
-    PARSED --> NORMALIZE["Normalize<br/>座標順と参照を補正"]
+    RAW --> NORMALIZE["Normalize"]
     NORMALIZE --> NORMALIZED["document.normalized.json"]
 
-    NORMALIZED --> SKIP_VLM{"--skip-vlm"}
-    SKIP_VLM -->|有効| STRUCTURED["document.structured.json"]
-    SKIP_VLM -->|無効| STRUCTURE["Structure VLM<br/>見出し・caption・code・inline codeを補正"]
-    PAGE_IMAGE -.->|補助入力| STRUCTURE
-    STRUCTURE --> STRUCTURED
+    NORMALIZED --> STRUCTURE["Structure"]
+    ARTIFACTS -.-> STRUCTURE
+    STRUCTURE --> STRUCTURED["document.structured.json"]
 
-    STRUCTURED --> CLEAN["Clean<br/>非コード本文・表セルの連続記号を校正"]
+    STRUCTURED --> CLEAN["Clean"]
     CLEAN --> CLEANED["document.cleaned.json"]
 
-    CLEANED --> TRANSLATOR{"--translator"}
-    TRANSLATOR -->|default| LIBRE["LibreTranslate"]
-    TRANSLATOR -->|llm| LLM_TRANSLATE["OpenAI互換LLM<br/>用語集・外部ルール"]
-    LIBRE --> TRANSLATED["document.translated.json"]
-    LLM_TRANSLATE --> TRANSLATED
+    CLEANED --> TRANSLATE["Translate"]
+    GLOSSARY["glossary.csv"] -.-> TRANSLATE
+    RULES["translation-rules.md"] -.-> TRANSLATE
+    TRANSLATE --> TRANSLATED["document.translated.json"]
 
-    TRANSLATED --> SKIP_REVIEW{"--skip-review"}
-    SKIP_REVIEW -->|有効| MARKDOWN["Markdown<br/>document.ja.md"]
-    SKIP_REVIEW -->|無効| RAG_SWITCH{"--review-rag"}
-    RAG_SWITCH -->|有効| QDRANT["Qdrant RAG<br/>batch queryで出典付き根拠を取得"]
-    RAG_SWITCH -->|無効| NO_RAG["RAG根拠なし"]
-    QDRANT --> FIDELITY["Fidelity Reviewer"]
-    QDRANT --> TERMINOLOGY["Terminology Reviewer"]
-    NO_RAG --> FIDELITY
-    NO_RAG --> TERMINOLOGY
-    FIDELITY --> CONSENSUS{"訳案が一致"}
-    TERMINOLOGY --> CONSENSUS
-    CONSENSUS -->|はい| LOCAL_CHECK["ローカル安全検査"]
-    CONSENSUS -->|いいえ| ADJUDICATOR["Adjudicator"]
-    ADJUDICATOR --> LOCAL_CHECK
-    LOCAL_CHECK --> REVIEWED["document.reviewed.json"]
-    REVIEWED --> MARKDOWN
+    TRANSLATED --> REVIEW["Review"]
+    GLOSSARY -.-> REVIEW
+    RULES -.-> REVIEW
+    REVIEW --> REVIEWED["document.reviewed.json"]
 
-    MARKDOWN --> SKIP_DOCX{"--skip-docx"}
-    SKIP_DOCX -->|有効| DONE["完了"]
-    SKIP_DOCX -->|無効| DOCX["pandoc + template<br/>連続見出しの余白補正"]
-    DOCX --> WORD["document.ja.docx"]
-    WORD --> DONE
+    REVIEWED --> MARKDOWN["Markdown"]
+    MARKDOWN --> JA_MD["document.ja.md"]
 
-    MANIFEST[("manifest.json<br/>工程status・hash<br/>Structure / Translate / Reviewの要素進捗")]
-    PARSED -.-> MANIFEST
-    NORMALIZED -.-> MANIFEST
-    STRUCTURED -.-> MANIFEST
-    CLEANED -.-> MANIFEST
-    TRANSLATED -.-> MANIFEST
-    REVIEWED -.-> MANIFEST
+    JA_MD --> DOCX["Docx"]
+    TEMPLATE["template.dotx"] -.-> DOCX
+    DOCX --> JA_DOCX["document.ja.docx"]
+
+    PARSE -.-> MANIFEST["manifest.json"]
+    NORMALIZE -.-> MANIFEST
+    STRUCTURE -.-> MANIFEST
+    CLEAN -.-> MANIFEST
+    TRANSLATE -.-> MANIFEST
+    REVIEW -.-> MANIFEST
     MARKDOWN -.-> MANIFEST
-    WORD -.-> MANIFEST
+    DOCX -.-> MANIFEST
 ```
 
-実線は主成果物の流れ、点線は補助入力または進捗記録を表す。`--skip-vlm` は入力を複製してStructure成果物を作り、`--skip-review` はTranslate成果物を直接Markdownへ渡す。`--skip-docx` はMarkdownを最終成果物とする。
+図にはStageと入出力ファイルだけを示す。実線は主成果物の流れ、点線は補助入力または `manifest.json` の更新を表す。
 
 ## 2. 設計原則
 
