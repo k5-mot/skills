@@ -116,7 +116,7 @@ Normalizeは座標に基づくtext要素の並べ替えだけを行う。本文�
 
 ### 入力と出力
 
-- 入力: `document.normalized.json` と `artifacts/` のページPNG
+- 入力: `document.normalized.json`、`artifacts/` のページPNG、任意のStructureルール
 - 出力: `document.structured.json`
 - 進捗粒度: text refと表セルref
 
@@ -136,6 +136,7 @@ Doclingが誤検出した見出し階層とcaptionを補正する。本文とし
 - 座標補正済みtextのref、bbox、label、level、最大500文字のtext
 - 表セルのref、bbox、最大500文字のtext
 - 対応するページPNG
+- `--structure-rules` で指定した外部ルール
 
 VLMには翻訳、要約、本文の創作を許可しない。返却patchは次だけを受理する。
 
@@ -210,7 +211,7 @@ LLM時はタイムアウトなどの一時的なAPI障害が最大6回の試行�
 
 LibreTranslate時は `q` に `batch-chars`、任意の `max-batch-elements`、推定応答上限で分割した原文配列だけを入れ、`source=en`、`target=ja`、`format=text` と任意のAPI keyを送る。見出しcontext、用語集、翻訳ルール、Docling refは送らない。返却された `translatedText` の件数と非空文字列を検証し、入力順で元refへ対応付ける。一時的なHTTP失敗は指数backoffで最大6回まで再試行するが、失敗時の二分は行わない。
 
-`--glossary` は `english-short,english-long,japanse-short,japanese-long,kind,description,note` 列を持つCSVである。Translate（LLM）とReviewは対象原文に英語短縮名または正式名が含まれる行だけをpromptへ加える。内容追加の禁止、コード等の保持、用語集の優先、英語略称の保持、文体は `examples/translation-rules.md` に定める。組み込みルールは日本語への翻訳と外部翻訳ルールへの準拠だけとする。LibreTranslateのTranslateは用語集とルールを使わないが、後続Reviewは用語集とルールを使う。
+`--glossary` は `english-short,english-long,japanse-short,japanese-long,kind,description,note` 列を持つCSVである。Translate（LLM）とReviewは対象原文に英語短縮名または正式名が含まれる行だけをpromptへ加える。内容追加の禁止、コード等の保持、用語集の優先、英語略称の保持、文体は `examples/translation-rules.md` に定める。Translateの組み込みルールは日本語への翻訳と外部翻訳ルールへの準拠だけとする。`--translation-rules` はLLM Translateだけへ渡し、LibreTranslateは用語集とルールを使わない。後続Reviewはbackendにかかわらず用語集と `--review-rules` のルールを使い、組み込みでは日本語訳のレビューと外部Reviewルールへの準拠だけを定める。
 
 結果は元要素の `translate_ja_v2` に追加する。
 
@@ -224,7 +225,7 @@ LibreTranslate時は `q` に `batch-chars`、任意の `max-batch-elements`、�
 
 ### 入力と出力
 
-- 入力: `document.translated.json`、任意の用語集と翻訳ルール
+- 入力: `document.translated.json`、任意の用語集とReviewルール
 - 出力: `document.reviewed.json`
 - 進捗粒度: 翻訳済みtext、表タイトル、表セルのref
 
@@ -246,7 +247,7 @@ ReviewStageは旧来の単一Reviewer経路を持たず、各バッチを次の�
 4. 訳案が異なる要素だけをAdjudicatorへ送り、最終訳を決定する。
 5. 最終訳へ既存の長短、日本語消失、隣接誤コピー検査を適用する。
 
-Fidelity Reviewerは意味、数量、単位、否定、条件、固有名詞、追加・欠落へ集中し、文体だけでは変更しない。Terminology Reviewerは一致用語集、表記統一、外部ルール、inline code等の保持、日本語の自然さを確認する。Adjudicatorの判断優先順位は外部ルール、用語集、RAG根拠、原文への忠実性、日本語の自然さとする。根拠不足なら現在訳を維持する。
+Fidelity Reviewerは意味、数量、単位、否定、条件、固有名詞、追加・欠落へ集中し、文体だけでは変更しない。Terminology Reviewerは一致用語集、表記統一、`--review-rules` の外部ルール、inline code等の保持、日本語の自然さを確認する。Adjudicatorの判断優先順位はReviewルール、用語集、RAG根拠、原文への忠実性、日本語の自然さとする。根拠不足なら現在訳を維持する。
 
 Qdrantにはバッチ内の各要素を個別queryとして1 HTTP requestへまとめる。collection未指定時は一覧が1件の場合だけ自動選択し、複数なら停止する。Qdrantの接続障害、応答構造不正、入力件数との不一致は、根拠なしReviewへ黙って切り替えず停止する。RAG検索結果の全文は成果物へ保存せず、出典ID、位置、scoreだけを監査metadataへ残す。Reviewの要素は裁定とローカル検査まで完了した時点で `completed` にする。
 

@@ -29,6 +29,7 @@ from translate import (  # noqa: E402
     CleanStage,
     ColorFormatter,
     configure_logging,
+    DEFAULT_TRANSLATION_RULES,
     DocxStage,
     DoclingSettings,
     estimated_review_response_chars,
@@ -49,7 +50,7 @@ from translate import (  # noqa: E402
     ParseStage,
     read_json,
     read_glossary_csv,
-    read_translation_rules,
+    read_rules,
     is_retryable_libretranslate_error,
     require_libretranslate_settings,
     MarkdownStage,
@@ -718,6 +719,23 @@ def test_structure_messages_include_coordinate_corrected_bbox() -> None:
     assert content.index("Upper") < content.index("Lower")
 
 
+def test_structure_messages_include_external_rules() -> None:
+    """Structure専用ルールをVLMプロンプトへ含める。
+
+    Returns:
+        なし。
+    """
+
+    data = {"texts": [_text_item(0, "Figure 1", top=700, bottom=680)]}
+
+    content = StructureStage._build_messages(
+        data, structure_rules="- Figureで始まる本文はcaptionとして確認する。"
+    )[1]["content"]
+
+    assert isinstance(content, str)
+    assert "Figureで始まる本文はcaptionとして確認する" in content
+
+
 def test_skip_vlm_keeps_coordinate_normalization() -> None:
     """--skip-vlm は第2段階だけを省略し、Normalize の座標補正は保つ。"""
 
@@ -778,7 +796,7 @@ def test_translate_document_passes_glossary_hits_and_rules(
     translated = translate_document(
         document,
         glossary=read_glossary_csv(glossary_path),
-        translation_rules=read_translation_rules(rules_path),
+        translation_rules=read_rules(rules_path),
     )
     prompt = client.completions.calls[0]["messages"][1]["content"]
 
@@ -817,10 +835,8 @@ def test_english_abbreviation_rule_is_external_only() -> None:
         なし。
     """
 
-    external_rules = read_translation_rules(
-        SCRIPT_DIR.parent / "examples" / "translation-rules.md"
-    )
-    default_rules = read_translation_rules(None)
+    external_rules = read_rules(SCRIPT_DIR.parent / "examples" / "translation-rules.md")
+    default_rules = read_rules(None, DEFAULT_TRANSLATION_RULES)
 
     assert "english-short" in external_rules
     assert default_rules.splitlines() == [
@@ -1955,7 +1971,7 @@ def test_review_document_runs_independent_elements_concurrently(
             _client: このfakeでは使わないOpenAI client。
             _settings: このfakeでは使わないAPI設定。
             items: 極小バッチ上限で1件に分けたレビュー対象。
-            translation_rules: このfakeでは使わない翻訳ルール。
+            translation_rules: このfakeでは使わないReviewルール。
             qdrant_http: このfakeでは使わないQdrant client。
             qdrant_settings: このfakeでは使わないQdrant設定。
             qdrant_collection: このfakeでは使わないcollection名。
@@ -2176,7 +2192,7 @@ def test_multi_agent_review_uses_rag_and_adjudicates_disagreement(
             _client: fakeでは未使用のOpenAI client。
             _settings: fakeでは未使用のOpenAI設定。
             _items: fakeでは未使用のReview対象。
-            _rules: fakeでは未使用の翻訳ルール。
+            _rules: fakeでは未使用のReviewルール。
             received_evidence: RAGから渡された根拠。
             role: Reviewerの役割。
 
@@ -3663,13 +3679,15 @@ def test_structure_stage_resumes_from_completed_page_elements(
 
     paths = build_stage_paths(tmp_path / "source.pdf", tmp_path / "out", None)
     paths.output_dir.mkdir(parents=True)
+    rules_path = tmp_path / "structure-rules.md"
+    rules_path.write_text("- captionは直前の図表へ対応させる。\n", encoding="utf-8")
     document = {
         "texts": [
             _text_item(0, "page 1", top=100, bottom=90, page=1),
             _text_item(1, "page 2", top=100, bottom=90, page=2),
         ]
     }
-    calls: list[int | None] = []
+    calls: list[tuple[int | None, str]] = []
     fail_page_two = True
     monkeypatch.setattr(
         "translate.require_openai_settings",
@@ -3689,6 +3707,7 @@ def test_structure_stage_resumes_from_completed_page_elements(
         _client: object,
         _settings: OpenAISettings,
         _artifacts_dir: Path | None,
+        _structure_rules: str,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """ページ2の初回だけ失敗するStructure処理を模倣する。
 
@@ -3698,12 +3717,13 @@ def test_structure_stage_resumes_from_completed_page_elements(
             _client: fakeでは未使用のclient。
             _settings: fakeでは未使用の設定。
             _artifacts_dir: fakeでは未使用のartifactパス。
+            _structure_rules: fakeでは未使用の構造補正ルール。
 
         Returns:
             処理済みページを記録した文書と空patch。
         """
 
-        calls.append(page_no)
+        calls.append((page_no, _structure_rules))
         if page_no == 2 and fail_page_two:
             raise RuntimeError("interrupted")
         result = json.loads(json.dumps(data))
@@ -3715,6 +3735,7 @@ def test_structure_stage_resumes_from_completed_page_elements(
         paths=paths,
         artifacts_dir=paths.output_dir / "artifacts",
         skip_vlm=False,
+        structure_rules_path=rules_path,
     )
 
     with pytest.raises(RuntimeError, match="interrupted"):
@@ -3730,7 +3751,11 @@ def test_structure_stage_resumes_from_completed_page_elements(
     fail_page_two = False
     structured = stage.run(document)
 
-    assert calls == [1, 2, 2]
+    assert calls == [
+        (1, "- captionは直前の図表へ対応させる。"),
+        (2, "- captionは直前の図表へ対応させる。"),
+        (2, "- captionは直前の図表へ対応させる。"),
+    ]
     assert structured["processed_pages"] == [1, 2]
     assert read_json(paths.manifest)["stages"]["structure"]["status"] == "completed"
 
@@ -3884,7 +3909,7 @@ def test_review_stage_resumes_from_completed_element(
             _client: fakeでは未使用のclient。
             _settings: fakeでは未使用の設定。
             items: 1件のレビュー対象。
-            translation_rules: fakeでは未使用の翻訳ルール。
+            translation_rules: pipelineから渡されるReview専用ルール。
             qdrant_http: fakeでは未使用のQdrant client。
             qdrant_settings: fakeでは未使用のQdrant設定。
             qdrant_collection: fakeでは未使用のcollection名。
@@ -3924,12 +3949,16 @@ def test_review_stage_resumes_from_completed_element(
 def test_run_pipeline_writes_json_markdown_and_docx(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """pipeline は fake 外部依存で JSON、Markdown、docx を一通り生成する。"""
+    """pipelineの全成果物生成とReviewルール変更時の再実行を検証する。"""
 
     input_path = tmp_path / "source.pdf"
     input_path.write_bytes(b"%PDF-1.4")
     output_dir = tmp_path / "out"
-    limits: dict[str, int] = {}
+    translation_rules_path = tmp_path / "translation-rules.md"
+    translation_rules_path.write_text("- 翻訳専用ルール。\n", encoding="utf-8")
+    review_rules_path = tmp_path / "review-rules.md"
+    review_rules_path.write_text("- レビュー専用ルール。\n", encoding="utf-8")
+    limits: dict[str, int | str] = {}
     stage_calls = {"parse": 0, "translate": 0, "review": 0, "docx": 0}
 
     def fake_docling(
@@ -4044,7 +4073,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         Args:
             data: レビュー対象JSON。
             glossary: fakeでは未使用の用語集。
-            translation_rules: fakeでは未使用の翻訳ルール。
+            translation_rules: pipelineから渡されるReview専用ルール。
             context_chars: fakeで記録するcontext上限。
             batch_chars: fakeで記録するbatch上限。
             resume_data: fakeでは未使用の部分成果物。
@@ -4057,10 +4086,11 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             入力JSONと変更件数0。
         """
 
-        _ = (glossary, translation_rules, resume_data, completed_ids, on_progress)
+        _ = (glossary, resume_data, completed_ids, on_progress)
         stage_calls["review"] += 1
         assert max_batch_elements == 7
         assert review_rag is False
+        limits["review_rules"] = translation_rules
         limits["review_context_chars"] = context_chars
         limits["review_batch_chars"] = batch_chars
         return data, 0
@@ -4084,6 +4114,8 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             skip_vlm=True,
             skip_docx=False,
             force=True,
+            translation_rules=translation_rules_path,
+            review_rules=review_rules_path,
             context_chars=32000,
             batch_chars=800,
             max_batch_elements=7,
@@ -4111,12 +4143,15 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         "batch_chars": 800,
         "review_context_chars": 32000,
         "review_batch_chars": 800,
+        "review_rules": "- レビュー専用ルール。",
     }
     run_pipeline(
         PipelineOptions(
             input=input_path,
             output_dir=output_dir,
             skip_vlm=True,
+            translation_rules=translation_rules_path,
+            review_rules=review_rules_path,
             context_chars=32000,
             batch_chars=800,
             max_batch_elements=7,
@@ -4148,3 +4183,19 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         "docx",
     }
     assert all(state["status"] == "completed" for state in manifest["stages"].values())
+
+    review_rules_path.write_text("- 更新したレビュー専用ルール。\n", encoding="utf-8")
+    run_pipeline(
+        PipelineOptions(
+            input=input_path,
+            output_dir=output_dir,
+            skip_vlm=True,
+            translation_rules=translation_rules_path,
+            review_rules=review_rules_path,
+            context_chars=32000,
+            batch_chars=800,
+            max_batch_elements=7,
+        )
+    )
+    assert stage_calls == {"parse": 1, "translate": 1, "review": 2, "docx": 1}
+    assert limits["review_rules"] == "- 更新したレビュー専用ルール。"

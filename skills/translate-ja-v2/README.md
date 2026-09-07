@@ -53,6 +53,13 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
   --translation-rules ./skills/translate-ja-v2/examples/translation-rules.md
 ```
 
+StructureとReviewへ別々の外部ルールを渡す場合は、それぞれ次のoptionを追加します。`--translation-rules` はLLM Translateだけに適用されます。
+
+```bash
+  --structure-rules ./rules/structure-rules.md \
+  --review-rules ./rules/review-rules.md
+```
+
 ReviewはFidelity ReviewerとTerminology Reviewerを並列実行し、不一致要素だけをAdjudicatorで裁定します。Qdrantのドメイン根拠も使う場合は次のoptionを追加します。`QDRANT_COLLECTION` 未指定時は、Qdrant上にcollectionが1件だけなら自動選択します。
 
 ```bash
@@ -70,7 +77,9 @@ ReviewはFidelity ReviewerとTerminology Reviewerを並列実行し、不一致�
 | `--output PATH` | いいえ | `<output-dir>/document.ja.docx` | 最終docxだけを別のパスへ出力します。 |
 | `--template PATH` | いいえ | なし | pandocへ渡すreference DOCX/DOTXを指定します。 |
 | `--glossary PATH` | いいえ | なし | Translate（LLM）とReviewで使う、`english-short,english-long,japanse-short,japanese-long,kind,description,note` 列を持つUTF-8 CSV用語集を指定します。 |
-| `--translation-rules PATH` | いいえ | 組み込みルール | LLM TranslateとReviewへ渡すUTF-8のルール文書を指定します。 |
+| `--structure-rules PATH` | いいえ | 追加ルールなし | StructureのVLMへ渡すUTF-8のルール文書を指定します。 |
+| `--translation-rules PATH` | いいえ | 組み込みルール | LLM Translateへ渡すUTF-8のルール文書を指定します。LibreTranslateでは使用しません。 |
+| `--review-rules PATH` | いいえ | 組み込みルール | Reviewの各ReviewerとAdjudicatorへ渡すUTF-8のルール文書を指定します。 |
 | `--context-chars INTEGER` | いいえ | `50000` | 1回のOpenAI互換API requestへ含めるテキストの最大文字数を指定します。 |
 | `--batch-chars INTEGER` | いいえ | `1500` | TranslateとReviewで1回のbatchへ詰める原文・訳文の最大文字数を指定します。 |
 | `--max-batch-elements INTEGER` | いいえ | `0` | Translate（両backend）とReviewの1バッチの要素数上限。`0` は固定件数で制限せず、文字数・推定応答量から動的に分割します。正数ならその件数も上限になります。Structureには適用しません。 |

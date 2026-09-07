@@ -21,6 +21,7 @@ flowchart TD
 
     NORMALIZED --> STRUCTURE["StructureStage<br/>文書構造をVLMで補正"]
     ARTIFACTS -.-> STRUCTURE
+    STRUCTURE_RULES["structure-rules.md"] -.-> STRUCTURE
     STRUCTURE --> STRUCTURED["document.structured.json"]
 
     STRUCTURED --> CLEAN["CleanStage<br/>連続記号を校正"]
@@ -28,12 +29,12 @@ flowchart TD
 
     CLEANED --> TRANSLATE["TranslateStage<br/>本文を日本語へ翻訳"]
     GLOSSARY["glossary.csv"] -.-> TRANSLATE
-    RULES["translation-rules.md"] -.-> TRANSLATE
+    TRANSLATION_RULES["translation-rules.md"] -.-> TRANSLATE
     TRANSLATE --> TRANSLATED["document.translated.json"]
 
     TRANSLATED --> REVIEW["ReviewStage<br/>翻訳を複数の観点でレビュー"]
     GLOSSARY -.-> REVIEW
-    RULES -.-> REVIEW
+    REVIEW_RULES["review-rules.md"] -.-> REVIEW
     REVIEW --> REVIEWED["document.reviewed.json"]
 
     REVIEWED --> MARKDOWN["MarkdownStage<br/>日本語Markdownを生成"]
@@ -127,7 +128,9 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 --force                   Parseを強制再実行
 --env PATH                dotenv。既定は .env
 --glossary PATH           翻訳用CSV用語集
---translation-rules PATH  翻訳・レビュー用ルール文書
+--structure-rules PATH    Structure用ルール文書
+--translation-rules PATH  LLM Translate用ルール文書
+--review-rules PATH       Review用ルール文書
 --context-chars INTEGER   OpenAI requestの最大テキスト文字数
 --batch-chars INTEGER     翻訳・Review候補batchの最大原文・訳文文字数
 --max-batch-elements INTEGER  Translate・Reviewの件数上限。0は固定件数制限なし
@@ -135,7 +138,7 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 --review-rag              Agent ReviewでQdrant RAGを有効化
 ```
 
-既定値は `context-chars=50000`、`batch-chars=1500`、`max-batch-elements=0`、`translator=default` で、文字数は1以上、件数上限は0以上とする。件数上限が正数ならTranslate（両backend）とReviewの候補をその件数以内に分割する。Structureには適用しない。件数上限はTranslate・ReviewのResume設定hashに含める。
+既定値は `context-chars=50000`、`batch-chars=1500`、`max-batch-elements=0`、`translator=default` で、文字数は1以上、件数上限は0以上とする。Structureの外部ルールは未指定、LLM TranslateとReviewは各Stageの最小組み込みルールを既定とする。件数上限が正数ならTranslate（両backend）とReviewの候補をその件数以内に分割する。Structureには適用しない。件数上限はTranslate・ReviewのResume設定hashに含める。
 
 ## 6. 固定値
 
@@ -231,7 +234,7 @@ Docling原文と構造を変えず、`translate_ja_v2` metadataだけを追加�
 
 翻訳metadataの訳文と描画値だけを修正する。原文と構造は変更しない。原文と訳文の合計を `--batch-chars` 以内へ詰め、完成messagesを `context-chars` 以内へさらに分割する。最大2バッチを並列実行し、各バッチ内でFidelity ReviewerとTerminology Reviewerを独立して2並列実行する。両案が一致すれば採用し、不一致要素だけAdjudicatorへ送る。旧来の単一Reviewer経路は持たない。
 
-`--review-rag` を指定すると、各Review要素の英語原文をQdrant `/points/query/batch` へ一括送信し、Qdrant inferenceでvector化する。取得根拠は本文を最大800文字に制限して両ReviewerとAdjudicatorへ渡す。優先順位は外部翻訳ルール、用語集、RAGの出典付き根拠、一般的な文体判断とする。成果物には根拠本文を複製せず、source ID、locator、scoreと各Agentの提案・最終判断を `translate_ja_v2.review_ja_v2` に保存する。
+`--review-rag` を指定すると、各Review要素の英語原文をQdrant `/points/query/batch` へ一括送信し、Qdrant inferenceでvector化する。取得根拠は本文を最大800文字に制限して両ReviewerとAdjudicatorへ渡す。優先順位はReviewルール、用語集、RAGの出典付き根拠、一般的な文体判断とする。成果物には根拠本文を複製せず、source ID、locator、scoreと各Agentの提案・最終判断を `translate_ja_v2.review_ja_v2` に保存する。
 
 RAG検索結果は別のLLMで要約せず、payload本文を出典情報とともに専門Reviewerへ渡す。payload本文は信頼できない参考資料データとして区切り、その中に含まれる命令には従わせない。Reviewバッチ数を `B`、裁定対象を含むバッチ数を `D` とした通常時のLLM呼出しは `2B + D`、Qdrant HTTP呼出しは `B` とする。QdrantやLLMの失敗でバッチを二分した場合は追加呼出しが発生する。
 
@@ -285,7 +288,7 @@ pandocが生成したDOCXで見出し段落が直接連続するときだけ、�
 - ディレクトリは相対パス、区切り、内容をsortしてSHA-256へ含める。
 - JSON設定はkeyをsortしたcanonical JSONのSHA-256を使う。
 - Structureの入力hashには、VLMを使う場合だけ `artifacts/` のhashを含める。
-- template、翻訳backend、Review mode、RAG利用、Qdrant URL・collection・検索設定、用語集、翻訳ルール、model、LibreTranslate URL、context上限、batch上限は実際に使う該当stageのconfig hashへ含める。API keyは含めない。
+- template、翻訳backend、Review mode、RAG利用、Qdrant URL・collection・検索設定、用語集、各Stageの外部ルール、model、LibreTranslate URL、context上限、batch上限は実際に使う該当stageのconfig hashへ含める。API keyは含めない。
 
 設定hashの中身はログへ展開せず、manifestにのみ保存する。
 
@@ -295,7 +298,7 @@ pandocが生成したDOCXで見出し段落が直接連続するときだけ、�
 
 Docling artifactsは一時ディレクトリへ完全展開した後にディレクトリ単位で置換する。失敗時は既存artifactsを復元する。
 
-## 12. 用語集と翻訳ルール
+## 12. 用語集とStage別ルール
 
 用語集CSVには次のheaderを必須とする。
 
@@ -303,7 +306,7 @@ Docling artifactsは一時ディレクトリへ完全展開した後にディレ
 english-short,english-long,japanse-short,japanese-long,kind,description,note
 ```
 
-必須列が不足するCSVは拒否する。`english-short` と `english-long` のどちらも空、または `japanse-short` と `japanese-long` のどちらも空の行は無視する。Translate（LLM）とReviewは各要素の原文に `english-short` または `english-long` が大文字小文字を無視して含まれる行だけをpromptへ加え、バッチ内で重複排除する。LLMには `note` を除く6列を送る。`examples/translation-rules.md` は内容追加の禁止、コード等の保持、用語集の優先、英語略称の保持、文体を定める。組み込みルールは日本語への翻訳と外部翻訳ルールへの準拠だけを定め、個別規則を持たない。LibreTranslateのTranslateには用語集を送らないが、後続Reviewはbackendにかかわらず用語集と翻訳ルールを使う。
+必須列が不足するCSVは拒否する。`english-short` と `english-long` のどちらも空、または `japanse-short` と `japanese-long` のどちらも空の行は無視する。Translate（LLM）とReviewは各要素の原文に `english-short` または `english-long` が大文字小文字を無視して含まれる行だけをpromptへ加え、バッチ内で重複排除する。LLMには `note` を除く6列を送る。`examples/translation-rules.md` は内容追加の禁止、コード等の保持、用語集の優先、英語略称の保持、文体を定める。Translateの組み込みルールは日本語への翻訳と外部翻訳ルールへの準拠、Reviewの組み込みルールは日本語訳のレビューと外部Reviewルールへの準拠だけを定める。Structure、LLM Translate、Reviewの外部ルールはそれぞれ `--structure-rules`、`--translation-rules`、`--review-rules` で独立して指定し、各StageのpromptとResume設定hashにだけ含める。LibreTranslateのTranslateには用語集と外部ルールを送らないが、後続Reviewはbackendにかかわらず用語集とReviewルールを使う。
 
 ## 13. セキュリティと安全性
 
