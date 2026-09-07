@@ -47,6 +47,7 @@ from translate import (  # noqa: E402
     LibreTranslateSettings,
     main,
     message_text_chars,
+    multi_agent_review_batch,
     normalize_document,
     OpenAIEmptyResponseError,
     OPENAI_BATCH_MAX_OUTPUT_TOKENS,
@@ -59,6 +60,8 @@ from translate import (  # noqa: E402
     read_json,
     read_glossary_csv,
     read_translation_rules,
+    require_qdrant_settings,
+    resolve_qdrant_collection,
     is_retryable_libretranslate_error,
     require_libretranslate_settings,
     request_structure_patches,
@@ -68,8 +71,11 @@ from translate import (  # noqa: E402
     review_document,
     review_rejection_reason,
     ReviewStage,
+    ReviewMode,
     run_pipeline,
     stage_is_resumable,
+    qdrant_search_batch,
+    QdrantSettings,
     record_stage_completion,
     structure_document,
     structure_page_with_vlm,
@@ -1915,6 +1921,329 @@ def test_review_batch_uses_single_json_request(
     assert "返却JSON" in str(calls[0][0][-1]["content"])
 
 
+def test_require_qdrant_settings_reads_env_and_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qdrant設定はURIとKeyを必須にし検索既定値を補う。
+
+    Args:
+        monkeypatch: 環境変数を隔離するpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    for name in (
+        "QDRANT_URI",
+        "QDRANT_URL",
+        "QDRANT_API_KEY",
+        "QDRANT_COLLECTION",
+        "QDRANT_EMBEDDING_MODEL",
+        "QDRANT_VECTOR_NAME",
+        "QDRANT_TEXT_FIELD",
+        "QDRANT_SOURCE_FIELD",
+        "QDRANT_LOCATOR_FIELD",
+        "QDRANT_TOP_K",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("QDRANT_URI", "https://qdrant.example.test/")
+    monkeypatch.setenv("QDRANT_API_KEY", "secret")
+
+    settings = require_qdrant_settings()
+
+    assert settings.uri == "https://qdrant.example.test"
+    assert settings.api_key == "secret"
+    assert settings.collection is None
+    assert settings.top_k == 3
+    assert settings.text_field == "text"
+
+
+def test_qdrant_batch_search_uses_text_inference_and_payload_fields() -> None:
+    """RAG検索は要素ごとのtext queryを一つのQdrant requestへまとめる。
+
+    Returns:
+        なし。
+    """
+
+    response = httpx.Response(
+        200,
+        request=httpx.Request("POST", "https://qdrant.example.test/query"),
+        json={
+            "result": [
+                {
+                    "points": [
+                        {
+                            "id": 10,
+                            "score": 0.91,
+                            "payload": {
+                                "body": "Domain definition",
+                                "document": "guide.pdf",
+                                "section": "3.2",
+                            },
+                        }
+                    ]
+                },
+                {"points": []},
+            ]
+        },
+    )
+    client = Mock()
+    client.request.return_value = response
+    settings = QdrantSettings(
+        uri="https://qdrant.example.test",
+        api_key="secret",
+        collection="domain docs",
+        embedding_model="qdrant/bm25",
+        vector_name="domain-vector",
+        text_field="body",
+        source_field="document",
+        locator_field="section",
+        top_k=2,
+    )
+    items = [
+        {"id": "a", "source_text": "Joint operations"},
+        {"id": "b", "source_text": "Command relationship"},
+    ]
+
+    evidence = qdrant_search_batch(client, settings, "domain docs", items)
+
+    assert evidence == {
+        "a": [
+            {
+                "source_id": "guide.pdf",
+                "locator": "3.2",
+                "score": 0.91,
+                "text": "Domain definition",
+            }
+        ],
+        "b": [],
+    }
+    request = client.request.call_args
+    assert request.args[:2] == (
+        "POST",
+        "https://qdrant.example.test/collections/domain%20docs/points/query/batch",
+    )
+    searches = request.kwargs["json"]["searches"]
+    assert searches[0]["query"] == {
+        "text": "Joint operations",
+        "model": "qdrant/bm25",
+    }
+    assert searches[0]["using"] == "domain-vector"
+    assert searches[0]["limit"] == 2
+
+
+def test_qdrant_collection_is_auto_selected_only_when_unique() -> None:
+    """collection未指定時はQdrant上の唯一のcollectionを使う。
+
+    Returns:
+        なし。
+    """
+
+    response = httpx.Response(
+        200,
+        request=httpx.Request("GET", "https://qdrant.example.test/collections"),
+        json={"result": {"collections": [{"name": "domain"}]}},
+    )
+    client = Mock()
+    client.request.return_value = response
+    settings = QdrantSettings(uri="https://qdrant.example.test", api_key="secret")
+
+    assert resolve_qdrant_collection(client, settings) == "domain"
+
+
+def test_multi_agent_review_uses_rag_and_adjudicates_disagreement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """複数Reviewerが不一致ならRAG根拠付きでAdjudicatorを呼ぶ。
+
+    Args:
+        monkeypatch: AgentとQdrantをfakeへ置換するpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    evidence = {
+        "a": [
+            {
+                "source_id": "guide.pdf",
+                "locator": "3.2",
+                "score": 0.9,
+                "text": "Authoritative definition",
+            }
+        ]
+    }
+    roles: list[str] = []
+
+    def fake_specialist(
+        _client: object,
+        _settings: OpenAISettings,
+        _items: list[dict[str, Any]],
+        _rules: str,
+        received_evidence: dict[str, list[dict[str, Any]]],
+        role: str,
+    ) -> dict[str, dict[str, str]]:
+        """役割ごとに異なる提案を返す。
+
+        Args:
+            _client: fakeでは未使用のOpenAI client。
+            _settings: fakeでは未使用のOpenAI設定。
+            _items: fakeでは未使用のReview対象。
+            _rules: fakeでは未使用の翻訳ルール。
+            received_evidence: RAGから渡された根拠。
+            role: Reviewerの役割。
+
+        Returns:
+            Reviewerごとの提案。
+        """
+
+        assert received_evidence == evidence
+        roles.append(role)
+        text = "忠実性訳" if role == "fidelity" else "用語訳"
+        return {"a": {"reviewed_text": text, "reason": role}}
+
+    def fake_chat(
+        _client: object,
+        _settings: OpenAISettings,
+        messages: list[dict[str, Any]],
+        **_kwargs: object,
+    ) -> str:
+        """Adjudicatorの入力を確認して裁定訳を返す。
+
+        Args:
+            _client: fakeでは未使用のOpenAI client。
+            _settings: fakeでは未使用のOpenAI設定。
+            messages: Adjudicator messages。
+            **_kwargs: fakeでは未使用の追加引数。
+
+        Returns:
+            ID付き裁定結果JSON。
+        """
+
+        prompt = str(messages[-1]["content"])
+        assert "Authoritative definition" in prompt
+        assert "忠実性訳" in prompt
+        assert "用語訳" in prompt
+        return json.dumps(
+            {"reviews": [{"id": "1", "reviewed_text": "裁定訳", "reason": "根拠"}]},
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("translate.qdrant_search_batch", lambda *_args: evidence)
+    monkeypatch.setattr("translate.request_specialist_reviews", fake_specialist)
+    monkeypatch.setattr("translate.chat_text", fake_chat)
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+    qdrant = QdrantSettings(
+        uri="https://qdrant.example.test",
+        api_key="secret",
+        collection="domain",
+    )
+    items = [
+        {
+            "id": "a",
+            "source_text": "Domain term",
+            "translated_text": "現在訳",
+            "kind": "body",
+            "glossary": [],
+        }
+    ]
+
+    reviewed, audits = multi_agent_review_batch(
+        object(),
+        settings,
+        items,
+        translation_rules="rule",
+        qdrant_http=object(),
+        qdrant_settings=qdrant,
+        qdrant_collection="domain",
+    )
+
+    assert set(roles) == {"fidelity", "terminology"}
+    assert reviewed == {"a": "裁定訳"}
+    assert audits["a"]["decision"] == "adjudicated"
+    assert audits["a"]["rag"] == [
+        {"source_id": "guide.pdf", "locator": "3.2", "score": 0.9}
+    ]
+
+
+def test_multi_agent_review_skips_adjudicator_on_consensus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """二つのReviewer案が一致すればAdjudicatorを呼ばない。
+
+    Args:
+        monkeypatch: Agent呼出しをfakeへ置換するpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    monkeypatch.setattr(
+        "translate.request_specialist_reviews",
+        lambda *_args: {"a": {"reviewed_text": "合意訳", "reason": "同じ判断"}},
+    )
+    monkeypatch.setattr(
+        "translate.chat_text",
+        lambda *_args, **_kwargs: pytest.fail("Adjudicator must not be called"),
+    )
+    settings = OpenAISettings(
+        base_url="http://example.test",
+        api_key="test",
+        model="fake",
+        timeout_seconds=1,
+    )
+    items = [
+        {
+            "id": "a",
+            "source_text": "Domain term",
+            "translated_text": "現在訳",
+            "kind": "body",
+        }
+    ]
+
+    reviewed, audits = multi_agent_review_batch(
+        object(), settings, items, translation_rules="rule"
+    )
+
+    assert reviewed == {"a": "合意訳"}
+    assert audits["a"]["decision"] == "consensus"
+
+
+def test_review_rag_requires_multi_mode() -> None:
+    """単一Reviewer構成ではRAG指定を拒否する。
+
+    Returns:
+        なし。
+    """
+
+    with pytest.raises(ValueError, match="requires --review-mode multi"):
+        review_document({}, review_rag=True)
+
+
+def test_pipeline_rejects_review_rag_before_other_stages(tmp_path: Path) -> None:
+    """不正なRAG構成はParseより前に拒否する。
+
+    Args:
+        tmp_path: 存在しない入力パスを作るpytest fixture。
+
+    Returns:
+        なし。
+    """
+
+    with pytest.raises(ValueError, match="requires --review-mode multi"):
+        run_pipeline(
+            PipelineOptions(
+                input=tmp_path / "missing.pdf",
+                review_rag=True,
+            )
+        )
+
+
 def test_review_batch_splits_invalid_multi_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3207,6 +3536,9 @@ def test_main_accepts_character_limits(
                 str(max_batch_elements),
                 "--translator",
                 "llm",
+                "--review-mode",
+                "multi",
+                "--review-rag",
             ]
         )
         == 0
@@ -3215,6 +3547,8 @@ def test_main_accepts_character_limits(
     assert captured[0].batch_chars == 800
     assert captured[0].max_batch_elements == max_batch_elements
     assert captured[0].translator == TranslationBackend.LLM
+    assert captured[0].review_mode == ReviewMode.MULTI
+    assert captured[0].review_rag is True
 
 
 def test_main_rejects_negative_batch_elements(
@@ -3731,6 +4065,8 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         completed_ids: set[str] | None = None,
         on_progress: object | None = None,
         max_batch_elements: int = 0,
+        review_mode: ReviewMode = ReviewMode.SINGLE,
+        review_rag: bool = False,
     ) -> tuple[dict[str, object], int]:
         """OpenAI レビューの代わりに入力をそのまま返す。
 
@@ -3744,6 +4080,8 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             completed_ids: fakeでは未使用の完了ID。
             on_progress: fakeでは未使用のcallback。
             max_batch_elements: pipelineから渡される要素数上限。
+            review_mode: pipelineから渡されるReview構成。
+            review_rag: pipelineから渡されるRAG利用設定。
 
         Returns:
             入力JSONと変更件数0。
@@ -3752,6 +4090,8 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         _ = (glossary, translation_rules, resume_data, completed_ids, on_progress)
         stage_calls["review"] += 1
         assert max_batch_elements == 7
+        assert review_mode == ReviewMode.SINGLE
+        assert review_rag is False
         limits["review_context_chars"] = context_chars
         limits["review_batch_chars"] = batch_chars
         return data, 0

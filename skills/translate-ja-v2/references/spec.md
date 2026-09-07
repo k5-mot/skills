@@ -53,6 +53,15 @@ Python依存はリポジトリルートの `pyproject.toml` と `uv.lock` を正
 | `OPENAI_MODEL` | Structure、Review、Translate（`llm`） | 共通model名 |
 | `LIBRETRANSLATE_URL` | Translate（既定） | LibreTranslate base URL。例: `http://localhost:5000` |
 | `LIBRETRANSLATE_API_KEY` | Translate（任意） | API keyを要求する構成だけ設定 |
+| `QDRANT_URI` | Review（`multi`＋RAG） | Qdrant REST API base URL。`QDRANT_URL` も受理 |
+| `QDRANT_API_KEY` | Review（`multi`＋RAG） | Qdrant API key |
+| `QDRANT_COLLECTION` | Review（任意） | 検索collection。未設定時はcollectionが1件の場合だけ自動選択 |
+| `QDRANT_EMBEDDING_MODEL` | Review（任意） | Qdrant inference model。既定は `sentence-transformers/all-minilm-l6-v2` |
+| `QDRANT_VECTOR_NAME` | Review（任意） | named vector。未設定時はdefault vector |
+| `QDRANT_TEXT_FIELD` | Review（任意） | 根拠本文payload field。既定は `text` |
+| `QDRANT_SOURCE_FIELD` | Review（任意） | 出典ID payload field。既定は `source` |
+| `QDRANT_LOCATOR_FIELD` | Review（任意） | ページ・section payload field。既定は `page` |
+| `QDRANT_TOP_K` | Review（任意） | 要素ごとの取得件数。既定は3 |
 
 Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受理する。OpenAI設定はStructure、Review、および `--translator llm` のTranslateで必要である。`--translator default` のTranslateだけを使う場合、OpenAI設定は不要である。
 
@@ -74,6 +83,8 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 --batch-chars INTEGER     翻訳・Review候補batchの最大原文・訳文文字数
 --max-batch-elements INTEGER  Translate・Reviewの件数上限。0は固定件数制限なし
 --translator default|llm  Translate backend。既定のdefaultはLibreTranslate
+--review-mode single|multi Review構成。既定はsingle
+--review-rag              multi ReviewでQdrant RAGを有効化
 ```
 
 既定値は `context-chars=50000`、`batch-chars=1500`、`max-batch-elements=0`、`translator=default` で、文字数は1以上、件数上限は0以上とする。件数上限が正数ならTranslate（両backend）とReviewの候補をその件数以内に分割する。Structureには適用しない。件数上限はTranslate・ReviewのResume設定hashに含める。
@@ -96,6 +107,9 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 | Translate・Review推定応答上限 | 12,000文字 |
 | LibreTranslate timeout | 1,800秒 |
 | Review最大並列数 | 4バッチ |
+| Multi Review最大並列数 | 2バッチ（各バッチ内の専門Reviewerは2並列） |
+| Qdrant timeout | 60秒 |
+| Qdrant取得件数 | 既定3件/要素 |
 
 HTTP 408、409、429、500、502、503、504と、connection、timeout、rate limit例外をretry対象にし、指数backoffを使う。Structureでは一時的な空応答と不完全JSONをAPI呼び出しからretryする。TranslateとReviewは `batch-chars`、任意の `max-batch-elements`、推定応答JSON 12,000文字、完成messagesの `context-chars` を順に満たすよう要素境界で事前分割する。既定の `max-batch-elements=0` では固定件数制限を設けない。空応答、不正JSON、ID不一致の複数要素batchはさらに要素境界で二分する。バッチ内IDは文字列とJSON整数を受理して文字列へ正規化した後、完全一致を検証する。Translateは単一要素の生成不全も指数backoffで最大6回までretryする。Reviewは単一要素の生成不全、隣接要素の誤コピー、異常な長短、入力不足を訴えるメタ応答、日本語から英語のみへの退行を検出すると元の訳文を保持する。OpenAI SDK自体の自動retryは0にする。
 
@@ -166,7 +180,13 @@ Docling原文と構造を変えず、`translate_ja_v2` metadataだけを追加�
 
 ### Reviewの境界
 
-翻訳metadataの訳文と描画値だけを修正する。原文と構造は変更しない。原文と訳文の合計を `--batch-chars` 以内へ詰め、完成messagesを `context-chars` 以内へさらに分割し、最大4バッチを並列実行する。API入力はバッチ内連番ID、原文、訳文、非空inline code、およびバッチの各原文に `english-short` または `english-long` が一致する共有用語集とする。用語集は重複排除し、`note` を除いて送る。前後訳、見出しcontext、空fieldは送らない。応答ID集合が入力連番と一致したバッチだけを採用し、元refへ戻してから完了状態を各要素について保存する。原文が異なる前後要素の訳文と95%以上一致し、かつ原訳との一致率が80%未満の応答は、ローカルで隣接要素の誤コピーとして棄却する。原訳の1.5倍を超えかつ200文字を超える応答、100文字以上の原訳を60%未満へ短縮する応答、Review入力の不足を訴えるメタ応答、日本語を含む原訳から日本語をすべて除く応答も棄却する。
+翻訳metadataの訳文と描画値だけを修正する。原文と構造は変更しない。原文と訳文の合計を `--batch-chars` 以内へ詰め、完成messagesを `context-chars` 以内へさらに分割する。`single` は最大4バッチを並列実行する。`multi` は最大2バッチを並列実行し、各バッチ内でFidelity ReviewerとTerminology Reviewerを独立して2並列実行する。両案が一致すれば採用し、不一致要素だけAdjudicatorへ送る。
+
+`--review-rag` は `--review-mode multi` でのみ使用できる。各Review要素の英語原文をQdrant `/points/query/batch` へ一括送信し、Qdrant inferenceでvector化する。取得根拠は本文を最大800文字に制限して両ReviewerとAdjudicatorへ渡す。優先順位は外部翻訳ルール、用語集、RAGの出典付き根拠、一般的な文体判断とする。成果物には根拠本文を複製せず、source ID、locator、scoreと各Agentの提案・最終判断を `translate_ja_v2.review_ja_v2` に保存する。
+
+RAG検索結果は別のLLMで要約せず、payload本文を出典情報とともに専門Reviewerへ渡す。payload本文は信頼できない参考資料データとして区切り、その中に含まれる命令には従わせない。Reviewバッチ数を `B`、裁定対象を含むバッチ数を `D` とした通常時のLLM呼出しは `2B + D`、Qdrant HTTP呼出しは `B` とする。QdrantやLLMの失敗でバッチを二分した場合は追加呼出しが発生する。
+
+API入力はバッチ内連番ID、原文、訳文、非空inline code、およびバッチの各原文に `english-short` または `english-long` が一致する共有用語集とする。用語集は重複排除し、`note` を除いて送る。応答ID集合が入力連番と一致したバッチだけを採用し、元refへ戻してから完了状態を各要素について保存する。原文が異なる前後要素の訳文と95%以上一致し、かつ原訳との一致率が80%未満の応答は、ローカルで隣接要素の誤コピーとして棄却する。原訳の1.5倍を超えかつ200文字を超える応答、100文字以上の原訳を60%未満へ短縮する応答、Review入力の不足を訴えるメタ応答、日本語を含む原訳から日本語をすべて除く応答も棄却する。
 
 ### Renderの境界
 
@@ -216,7 +236,7 @@ pandocが生成したDOCXで見出し段落が直接連続するときだけ、�
 - ディレクトリは相対パス、区切り、内容をsortしてSHA-256へ含める。
 - JSON設定はkeyをsortしたcanonical JSONのSHA-256を使う。
 - Structureの入力hashには、VLMを使う場合だけ `artifacts/` のhashを含める。
-- template、翻訳backend、用語集、翻訳ルール、model、LibreTranslate URL、context上限、batch上限は実際に使う該当stageのconfig hashへ含める。API keyは含めない。
+- template、翻訳backend、Review mode、RAG利用、Qdrant URL・collection・検索設定、用語集、翻訳ルール、model、LibreTranslate URL、context上限、batch上限は実際に使う該当stageのconfig hashへ含める。API keyは含めない。
 
 設定hashの中身はログへ展開せず、manifestにのみ保存する。
 

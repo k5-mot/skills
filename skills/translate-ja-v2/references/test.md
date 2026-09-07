@@ -58,6 +58,8 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - 認証・設定不備は分割せず停止し、単一要素のAPI障害も例外を伝播すること（Reviewも原訳保持で成功扱いにしない）
 - 翻訳応答の入力件数・必須ID指示、文字列・整数バッチ内連番ID完全一致、元refへの復元、空応答、部分応答、単一要素の生成不全retry
 - Reviewの必要fieldだけを持つID付きbatch、修正反映、不正応答の二分、空応答・隣接訳コピー・異常な長短・メタ応答・日本語消失での原訳保持、独立batchの並列実行
+- Qdrant設定、単一collection自動選択、text inference batch query、payload field mapping
+- FidelityとTerminologyの独立Review、一致時の自動採用、不一致時だけのAdjudicator、RAG出典metadata
 - Markdown renderer
 - Docling async API、固定payload、pollingログ
 - 23ページPDFの10、10、3ページ分割と直列変換、JSON参照・ページ番号・artifact URIの連結
