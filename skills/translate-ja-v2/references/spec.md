@@ -12,34 +12,34 @@ PDFまたはWord文書をDocling JSONへ変換し、座標正規化、VLM構造�
 
 ```mermaid
 flowchart TD
-    SOURCE["*.pdf / *.docx"] --> PARSE["Parse"]
+    SOURCE["*.pdf / *.docx"] --> PARSE["ParseStage<br/>入力文書をDocling JSONへ変換"]
     PARSE --> RAW["&lt;stem&gt;.json"]
     PARSE --> ARTIFACTS["artifacts/"]
 
-    RAW --> NORMALIZE["Normalize"]
+    RAW --> NORMALIZE["NormalizeStage<br/>要素を座標順に整列"]
     NORMALIZE --> NORMALIZED["document.normalized.json"]
 
-    NORMALIZED --> STRUCTURE["Structure"]
+    NORMALIZED --> STRUCTURE["StructureStage<br/>文書構造をVLMで補正"]
     ARTIFACTS -.-> STRUCTURE
     STRUCTURE --> STRUCTURED["document.structured.json"]
 
-    STRUCTURED --> CLEAN["Clean"]
+    STRUCTURED --> CLEAN["CleanStage<br/>連続記号を校正"]
     CLEAN --> CLEANED["document.cleaned.json"]
 
-    CLEANED --> TRANSLATE["Translate"]
+    CLEANED --> TRANSLATE["TranslateStage<br/>本文を日本語へ翻訳"]
     GLOSSARY["glossary.csv"] -.-> TRANSLATE
     RULES["translation-rules.md"] -.-> TRANSLATE
     TRANSLATE --> TRANSLATED["document.translated.json"]
 
-    TRANSLATED --> REVIEW["Review"]
+    TRANSLATED --> REVIEW["ReviewStage<br/>翻訳を複数の観点でレビュー"]
     GLOSSARY -.-> REVIEW
     RULES -.-> REVIEW
     REVIEW --> REVIEWED["document.reviewed.json"]
 
-    REVIEWED --> MARKDOWN["Markdown"]
+    REVIEWED --> MARKDOWN["RenderStage<br/>日本語Markdownを生成"]
     MARKDOWN --> JA_MD["document.ja.md"]
 
-    JA_MD --> DOCX["Docx"]
+    JA_MD --> DOCX["DocxStage<br/>MarkdownをWordへ変換"]
     TEMPLATE["template.dotx"] -.-> DOCX
     DOCX --> JA_DOCX["document.ja.docx"]
 
