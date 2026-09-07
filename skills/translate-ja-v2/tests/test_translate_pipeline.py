@@ -23,22 +23,14 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from translate import (  # noqa: E402
-    apply_structure_patches,
-    build_review_messages,
+    AgentReview,
     build_stage_paths,
-    build_structure_messages,
-    build_translation_messages,
     chat_text,
     CleanStage,
-    clean_document,
     ColorFormatter,
     configure_logging,
-    convert_markdown_to_docx,
-    convert_with_docling,
+    DocxStage,
     DoclingSettings,
-    docling_form_payload,
-    apply_review_results,
-    extract_docling_zip,
     estimated_review_response_chars,
     estimated_translation_response_chars,
     fit_batches_to_output,
@@ -47,48 +39,166 @@ from translate import (  # noqa: E402
     LibreTranslateSettings,
     main,
     message_text_chars,
-    multi_agent_review_batch,
-    normalize_document,
+    NormalizeStage,
     OpenAIEmptyResponseError,
     OPENAI_BATCH_MAX_OUTPUT_TOKENS,
     OPENAI_MAX_OUTPUT_TOKENS,
     OpenAISettings,
     pack_translation_blocks,
-    page_image_path,
     PipelineOptions,
-    poll_docling_task,
+    ParseStage,
     read_json,
     read_glossary_csv,
     read_translation_rules,
-    require_qdrant_settings,
-    resolve_qdrant_collection,
     is_retryable_libretranslate_error,
     require_libretranslate_settings,
-    request_structure_patches,
-    render_pdf_page_images,
-    render_markdown,
-    review_batch,
-    review_document,
-    review_rejection_reason,
+    RenderStage,
     ReviewStage,
-    ReviewMode,
     run_pipeline,
     stage_is_resumable,
-    qdrant_search_batch,
     QdrantSettings,
     record_stage_completion,
-    structure_document,
-    structure_page_with_vlm,
     StructureStage,
-    suppress_spacing_between_consecutive_headings,
-    translate_document,
-    translate_batch,
-    translate_batch_with_libretranslate,
-    translate_text_item,
+    Translate,
     TranslationBackend,
+    TranslateLibre,
+    TranslateLLM,
     TranslateStage,
     write_json,
 )
+
+
+def llm_translator(
+    client: Any,
+    settings: OpenAISettings,
+    translation_rules: str = "",
+) -> TranslateLLM:
+    """外部設定を読まずにLLM翻訳backendを組み立てる。
+
+    Args:
+        client: テスト対象へ渡すfake OpenAI client。
+        settings: テスト用OpenAI設定。
+        translation_rules: LLM promptへ渡す翻訳ルール。
+
+    Returns:
+        fake依存を注入したTranslateLLM。
+    """
+
+    translator = object.__new__(TranslateLLM)
+    Translate.__init__(translator, 1500, 0)
+    translator.client = client
+    translator.settings = settings
+    translator.translation_rules = translation_rules
+    return translator
+
+
+def libre_translator(
+    client: Any,
+    settings: LibreTranslateSettings,
+) -> TranslateLibre:
+    """外部設定を読まずにLibreTranslate backendを組み立てる。
+
+    Args:
+        client: テスト対象へ渡すfake HTTP client。
+        settings: テスト用LibreTranslate設定。
+
+    Returns:
+        fake依存を注入したTranslateLibre。
+    """
+
+    translator = object.__new__(TranslateLibre)
+    Translate.__init__(translator, 1500, 0)
+    translator.client = client
+    translator.settings = settings
+    return translator
+
+
+def translate_batch(
+    client: Any,
+    settings: OpenAISettings,
+    items: list[dict[str, Any]],
+    *,
+    translation_rules: str = "",
+) -> dict[str, str]:
+    """TranslateLLMの単一バッチ処理を呼び出す。
+
+    Args:
+        client: fake OpenAI client。
+        settings: テスト用OpenAI設定。
+        items: 翻訳対象。
+        translation_rules: LLMへ渡す翻訳ルール。
+
+    Returns:
+        元IDから訳文への辞書。
+    """
+
+    return llm_translator(client, settings, translation_rules)._translate_batch(items)
+
+
+def translate_batch_with_libretranslate(
+    client: Any,
+    settings: LibreTranslateSettings,
+    items: list[dict[str, Any]],
+) -> dict[str, str]:
+    """TranslateLibreの単一バッチ処理を呼び出す。
+
+    Args:
+        client: fake HTTP client。
+        settings: テスト用LibreTranslate設定。
+        items: 翻訳対象。
+
+    Returns:
+        元IDから訳文への辞書。
+    """
+
+    return libre_translator(client, settings)._translate_batch(items)
+
+
+def translate_document(
+    data: dict[str, Any],
+    glossary: list[dict[str, str]] | None = None,
+    translation_rules: str = "",
+    context_chars: int = 50000,
+    batch_chars: int = 1500,
+    resume_data: dict[str, Any] | None = None,
+    completed_ids: set[str] | None = None,
+    on_progress: Any | None = None,
+    translator: TranslationBackend = TranslationBackend.LLM,
+    max_batch_elements: int = 0,
+) -> dict[str, Any]:
+    """テスト用に指定backendで文書翻訳を実行する。
+
+    Args:
+        data: 翻訳対象Docling JSON。
+        glossary: LLMへ渡す用語集。
+        translation_rules: LLMへ渡す外部ルール。
+        context_chars: OpenAI requestの最大文字数。
+        batch_chars: 翻訳バッチの最大文字数。
+        resume_data: 前回の部分成果物。
+        completed_ids: 完了済み要素ID。
+        on_progress: 要素完了callback。
+        translator: 利用するbackend。
+        max_batch_elements: 任意の要素数上限。
+
+    Returns:
+        翻訳metadataを追加した文書。
+    """
+
+    backend: Translate
+    if translator == TranslationBackend.LLM:
+        backend = TranslateLLM(
+            context_chars, batch_chars, max_batch_elements, translation_rules
+        )
+    else:
+        backend = TranslateLibre(batch_chars, max_batch_elements)
+        glossary = []
+    return backend.translate_document(
+        data,
+        glossary,
+        resume_data,
+        completed_ids,
+        on_progress,
+    )
 
 
 class FakeCompletions:
@@ -391,7 +501,7 @@ def test_apply_merge_texts_accepts_refs_in_reverse_document_order() -> None:
         ],
     }
 
-    result, applied = apply_structure_patches(
+    result, applied = StructureStage._apply_patches(
         data,
         [
             {
@@ -420,7 +530,7 @@ def test_normalize_document_does_not_change_text_or_table_cells() -> None:
         "texts": [{"self_ref": "#/texts/0", "label": "code", "text": "print('x')"}],
         "tables": [{"self_ref": "#/tables/0", "data": {"grid": [["A   B", "C...."]]}}],
     }
-    normalized, patches = normalize_document(data)
+    normalized, patches = NormalizeStage._normalize_document(data)
 
     assert normalized == data
     assert patches == []
@@ -471,7 +581,7 @@ def test_clean_document_compacts_periods_and_middle_dots_outside_code() -> None:
         ],
     }
 
-    cleaned, patches = clean_document(data)
+    cleaned, patches = CleanStage._clean_document(data)
 
     assert cleaned["texts"][0]["text"] == "Wait... 次・・・ end.."
     assert cleaned["texts"][1]["text"] == "print('......・・・・・・')"
@@ -529,7 +639,7 @@ def test_normalize_document_orders_bbox_and_preserves_missing_slot(
         ]
     }
 
-    normalized, _patches = normalize_document(data)
+    normalized, _patches = NormalizeStage._normalize_document(data)
 
     assert [item["text"] for item in normalized["texts"]] == [
         "Upper",
@@ -558,7 +668,7 @@ def test_normalize_document_updates_refs_after_coordinate_reorder() -> None:
         ],
     }
 
-    normalized, patches = normalize_document(data)
+    normalized, patches = NormalizeStage._normalize_document(data)
 
     assert [item["text"] for item in normalized["texts"]] == [
         "Upper",
@@ -591,7 +701,7 @@ def test_structure_messages_include_coordinate_corrected_bbox() -> None:
         なし。
     """
 
-    normalized, _patches = normalize_document(
+    normalized, _patches = NormalizeStage._normalize_document(
         {
             "texts": [
                 _text_item(0, "Lower", top=300, bottom=280, label="paragraph"),
@@ -599,7 +709,7 @@ def test_structure_messages_include_coordinate_corrected_bbox() -> None:
             ]
         }
     )
-    content = build_structure_messages(normalized)[1]["content"]
+    content = StructureStage._build_messages(normalized)[1]["content"]
 
     assert isinstance(content, str)
     assert "Docling要素" in content
@@ -611,7 +721,7 @@ def test_structure_messages_include_coordinate_corrected_bbox() -> None:
 def test_skip_vlm_keeps_coordinate_normalization() -> None:
     """--skip-vlm は第2段階だけを省略し、Normalize の座標補正は保つ。"""
 
-    normalized, _patches = normalize_document(
+    normalized, _patches = NormalizeStage._normalize_document(
         {
             "texts": [
                 _text_item(0, "Lower", top=300, bottom=280),
@@ -619,30 +729,12 @@ def test_skip_vlm_keeps_coordinate_normalization() -> None:
             ]
         }
     )
-    structured, structure_patches = structure_document(normalized, skip_vlm=True)
+    structured, structure_patches = StructureStage._structure_document(
+        normalized, skip_vlm=True
+    )
 
     assert [item["text"] for item in structured["texts"]] == ["Upper", "Lower"]
     assert structure_patches == []
-
-
-def test_translate_text_item_renders_heading_bilingual_and_body_ja_only() -> None:
-    """見出しは英日併記、本文は和訳のみを render_text に入れる。"""
-
-    client = FakeClient()
-    settings = OpenAISettings(
-        base_url="http://example.test",
-        api_key="test",
-        model="fake",
-        timeout_seconds=1,
-    )
-    heading: dict[str, Any] = {"label": "section_header", "text": "Strategy"}
-    body: dict[str, Any] = {"label": "paragraph", "text": "The force moves."}
-
-    translate_text_item(heading, client, settings)
-    translate_text_item(body, client, settings)
-
-    assert heading["translate_ja_v2"]["render_text"] == "Strategy / 戦略"
-    assert body["translate_ja_v2"]["render_text"] == "部隊が移動する。"
 
 
 def test_translate_document_passes_glossary_hits_and_rules(
@@ -849,7 +941,7 @@ def test_translation_messages_deduplicate_shared_context_and_glossary() -> None:
         for index, source in enumerate(("The force moves.", "The force stops."))
     ]
 
-    prompt = str(build_translation_messages(items, "rule")[1]["content"])
+    prompt = str(TranslateLLM._build_messages(items, "rule")[1]["content"])
 
     assert prompt.count("Strategy > Operations") == 1
     assert prompt.count('"english-long": "force"') == 1
@@ -858,6 +950,66 @@ def test_translation_messages_deduplicate_shared_context_and_glossary() -> None:
     assert "inline_code_spans" not in prompt
     assert "入力件数: 2" in prompt
     assert '返却必須ID JSON: ["1", "2"]' in prompt
+
+
+def test_translation_backends_share_base_class() -> None:
+    """LLMとLibreTranslateが同じTranslate契約を実装する。
+
+    Returns:
+        なし。
+    """
+
+    assert issubclass(TranslateLLM, Translate)
+    assert issubclass(TranslateLibre, Translate)
+
+
+def test_translate_base_renders_text_and_preserves_non_translatable_items() -> None:
+    """共通Translate処理が描画規則と非翻訳要素の保護を担う。
+
+    Returns:
+        なし。
+    """
+
+    class StubTranslate(Translate):
+        """入力文字列に固定接頭辞を付けるテスト用backend。"""
+
+        def _translate_batch(self, items: list[dict[str, Any]]) -> dict[str, str]:
+            """各入力IDへテスト用訳文を返す。
+
+            Args:
+                items: 翻訳対象要素。
+
+            Returns:
+                元IDからテスト用訳文への辞書。
+            """
+
+            return {str(item["id"]): f"訳:{item['text']}" for item in items}
+
+    document = {
+        "texts": [
+            {"label": "section_header", "text": "Strategy"},
+            {"label": "paragraph", "text": "Body"},
+            {"label": "page_header", "text": "xvi"},
+            {"label": "paragraph", "text": "•"},
+        ]
+    }
+
+    translated = StubTranslate(1500, 0).translate_document(document)
+
+    assert translated["texts"][0]["translate_ja_v2"]["render_text"] == (
+        "Strategy / 訳:Strategy"
+    )
+    assert translated["texts"][1]["translate_ja_v2"]["render_text"] == "訳:Body"
+    assert translated["texts"][2]["translate_ja_v2"] == {
+        "kind": "decoration",
+        "render_text": "xvi",
+        "translated": False,
+    }
+    assert translated["texts"][3]["translate_ja_v2"] == {
+        "kind": "symbol",
+        "render_text": "•",
+        "translated": False,
+    }
 
 
 def test_fit_batches_to_context_measures_complete_messages() -> None:
@@ -887,7 +1039,7 @@ def test_fit_batches_to_context_measures_complete_messages() -> None:
             完成したReview messages。
         """
 
-        return build_review_messages(batch, "rule")
+        return AgentReview._build_specialist_messages(batch, "rule", {}, "terminology")
 
     context_chars = message_text_chars(build(items[:2]))
 
@@ -982,7 +1134,7 @@ def test_review_messages_only_send_required_fields() -> None:
     """
 
     prompt = str(
-        build_review_messages(
+        AgentReview._build_specialist_messages(
             [
                 {
                     "id": "a",
@@ -1008,6 +1160,8 @@ def test_review_messages_only_send_required_fields() -> None:
                 }
             ],
             "rule",
+            {},
+            "terminology",
         )[1]["content"]
     )
 
@@ -1325,58 +1479,6 @@ def test_translate_batch_accepts_integer_response_id(
     ) == {"a": "訳A"}
 
 
-@pytest.mark.parametrize("label", ["page_header", "page_footer"])
-def test_translate_text_item_preserves_page_decorations(label: str) -> None:
-    """ページヘッダーとフッターはLLMへ送らず原文を保持する。
-
-    Args:
-        label: Doclingのページ装飾label。
-
-    Returns:
-        なし。
-    """
-
-    item = {"label": label, "text": "xvi"}
-    settings = OpenAISettings(
-        base_url="http://example.test",
-        api_key="test",
-        model="fake",
-        timeout_seconds=1,
-    )
-
-    translate_text_item(item, object(), settings)
-
-    assert item["translate_ja_v2"] == {
-        "kind": "decoration",
-        "render_text": "xvi",
-        "translated": False,
-    }
-
-
-def test_translate_text_item_preserves_symbol_only_text() -> None:
-    """記号だけの要素はLLMへ送らず原文を保持する。
-
-    Returns:
-        なし。
-    """
-
-    item = {"label": "paragraph", "text": "•"}
-    settings = OpenAISettings(
-        base_url="http://example.test",
-        api_key="test",
-        model="fake",
-        timeout_seconds=1,
-    )
-
-    translate_text_item(item, object(), settings)
-
-    assert item["translate_ja_v2"] == {
-        "kind": "symbol",
-        "render_text": "•",
-        "translated": False,
-    }
-
-
 def test_translate_batch_splits_partial_single_entry_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1390,6 +1492,18 @@ def test_translate_batch_splits_partial_single_entry_response(
         messages: list[dict[str, Any]],
         **_kwargs: object,
     ) -> str:
+        """先頭要素だけを返す部分応答を生成する。
+
+        Args:
+            _client: fakeでは未使用のclient。
+            _settings: fakeでは未使用のOpenAI設定。
+            messages: 入力JSONを含むmessages。
+            **_kwargs: fakeでは未使用の追加引数。
+
+        Returns:
+            先頭要素だけを持つ翻訳応答。
+        """
+
         items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
         sizes.append(len(items))
         return json.dumps(
@@ -1435,16 +1549,14 @@ def test_chat_text_retries_retryable_openai_errors(
     assert delays == [5.0]
 
 
-@pytest.mark.parametrize("stage", ["translate", "review"])
 @pytest.mark.parametrize("failure", ["503", "timeout", "413", "context", "scalar"])
 def test_llm_batch_shrinks_failed_requests(
-    monkeypatch: pytest.MonkeyPatch, stage: str, failure: str
+    monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
-    """失敗したLLMバッチを再試行後に二分し、元IDへ結果を復元する。
+    """失敗した翻訳バッチを再試行後に二分し、元IDへ結果を復元する。
 
     Args:
         monkeypatch: 待機時間と試行回数をテスト用に差し替えるfixture。
-        stage: 翻訳またはレビュー。
         failure: 一時障害、入力容量超過、または不正な生成応答。
 
     Returns:
@@ -1483,10 +1595,14 @@ def test_llm_batch_shrinks_failed_requests(
                 response=httpx.Response(status, request=request),
                 body=None,
             )
-        field = "translated_text" if stage == "translate" else "reviewed_text"
-        key = "translations" if stage == "translate" else "reviews"
         return _completion(
-            json.dumps({key: [{"id": items[0]["id"], field: "正常な訳文"}]})
+            json.dumps(
+                {
+                    "translations": [
+                        {"id": items[0]["id"], "translated_text": "正常な訳文"}
+                    ]
+                }
+            )
         )
 
     client = Mock()
@@ -1506,9 +1622,7 @@ def test_llm_batch_shrinks_failed_requests(
         }
         for i in range(4)
     ]
-    run_batch = translate_batch if stage == "translate" else review_batch
-
-    assert run_batch(client, settings, items) == {
+    assert llm_translator(client, settings)._translate_batch(items) == {
         item["id"]: "正常な訳文" for item in items
     }
     expected = [4, 2, 1, 1, 2, 1, 1]
@@ -1517,18 +1631,16 @@ def test_llm_batch_shrinks_failed_requests(
     assert sizes == expected
 
 
-@pytest.mark.parametrize("stage", ["translate", "review"])
 @pytest.mark.parametrize(
     ("status", "count", "attempts"), [(401, 4, 1), (400, 4, 1), (503, 1, 2)]
 )
 def test_llm_batch_stops_on_unsplittable_api_failure(
-    monkeypatch: pytest.MonkeyPatch, stage: str, status: int, count: int, attempts: int
+    monkeypatch: pytest.MonkeyPatch, status: int, count: int, attempts: int
 ) -> None:
     """認証・設定不備と単一要素のAPI障害は分割せず失敗を通知する。
 
     Args:
         monkeypatch: 再試行の待機を省略するfixture。
-        stage: 翻訳またはレビュー。
         status: 失敗するHTTPステータス。
         count: 入力要素数。
         attempts: 期待するAPI試行回数。
@@ -1561,10 +1673,8 @@ def test_llm_batch_stops_on_unsplittable_api_failure(
         }
         for i in range(count)
     ]
-    run_batch = translate_batch if stage == "translate" else review_batch
-
     with pytest.raises(APIStatusError) as caught:
-        run_batch(client, settings, items)
+        llm_translator(client, settings)._translate_batch(items)
     assert caught.value is error
     assert client.chat.completions.create.call_count == attempts
 
@@ -1627,7 +1737,7 @@ def test_structure_request_retries_invalid_generation(
     delays: list[float] = []
     monkeypatch.setattr("translate.time.sleep", delays.append)
 
-    result = request_structure_patches(
+    result = StructureStage._request_patches(
         client,
         settings,
         [{"role": "user", "content": "hello"}],
@@ -1651,6 +1761,21 @@ def test_translate_batch_splits_after_empty_response(
         messages: list[dict[str, Any]],
         **_kwargs: object,
     ) -> str:
+        """複数要素では空応答例外、単一要素では正常応答を返す。
+
+        Args:
+            _client: fakeでは未使用のclient。
+            _settings: fakeでは未使用のOpenAI設定。
+            messages: 入力JSONを含むmessages。
+            **_kwargs: fakeでは未使用の追加引数。
+
+        Returns:
+            単一要素の翻訳応答。
+
+        Raises:
+            OpenAIEmptyResponseError: 複数要素を受け取った場合。
+        """
+
         items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
         sizes.append(len(items))
         if len(items) > 1:
@@ -1696,6 +1821,18 @@ def test_review_document_checks_batch_consistency_without_neighbor_payload(
         messages: list[dict[str, Any]],
         **_kwargs: object,
     ) -> str:
+        """各Reviewerへ同じ校正案を返す。
+
+        Args:
+            _client: fakeでは未使用のclient。
+            _settings: fakeでは未使用のOpenAI設定。
+            messages: Review入力JSONを含むmessages。
+            **_kwargs: fakeでは未使用の追加引数。
+
+        Returns:
+            全入力を「防衛省」に揃えるReview応答。
+        """
+
         calls.append(messages)
         items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
         return json.dumps(
@@ -1747,7 +1884,7 @@ def test_review_document_checks_batch_consistency_without_neighbor_payload(
         ]
     }
 
-    reviewed, changes = review_document(
+    reviewed, changes = AgentReview.review(
         document,
         glossary=[
             {
@@ -1770,7 +1907,8 @@ def test_review_document_checks_batch_consistency_without_neighbor_payload(
             },
         ],
     )
-    prompt = calls[0][-1]["content"]
+    prompts = [str(messages[-1]["content"]) for messages in calls]
+    prompt = next(value for value in prompts if '"english-short": "DoD"' in value)
 
     assert changes == 1
     assert reviewed["texts"][0]["translate_ja_v2"]["text_ja"] == "防衛省"
@@ -1783,7 +1921,8 @@ def test_review_document_checks_batch_consistency_without_neighbor_payload(
     assert "review-only note" not in prompt
     assert '"source_text": "Department of Defense"' in prompt
     assert '"translated_text": "防衛省"' in prompt
-    assert "日本語表記が揺れていないか" in prompt
+    assert "表記統一" in prompt
+    assert len(prompts) == 2
 
 
 def test_review_document_runs_independent_elements_concurrently(
@@ -1806,7 +1945,10 @@ def test_review_document_runs_independent_elements_concurrently(
         items: list[dict[str, Any]],
         *,
         translation_rules: str,
-    ) -> dict[str, str]:
+        qdrant_http: object | None,
+        qdrant_settings: QdrantSettings | None,
+        qdrant_collection: str | None,
+    ) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
         """2workerが同時に到達したことを確認して原訳を返す。
 
         Args:
@@ -1814,15 +1956,19 @@ def test_review_document_runs_independent_elements_concurrently(
             _settings: このfakeでは使わないAPI設定。
             items: 極小バッチ上限で1件に分けたレビュー対象。
             translation_rules: このfakeでは使わない翻訳ルール。
+            qdrant_http: このfakeでは使わないQdrant client。
+            qdrant_settings: このfakeでは使わないQdrant設定。
+            qdrant_collection: このfakeでは使わないcollection名。
 
         Returns:
-            対象IDから変更しない訳文への辞書。
+            対象IDから変更しない訳文と空の監査metadata。
         """
 
-        del translation_rules
+        del translation_rules, qdrant_http, qdrant_settings, qdrant_collection
         barrier.wait(timeout=1)
         item = items[0]
-        return {str(item["id"]): str(item["translated_text"])}
+        item_id = str(item["id"])
+        return {item_id: str(item["translated_text"])}, {item_id: {}}
 
     monkeypatch.setattr(
         "translate.require_openai_settings",
@@ -1834,7 +1980,7 @@ def test_review_document_runs_independent_elements_concurrently(
         ),
     )
     monkeypatch.setattr("translate.openai_client", lambda _settings: object())
-    monkeypatch.setattr("translate.review_batch", fake_review_batch)
+    monkeypatch.setattr(AgentReview, "_review_batch_resilient", fake_review_batch)
     document = {
         "texts": [
             {
@@ -1855,70 +2001,11 @@ def test_review_document_runs_independent_elements_concurrently(
         ]
     }
 
-    reviewed, changes = review_document(document, batch_chars=1)
+    reviewed, changes = AgentReview.review(document, batch_chars=1)
 
     assert changes == 0
     assert reviewed["texts"][0]["translate_ja_v2"]["text_ja"] == "最初"
     assert reviewed["texts"][1]["translate_ja_v2"]["text_ja"] == "次"
-
-
-def test_review_batch_uses_single_json_request(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """複数のレビュー要素を1回のID付きJSON requestで処理する。"""
-
-    calls: list[tuple[list[dict[str, Any]], dict[str, object]]] = []
-
-    def fake_chat(
-        _client: object,
-        _settings: OpenAISettings,
-        messages: list[dict[str, Any]],
-        **kwargs: object,
-    ) -> str:
-        calls.append((messages, kwargs))
-        items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
-        return json.dumps(
-            {
-                "reviews": [
-                    {
-                        "id": item["id"],
-                        "reviewed_text": f"訳{item['source_text']}",
-                    }
-                    for item in items
-                ]
-            },
-            ensure_ascii=False,
-        )
-
-    monkeypatch.setattr("translate.chat_text", fake_chat)
-    settings = OpenAISettings(
-        base_url="http://example.test",
-        api_key="test",
-        model="fake",
-        timeout_seconds=1,
-    )
-
-    assert review_batch(
-        object(),
-        settings,
-        [
-            {
-                "id": "a",
-                "source_text": "A",
-                "translated_text": "元訳A",
-                "kind": "本文",
-            },
-            {
-                "id": "b",
-                "source_text": "B",
-                "translated_text": "元訳B",
-                "kind": "本文",
-            },
-        ],
-    ) == {"a": "訳A", "b": "訳B"}
-    assert len(calls) == 1
-    assert calls[0][1]["json_response"] is True
-    assert "返却JSON" in str(calls[0][0][-1]["content"])
 
 
 def test_require_qdrant_settings_reads_env_and_defaults(
@@ -1949,7 +2036,7 @@ def test_require_qdrant_settings_reads_env_and_defaults(
     monkeypatch.setenv("QDRANT_URI", "https://qdrant.example.test/")
     monkeypatch.setenv("QDRANT_API_KEY", "secret")
 
-    settings = require_qdrant_settings()
+    settings = AgentReview._settings()
 
     assert settings.uri == "https://qdrant.example.test"
     assert settings.api_key == "secret"
@@ -2005,7 +2092,7 @@ def test_qdrant_batch_search_uses_text_inference_and_payload_fields() -> None:
         {"id": "b", "source_text": "Command relationship"},
     ]
 
-    evidence = qdrant_search_batch(client, settings, "domain docs", items)
+    evidence = AgentReview._search(client, settings, "domain docs", items)
 
     assert evidence == {
         "a": [
@@ -2048,7 +2135,7 @@ def test_qdrant_collection_is_auto_selected_only_when_unique() -> None:
     client.request.return_value = response
     settings = QdrantSettings(uri="https://qdrant.example.test", api_key="secret")
 
-    assert resolve_qdrant_collection(client, settings) == "domain"
+    assert AgentReview._resolve_collection(client, settings) == "domain"
 
 
 def test_multi_agent_review_uses_rag_and_adjudicates_disagreement(
@@ -2129,8 +2216,8 @@ def test_multi_agent_review_uses_rag_and_adjudicates_disagreement(
             ensure_ascii=False,
         )
 
-    monkeypatch.setattr("translate.qdrant_search_batch", lambda *_args: evidence)
-    monkeypatch.setattr("translate.request_specialist_reviews", fake_specialist)
+    monkeypatch.setattr(AgentReview, "_search", lambda *_args: evidence)
+    monkeypatch.setattr(AgentReview, "_request_specialist", fake_specialist)
     monkeypatch.setattr("translate.chat_text", fake_chat)
     settings = OpenAISettings(
         base_url="http://example.test",
@@ -2153,7 +2240,7 @@ def test_multi_agent_review_uses_rag_and_adjudicates_disagreement(
         }
     ]
 
-    reviewed, audits = multi_agent_review_batch(
+    reviewed, audits = AgentReview._review_batch(
         object(),
         settings,
         items,
@@ -2184,7 +2271,8 @@ def test_multi_agent_review_skips_adjudicator_on_consensus(
     """
 
     monkeypatch.setattr(
-        "translate.request_specialist_reviews",
+        AgentReview,
+        "_request_specialist",
         lambda *_args: {"a": {"reviewed_text": "合意訳", "reason": "同じ判断"}},
     )
     monkeypatch.setattr(
@@ -2206,99 +2294,12 @@ def test_multi_agent_review_skips_adjudicator_on_consensus(
         }
     ]
 
-    reviewed, audits = multi_agent_review_batch(
+    reviewed, audits = AgentReview._review_batch(
         object(), settings, items, translation_rules="rule"
     )
 
     assert reviewed == {"a": "合意訳"}
     assert audits["a"]["decision"] == "consensus"
-
-
-def test_review_rag_requires_multi_mode() -> None:
-    """単一Reviewer構成ではRAG指定を拒否する。
-
-    Returns:
-        なし。
-    """
-
-    with pytest.raises(ValueError, match="requires --review-mode multi"):
-        review_document({}, review_rag=True)
-
-
-def test_pipeline_rejects_review_rag_before_other_stages(tmp_path: Path) -> None:
-    """不正なRAG構成はParseより前に拒否する。
-
-    Args:
-        tmp_path: 存在しない入力パスを作るpytest fixture。
-
-    Returns:
-        なし。
-    """
-
-    with pytest.raises(ValueError, match="requires --review-mode multi"):
-        run_pipeline(
-            PipelineOptions(
-                input=tmp_path / "missing.pdf",
-                review_rag=True,
-            )
-        )
-
-
-def test_review_batch_splits_invalid_multi_response(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """複数要素のReview応答が不正なら要素境界で二分する。
-
-    Args:
-        monkeypatch: API応答を差し替えるpytest fixture。
-
-    Returns:
-        なし。
-    """
-
-    sizes: list[int] = []
-
-    def fake_chat(
-        _client: object,
-        _settings: OpenAISettings,
-        messages: list[dict[str, Any]],
-        **_kwargs: object,
-    ) -> str:
-        """複数要素では不正、単一要素では正常なJSONを返す。
-
-        Args:
-            _client: fakeでは未使用のclient。
-            _settings: fakeでは未使用の設定。
-            messages: Review入力JSONを含むmessages。
-            **_kwargs: fakeでは未使用の追加引数。
-
-        Returns:
-            Review応答文字列。
-        """
-
-        items = json.loads(str(messages[-1]["content"]).rsplit("入力JSON:\n", 1)[1])
-        sizes.append(len(items))
-        if len(items) > 1:
-            return "{}"
-        return json.dumps(
-            {"reviews": [{"id": items[0]["id"], "reviewed_text": "訳文"}]},
-            ensure_ascii=False,
-        )
-
-    monkeypatch.setattr("translate.chat_text", fake_chat)
-    settings = OpenAISettings(
-        base_url="http://example.test",
-        api_key="test",
-        model="fake",
-        timeout_seconds=1,
-    )
-    items = [
-        {"id": "a", "source_text": "A", "translated_text": "元訳A", "kind": "本文"},
-        {"id": "b", "source_text": "B", "translated_text": "元訳B", "kind": "本文"},
-    ]
-
-    assert review_batch(object(), settings, items) == {"a": "訳文", "b": "訳文"}
-    assert sizes == [2, 1, 1]
 
 
 @pytest.mark.parametrize(
@@ -2334,51 +2335,19 @@ def test_review_rejects_invalid_response(
         "next_text_ja": "隣接要素の訳文",
     }
 
-    assert reason in str(review_rejection_reason(item, reviewed_text))
+    assert reason in str(AgentReview._rejection_reason(item, reviewed_text))
     assert "disproportionately longer" in str(
-        review_rejection_reason(
+        AgentReview._rejection_reason(
             {**item, "translated_text": "い" * 150},
             "あ" * 226,
         )
     )
     assert "disproportionately shorter" in str(
-        review_rejection_reason(
+        AgentReview._rejection_reason(
             {**item, "translated_text": "い" * 100},
             "短すぎる訳文。",
         )
     )
-
-
-def test_review_batch_keeps_original_after_empty_single_response(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """単一要素のレビュー応答が空なら元訳を使う。"""
-
-    monkeypatch.setattr(
-        "translate.chat_text",
-        lambda _client, _settings, _messages, **_kwargs: (_ for _ in ()).throw(
-            OpenAIEmptyResponseError("empty")
-        ),
-    )
-    settings = OpenAISettings(
-        base_url="http://example.test",
-        api_key="test",
-        model="fake",
-        timeout_seconds=1,
-    )
-
-    assert review_batch(
-        object(),
-        settings,
-        [
-            {
-                "id": "#/texts/20",
-                "source_text": "Department of Defense",
-                "translated_text": "防衛省",
-                "kind": "本文",
-            }
-        ],
-    ) == {"#/texts/20": "防衛省"}
 
 
 def test_apply_review_results_updates_bilingual_render_text(
@@ -2390,7 +2359,7 @@ def test_apply_review_results_updates_bilingual_render_text(
     caption_meta = {"caption_ja": "用語", "caption_render": "Terms / 用語"}
     caplog.set_level(logging.DEBUG, logger="translate-ja-v2")
 
-    changes = apply_review_results(
+    changes = AgentReview._apply_results(
         [
             {
                 "id": "#/texts/0",
@@ -2461,7 +2430,7 @@ def test_render_markdown_uses_translated_json_fields() -> None:
         ],
     }
 
-    markdown = render_markdown(data)
+    markdown = RenderStage._render_markdown(data)
 
     assert "## Strategy / 戦略" in markdown
     assert "部隊が移動する。" in markdown
@@ -2482,7 +2451,7 @@ def test_apply_structure_patches_rejects_unsupported_operations() -> None:
             {"self_ref": "#/texts/1", "label": "paragraph", "text": "Title"},
         ]
     }
-    patched, applied = apply_structure_patches(
+    patched, applied = StructureStage._apply_patches(
         data,
         [
             {"op": "set_label", "ref": "#/texts/1", "label": "section_header"},
@@ -2533,7 +2502,7 @@ def test_apply_structure_patches_corrects_heading_level_and_caption() -> None:
         ]
     }
 
-    patched, applied = apply_structure_patches(
+    patched, applied = StructureStage._apply_patches(
         data,
         [
             {
@@ -2595,7 +2564,7 @@ def test_apply_structure_patches_merge_reindexes_references_once() -> None:
         },
     }
 
-    patched, applied = apply_structure_patches(
+    patched, applied = StructureStage._apply_patches(
         data,
         [{"op": "merge_texts", "refs": ["#/texts/0", "#/texts/1"]}],
     )
@@ -2625,7 +2594,7 @@ def test_apply_structure_patches_converts_and_merges_code_fragments() -> None:
         ]
     }
 
-    patched, applied = apply_structure_patches(
+    patched, applied = StructureStage._apply_patches(
         data,
         [
             {"op": "set_label", "ref": "#/texts/1", "label": "code"},
@@ -2664,7 +2633,7 @@ def test_structure_marks_exact_inline_code_in_table_cell() -> None:
         ]
     }
 
-    patched, applied = apply_structure_patches(
+    patched, applied = StructureStage._apply_patches(
         data,
         [
             {
@@ -2697,7 +2666,7 @@ def test_structure_messages_include_table_cells_for_inline_code_detection() -> N
         ]
     }
 
-    content = build_structure_messages(data)[1]["content"]
+    content = StructureStage._build_messages(data)[1]["content"]
 
     assert isinstance(content, str)
     assert "#/tables/0/data/grid/0/0" in content
@@ -2748,7 +2717,7 @@ def test_structure_request_uses_bounded_json_output(
         ]
     }
 
-    result, applied = structure_page_with_vlm(
+    result, applied = StructureStage._structure_page(
         data,
         1,
         object(),
@@ -2782,7 +2751,7 @@ def test_build_structure_messages_attaches_docling_page_png(tmp_path: Path) -> N
         ],
     }
 
-    messages = build_structure_messages(data, artifacts_dir)
+    messages = StructureStage._build_messages(data, artifacts_dir)
     content = messages[1]["content"]
 
     assert isinstance(content, list)
@@ -2802,7 +2771,7 @@ def test_page_image_path_matches_page_number(tmp_path: Path) -> None:
     expected.write_bytes(b"page118")
     data = {"pages": {"118": {"image": {"uri": "artifacts/page_000118_correct.png"}}}}
 
-    assert page_image_path(data, artifacts_dir, 118) == expected
+    assert StructureStage._page_image_path(data, artifacts_dir, 118) == expected
 
 
 def test_build_structure_messages_does_not_fallback_to_unrelated_png(
@@ -2824,7 +2793,7 @@ def test_build_structure_messages_does_not_fallback_to_unrelated_png(
         ]
     }
 
-    content = build_structure_messages(data, artifacts_dir)[1]["content"]
+    content = StructureStage._build_messages(data, artifacts_dir)[1]["content"]
 
     assert isinstance(content, str)
 
@@ -2901,7 +2870,7 @@ def test_structure_document_falls_back_to_pairwise_when_page_prompt_is_large(
     monkeypatch.setattr("translate.openai_client", lambda _settings: object())
     monkeypatch.setattr("translate.chat_text", fake_chat)
 
-    structured, patches = structure_document(
+    structured, patches = StructureStage._structure_document(
         data,
         skip_vlm=False,
         artifacts_dir=artifacts_dir,
@@ -3100,7 +3069,7 @@ def test_translate_batch_with_libretranslate_rejects_missing_result() -> None:
 def test_docling_payload_uses_fixed_ocr_settings() -> None:
     """Docling payload は固定された OCR 設定を使う。"""
 
-    payload = docling_form_payload(120)
+    payload = ParseStage._payload(120)
 
     assert payload["do_ocr"] == "false"
     assert payload["force_ocr"] == "false"
@@ -3111,7 +3080,7 @@ def test_docling_payload_uses_fixed_ocr_settings() -> None:
 def test_docling_payload_enables_document_enrichment() -> None:
     """表構造、セル対応、コード、数式認識を常に有効にする。"""
 
-    payload = docling_form_payload(120)
+    payload = ParseStage._payload(120)
 
     assert payload["do_table_structure"] == "true"
     assert payload["table_mode"] == "accurate"
@@ -3123,7 +3092,7 @@ def test_docling_payload_enables_document_enrichment() -> None:
 def test_docling_payload_disables_remote_page_images() -> None:
     """Doclingではページ画像を生成せず、画像scaleを1.0に固定する。"""
 
-    payload = docling_form_payload(120)
+    payload = ParseStage._payload(120)
 
     assert payload["include_images"] == "true"
     assert payload["include_page_images"] == "false"
@@ -3150,7 +3119,8 @@ def test_convert_with_docling_uses_async_endpoint(
     endpoints: list[str] = []
 
     monkeypatch.setattr(
-        "translate.require_docling_settings",
+        ParseStage,
+        "_settings",
         lambda: DoclingSettings(
             server_url="http://docling.test",
             api_key="test",
@@ -3185,11 +3155,11 @@ def test_convert_with_docling_uses_async_endpoint(
         target_artifacts_dir.mkdir(parents=True, exist_ok=True)
         write_json(target_json, {"texts": []})
 
-    monkeypatch.setattr("translate.request_docling_convert", fake_request)
-    monkeypatch.setattr("translate.poll_docling_task", fake_poll)
-    monkeypatch.setattr("translate.extract_docling_zip", fake_extract)
+    monkeypatch.setattr(ParseStage, "_request", fake_request)
+    monkeypatch.setattr(ParseStage, "_poll", fake_poll)
+    monkeypatch.setattr(ParseStage, "_extract_zip", fake_extract)
 
-    convert_with_docling(input_path, output_json, artifacts_dir)
+    ParseStage._convert(input_path, output_json, artifacts_dir)
 
     assert endpoints == ["http://docling.test/v1/convert/file/async"]
     assert output_json.exists()
@@ -3307,10 +3277,10 @@ def test_convert_with_docling_chunks_pdf_and_merges_json(
             },
         )
 
-    monkeypatch.setattr("translate.require_docling_settings", lambda: settings)
-    monkeypatch.setattr("translate.convert_docling_file", fake_convert_file)
+    monkeypatch.setattr(ParseStage, "_settings", lambda: settings)
+    monkeypatch.setattr(ParseStage, "_convert_file", fake_convert_file)
 
-    convert_with_docling(input_path, output_json, artifacts_dir)
+    ParseStage._convert(input_path, output_json, artifacts_dir)
 
     document = read_json(output_json)
     assert chunk_page_counts == [10, 10, 3]
@@ -3373,7 +3343,7 @@ def test_render_pdf_page_images_updates_docling_uris(tmp_path: Path) -> None:
         },
     )
 
-    render_pdf_page_images(input_path, output_json, artifacts_dir)
+    ParseStage._render_page_images(input_path, output_json, artifacts_dir)
 
     document = read_json(output_json)
     first = document["pages"]["1"]["image"]
@@ -3423,7 +3393,7 @@ def test_poll_docling_task_logs_poll_count_each_time(
     monkeypatch.setattr("translate.time.sleep", lambda _seconds: None)
     caplog.set_level(logging.DEBUG, logger="translate-ja-v2")
 
-    poll_docling_task("task-1", output_zip, settings)
+    ParseStage._poll("task-1", output_zip, settings)
 
     assert output_zip.read_bytes() == b"zip-bytes"
     assert "poll_count=1 status=processing" in caplog.text
@@ -3451,7 +3421,7 @@ def test_extract_docling_zip_preserves_document_and_artifact_paths(
         archive.writestr("sample2.json", '{"texts": []}')
         archive.writestr("result/artifacts/pages/page_000001.png", b"page")
 
-    extract_docling_zip(zip_path, output_json, artifacts_dir)
+    ParseStage._extract_zip(zip_path, output_json, artifacts_dir)
 
     assert read_json(output_json) == {"texts": []}
     assert (artifacts_dir / "pages" / "page_000001.png").read_bytes() == b"page"
@@ -3536,8 +3506,6 @@ def test_main_accepts_character_limits(
                 str(max_batch_elements),
                 "--translator",
                 "llm",
-                "--review-mode",
-                "multi",
                 "--review-rag",
             ]
         )
@@ -3547,7 +3515,6 @@ def test_main_accepts_character_limits(
     assert captured[0].batch_chars == 800
     assert captured[0].max_batch_elements == max_batch_elements
     assert captured[0].translator == TranslationBackend.LLM
-    assert captured[0].review_mode == ReviewMode.MULTI
     assert captured[0].review_rag is True
 
 
@@ -3584,7 +3551,7 @@ def test_convert_markdown_to_docx_requires_pandoc(
     monkeypatch.setattr("translate.shutil.which", lambda _name: None)
 
     with pytest.raises(RuntimeError, match="pandoc is required"):
-        convert_markdown_to_docx(markdown_path, docx_path, None)
+        DocxStage._convert(markdown_path, docx_path, None)
 
 
 def test_convert_markdown_to_docx_runs_pandoc_from_markdown_directory(
@@ -3602,7 +3569,8 @@ def test_convert_markdown_to_docx_runs_pandoc_from_markdown_directory(
     adjusted: list[Path] = []
     monkeypatch.setattr("translate.shutil.which", lambda _name: "/usr/bin/pandoc")
     monkeypatch.setattr(
-        "translate.suppress_spacing_between_consecutive_headings",
+        DocxStage,
+        "_suppress_heading_spacing",
         lambda path: adjusted.append(path) or 0,
     )
 
@@ -3613,7 +3581,7 @@ def test_convert_markdown_to_docx_runs_pandoc_from_markdown_directory(
 
     monkeypatch.setattr("translate.subprocess.run", fake_run)
 
-    convert_markdown_to_docx(markdown_path, docx_path, template_path)
+    DocxStage._convert(markdown_path, docx_path, template_path)
 
     assert calls == [
         {
@@ -3662,7 +3630,7 @@ def test_docx_suppresses_spacing_only_between_consecutive_headings(
         archive.writestr("word/document.xml", document_xml)
         archive.writestr("custom/preserved.txt", b"preserved")
 
-    adjusted = suppress_spacing_between_consecutive_headings(docx_path)
+    adjusted = DocxStage._suppress_heading_spacing(docx_path)
 
     namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
     with zipfile.ZipFile(docx_path) as archive:
@@ -3742,7 +3710,7 @@ def test_structure_stage_resumes_from_completed_page_elements(
         result.setdefault("processed_pages", []).append(page_no)
         return result, []
 
-    monkeypatch.setattr("translate.structure_page_with_vlm", fake_structure_page)
+    monkeypatch.setattr(StructureStage, "_structure_page", fake_structure_page)
     stage = StructureStage(
         paths=paths,
         artifacts_dir=paths.output_dir / "artifacts",
@@ -3904,8 +3872,12 @@ def test_review_stage_resumes_from_completed_element(
         _client: object,
         _settings: OpenAISettings,
         items: list[dict[str, Any]],
+        *,
         translation_rules: str,
-    ) -> dict[str, str]:
+        qdrant_http: object | None,
+        qdrant_settings: QdrantSettings | None,
+        qdrant_collection: str | None,
+    ) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
         """2要素目の初回だけ失敗するレビュー応答を返す。
 
         Args:
@@ -3913,19 +3885,22 @@ def test_review_stage_resumes_from_completed_element(
             _settings: fakeでは未使用の設定。
             items: 1件のレビュー対象。
             translation_rules: fakeでは未使用の翻訳ルール。
+            qdrant_http: fakeでは未使用のQdrant client。
+            qdrant_settings: fakeでは未使用のQdrant設定。
+            qdrant_collection: fakeでは未使用のcollection名。
 
         Returns:
-            対象IDとレビュー後訳文の対応。
+            対象IDとレビュー後訳文、および空の監査metadata。
         """
 
-        _ = translation_rules
+        _ = translation_rules, qdrant_http, qdrant_settings, qdrant_collection
         item_id = str(items[0]["id"])
         calls.append(item_id)
         if item_id == "#/texts/1" and fail_second:
             raise RuntimeError("interrupted")
-        return {item_id: f"新{item_id[-1]}"}
+        return {item_id: f"新{item_id[-1]}"}, {item_id: {}}
 
-    monkeypatch.setattr("translate.review_batch", fake_review_batch)
+    monkeypatch.setattr(AgentReview, "_review_batch_resilient", fake_review_batch)
     monkeypatch.setattr("translate.REVIEW_MAX_WORKERS", 1)
     stage = ReviewStage(paths=paths, batch_chars=1)
 
@@ -3958,6 +3933,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
     stage_calls = {"parse": 0, "translate": 0, "review": 0, "docx": 0}
 
     def fake_docling(
+        _stage: ParseStage,
         _input_path: Path,
         output_json: Path,
         artifacts_dir: Path,
@@ -3965,6 +3941,7 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         """Docling Serve の代わりに最小 Docling JSON と page PNG を保存する。
 
         Args:
+            _stage: fakeでは未使用のParseStage。
             _input_path: 入力ファイル。
             output_json: Docling JSON 保存先。
             artifacts_dir: artifacts 保存先。
@@ -3996,40 +3973,31 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         )
 
     def fake_translate(
+        self: TranslateLibre,
         data: dict[str, object],
         glossary: list[dict[str, str]] | None = None,
-        translation_rules: str = "",
-        context_chars: int = 0,
-        batch_chars: int = 0,
         resume_data: dict[str, object] | None = None,
         completed_ids: set[str] | None = None,
         on_progress: object | None = None,
-        translator: TranslationBackend = TranslationBackend.LLM,
-        max_batch_elements: int = 0,
     ) -> dict[str, object]:
         """OpenAI 翻訳の代わりに render 用 metadata を追加する。
 
         Args:
-            data: 構造補正済み JSON。
+            self: pipelineが選択したLibreTranslate backend。
+            data: 構造補正済みJSON。
             glossary: fake では未使用。
-            translation_rules: fake では未使用。
-            context_chars: fakeで記録するcontext上限。
-            batch_chars: fakeで記録するbatch上限。
             resume_data: fakeでは未使用の部分成果物。
             completed_ids: fakeでは未使用の完了ID。
             on_progress: fakeでは未使用のcallback。
-            translator: pipelineから渡される翻訳backend。
-            max_batch_elements: pipelineから渡される要素数上限。
 
         Returns:
             翻訳 metadata を追加した JSON。
         """
 
-        _ = (glossary, translation_rules, resume_data, completed_ids, on_progress)
-        assert translator == TranslationBackend.DEFAULT
-        assert max_batch_elements == 7
+        _ = (glossary, resume_data, completed_ids, on_progress)
+        assert self.max_batch_elements == 7
         stage_calls["translate"] += 1
-        limits.update(context_chars=context_chars, batch_chars=batch_chars)
+        limits["batch_chars"] = self.batch_chars
         copied = json.loads(json.dumps(data))
         assert copied["texts"][1]["text"] == "The force moves..."
         copied["texts"][0]["translate_ja_v2"] = {"render_text": "Strategy / 戦略"}
@@ -4037,11 +4005,15 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         return copied
 
     def fake_docx(
-        markdown_path: Path, docx_path: Path, template_path: Path | None
+        _stage: DocxStage,
+        markdown_path: Path,
+        docx_path: Path,
+        template_path: Path | None,
     ) -> None:
         """pandoc の代わりに docx ファイルを作る。
 
         Args:
+            _stage: fakeでは未使用のDocxStage。
             markdown_path: 入力 Markdown。
             docx_path: 出力 docx。
             template_path: reference doc。
@@ -4065,7 +4037,6 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         completed_ids: set[str] | None = None,
         on_progress: object | None = None,
         max_batch_elements: int = 0,
-        review_mode: ReviewMode = ReviewMode.SINGLE,
         review_rag: bool = False,
     ) -> tuple[dict[str, object], int]:
         """OpenAI レビューの代わりに入力をそのまま返す。
@@ -4080,7 +4051,6 @@ def test_run_pipeline_writes_json_markdown_and_docx(
             completed_ids: fakeでは未使用の完了ID。
             on_progress: fakeでは未使用のcallback。
             max_batch_elements: pipelineから渡される要素数上限。
-            review_mode: pipelineから渡されるReview構成。
             review_rag: pipelineから渡されるRAG利用設定。
 
         Returns:
@@ -4090,16 +4060,20 @@ def test_run_pipeline_writes_json_markdown_and_docx(
         _ = (glossary, translation_rules, resume_data, completed_ids, on_progress)
         stage_calls["review"] += 1
         assert max_batch_elements == 7
-        assert review_mode == ReviewMode.SINGLE
         assert review_rag is False
         limits["review_context_chars"] = context_chars
         limits["review_batch_chars"] = batch_chars
         return data, 0
 
-    monkeypatch.setattr("translate.convert_with_docling", fake_docling)
-    monkeypatch.setattr("translate.translate_document", fake_translate)
-    monkeypatch.setattr("translate.review_document", fake_review)
-    monkeypatch.setattr("translate.convert_markdown_to_docx", fake_docx)
+    monkeypatch.setattr(ParseStage, "_convert", fake_docling)
+    monkeypatch.setattr(
+        "translate.require_libretranslate_settings",
+        lambda: LibreTranslateSettings(base_url="http://example.test"),
+    )
+    monkeypatch.setattr("translate.libretranslate_client", lambda _settings: Mock())
+    monkeypatch.setattr(TranslateLibre, "translate_document", fake_translate)
+    monkeypatch.setattr(AgentReview, "review", fake_review)
+    monkeypatch.setattr(DocxStage, "_convert", fake_docx)
 
     paths = run_pipeline(
         PipelineOptions(
@@ -4134,7 +4108,6 @@ def test_run_pipeline_writes_json_markdown_and_docx(
     assert "部隊が移動する。" in paths.markdown.read_text(encoding="utf-8")
     assert paths.docx.read_bytes() == b"docx"
     assert limits == {
-        "context_chars": 32000,
         "batch_chars": 800,
         "review_context_chars": 32000,
         "review_batch_chars": 800,

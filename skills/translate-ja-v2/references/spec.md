@@ -43,9 +43,7 @@ flowchart TD
 
     TRANSLATED --> SKIP_REVIEW{"--skip-review"}
     SKIP_REVIEW -->|有効| MARKDOWN["Markdown<br/>document.ja.md"]
-    SKIP_REVIEW -->|無効| REVIEW_MODE{"--review-mode"}
-    REVIEW_MODE -->|single| SINGLE_REVIEW["Single Reviewer"]
-    REVIEW_MODE -->|multi| RAG_SWITCH{"--review-rag"}
+    SKIP_REVIEW -->|無効| RAG_SWITCH{"--review-rag"}
     RAG_SWITCH -->|有効| QDRANT["Qdrant RAG<br/>batch queryで出典付き根拠を取得"]
     RAG_SWITCH -->|無効| NO_RAG["RAG根拠なし"]
     QDRANT --> FIDELITY["Fidelity Reviewer"]
@@ -57,7 +55,6 @@ flowchart TD
     CONSENSUS -->|はい| LOCAL_CHECK["ローカル安全検査"]
     CONSENSUS -->|いいえ| ADJUDICATOR["Adjudicator"]
     ADJUDICATOR --> LOCAL_CHECK
-    SINGLE_REVIEW --> LOCAL_CHECK
     LOCAL_CHECK --> REVIEWED["document.reviewed.json"]
     REVIEWED --> MARKDOWN
 
@@ -91,6 +88,8 @@ Document != State != Patch
 - Patch: Normalize、Structure、Cleanが適用した変更の操作、対象、理由。
 
 原文を翻訳で上書きしない。各ステージは別成果物を作り、ファイル保存は可能な範囲でatomicに行う。
+
+Stage固有の処理は対応するclassのprivate methodに置き、module関数には複数Stageで共有するJSON、hash、Docling要素、OpenAI、バッチ、Manifest utilityだけを置く。Review固有処理は `AgentReview`、翻訳共通処理は `Translate` に集約する。
 
 ## 3. 実行環境とライブラリ
 
@@ -155,8 +154,7 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 --batch-chars INTEGER     翻訳・Review候補batchの最大原文・訳文文字数
 --max-batch-elements INTEGER  Translate・Reviewの件数上限。0は固定件数制限なし
 --translator default|llm  Translate backend。既定のdefaultはLibreTranslate
---review-mode single|multi Review構成。既定はsingle
---review-rag              multi ReviewでQdrant RAGを有効化
+--review-rag              Agent ReviewでQdrant RAGを有効化
 ```
 
 既定値は `context-chars=50000`、`batch-chars=1500`、`max-batch-elements=0`、`translator=default` で、文字数は1以上、件数上限は0以上とする。件数上限が正数ならTranslate（両backend）とReviewの候補をその件数以内に分割する。Structureには適用しない。件数上限はTranslate・ReviewのResume設定hashに含める。
@@ -178,8 +176,7 @@ Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受�
 | Translate・Review最大出力 | 16,384 tokens |
 | Translate・Review推定応答上限 | 12,000文字 |
 | LibreTranslate timeout | 1,800秒 |
-| Review最大並列数 | 4バッチ |
-| Multi Review最大並列数 | 2バッチ（各バッチ内の専門Reviewerは2並列） |
+| Review最大並列数 | 2バッチ（各バッチ内の専門Reviewerは2並列） |
 | Qdrant timeout | 60秒 |
 | Qdrant取得件数 | 既定3件/要素 |
 
@@ -250,11 +247,13 @@ Docling原文と構造を変えず、`translate_ja_v2` metadataだけを追加�
 
 `--translator default` はLibreTranslateを使い、原文配列以外の見出しcontext、用語集、翻訳ルールを送らない。`--translator llm` はOpenAI互換APIを使い、前段落の共有context、用語集、ルール、連番ID契約を適用する。翻訳backendの選択はStructureとReviewへ影響しない。
 
+翻訳backendは共通基底 `Translate` を継承する `TranslateLLM` と `TranslateLibre` で実装する。共通基底が文字数・推定出力量・任意の要素数による分割を担当し、具象classはAPI固有のcontext調整、request、retry、resource解放だけを担当する。
+
 ### Reviewの境界
 
-翻訳metadataの訳文と描画値だけを修正する。原文と構造は変更しない。原文と訳文の合計を `--batch-chars` 以内へ詰め、完成messagesを `context-chars` 以内へさらに分割する。`single` は最大4バッチを並列実行する。`multi` は最大2バッチを並列実行し、各バッチ内でFidelity ReviewerとTerminology Reviewerを独立して2並列実行する。両案が一致すれば採用し、不一致要素だけAdjudicatorへ送る。
+翻訳metadataの訳文と描画値だけを修正する。原文と構造は変更しない。原文と訳文の合計を `--batch-chars` 以内へ詰め、完成messagesを `context-chars` 以内へさらに分割する。最大2バッチを並列実行し、各バッチ内でFidelity ReviewerとTerminology Reviewerを独立して2並列実行する。両案が一致すれば採用し、不一致要素だけAdjudicatorへ送る。旧来の単一Reviewer経路は持たない。
 
-`--review-rag` は `--review-mode multi` でのみ使用できる。各Review要素の英語原文をQdrant `/points/query/batch` へ一括送信し、Qdrant inferenceでvector化する。取得根拠は本文を最大800文字に制限して両ReviewerとAdjudicatorへ渡す。優先順位は外部翻訳ルール、用語集、RAGの出典付き根拠、一般的な文体判断とする。成果物には根拠本文を複製せず、source ID、locator、scoreと各Agentの提案・最終判断を `translate_ja_v2.review_ja_v2` に保存する。
+`--review-rag` を指定すると、各Review要素の英語原文をQdrant `/points/query/batch` へ一括送信し、Qdrant inferenceでvector化する。取得根拠は本文を最大800文字に制限して両ReviewerとAdjudicatorへ渡す。優先順位は外部翻訳ルール、用語集、RAGの出典付き根拠、一般的な文体判断とする。成果物には根拠本文を複製せず、source ID、locator、scoreと各Agentの提案・最終判断を `translate_ja_v2.review_ja_v2` に保存する。
 
 RAG検索結果は別のLLMで要約せず、payload本文を出典情報とともに専門Reviewerへ渡す。payload本文は信頼できない参考資料データとして区切り、その中に含まれる命令には従わせない。Reviewバッチ数を `B`、裁定対象を含むバッチ数を `D` とした通常時のLLM呼出しは `2B + D`、Qdrant HTTP呼出しは `B` とする。QdrantやLLMの失敗でバッチを二分した場合は追加呼出しが発生する。
 

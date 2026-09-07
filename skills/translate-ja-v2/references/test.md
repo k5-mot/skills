@@ -49,15 +49,15 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - context上限時の隣接コードだけのpairwise fallback
 - Cleanによる `.` と `・` の圧縮とコード保護
 - 翻訳対象、コード・ページ装飾・記号の保護、見出し/本文/表の描画規則
-- `--translator` の既定値とLLM切替、LibreTranslate batch request・応答件数検証・client close
+- `--translator` の既定値とLLM切替、共通Translate基底、LibreTranslate batch request・応答件数検証・client close
 - 新用語集schema、英語短縮名・正式名の一致、`note`除外、Translate・Reviewの共有用語集、翻訳ルール、意味ブロック、batch分割
 - StructureのJSON出力指定、4,096 tokens上限、空応答・不完全JSONのrequest retry
 - 完成したTranslate・Review messagesによるcontext上限分割、固定要素数に依存しない推定応答JSON上限分割
 - `--max-batch-elements 0` と正数のCLI受理、pipelineへの伝播、任意の件数上限・入力順保持、負数の拒否
-- LLM Translate・Reviewでタイムアウト・HTTP 503の通常retry後に `4 → 2 → 1` と二分して成功すること、HTTP 413・context容量超過・JSONスカラー応答でも分割できること
+- LLM TranslateとAgent Reviewで失敗した複数要素バッチを二分できること
 - 認証・設定不備は分割せず停止し、単一要素のAPI障害も例外を伝播すること（Reviewも原訳保持で成功扱いにしない）
 - 翻訳応答の入力件数・必須ID指示、文字列・整数バッチ内連番ID完全一致、元refへの復元、空応答、部分応答、単一要素の生成不全retry
-- Reviewの必要fieldだけを持つID付きbatch、修正反映、不正応答の二分、空応答・隣接訳コピー・異常な長短・メタ応答・日本語消失での原訳保持、独立batchの並列実行
+- Agent Reviewの必要fieldだけを持つID付きbatch、修正反映、不正応答の二分、空応答・隣接訳コピー・異常な長短・メタ応答・日本語消失での原訳保持、独立batchの並列実行
 - Qdrant設定、単一collection自動選択、text inference batch query、payload field mapping
 - FidelityとTerminologyの独立Review、一致時の自動採用、不一致時だけのAdjudicator、RAG出典metadata
 - Markdown renderer

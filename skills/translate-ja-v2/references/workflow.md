@@ -228,7 +228,7 @@ LibreTranslate時は `q` に `batch-chars`、任意の `max-batch-elements`、�
 - 出力: `document.reviewed.json`
 - 進捗粒度: 翻訳済みtext、表タイトル、表セルのref
 
-翻訳済み要素を原文と訳文の合計が `--batch-chars` 以内となる候補へ詰める。`--max-batch-elements 0`（既定）では固定の要素数上限を設けず、正数なら指定件数以内に分割する。現在の訳文を使った推定Review応答JSONが安全上限12,000文字を超える候補、完成messagesが `--context-chars` を超える候補は要素境界でさらに分割し、最大4バッチを並列実行する。
+翻訳済み要素を原文と訳文の合計が `--batch-chars` 以内となる候補へ詰める。`--max-batch-elements 0`（既定）では固定の要素数上限を設けず、正数なら指定件数以内に分割する。現在の訳文を使った推定Review応答JSONが安全上限12,000文字を超える候補、完成messagesが `--context-chars` を超える候補は要素境界でさらに分割し、最大2バッチを並列実行する。
 
 APIへ送る各要素はバッチ内連番ID、原文、現在の訳文、存在する場合だけ保護対象inline codeを持つ。さらに、各原文へ `english-short` または `english-long` が一致した用語集をバッチ上部へ集約し、重複と `note` を除いて送る。入力件数と返却必須ID一覧を明示し、入力配列の順序を文書順として表記ゆれと用語準拠を確認させる。長いDocling ref、見出し文脈、直前・直後の訳文、空fieldは送らない。連番IDは応答後に元refへ戻す。前後要素の原文と訳文はAPI入力ではなく、誤コピーを棄却するローカル検証だけに使う。
 
@@ -236,9 +236,9 @@ APIへ送る各要素はバッチ内連番ID、原文、現在の訳文、存在
 
 LLM Translateと同様に、通常の再試行後も続く一時的なAPI障害と入力容量エラーでは失敗したバッチを二分する。ただし単一要素のAPI障害は原訳保持で完了扱いにせず、例外を伝播して未完了のまま停止する。認証・設定エラーも停止する。原訳保持は生成応答が不正な場合の処理であり、API接続障害には適用しない。
 
-### 複数Agent ReviewとRAG
+### Agent ReviewとRAG
 
-`--review-mode multi` は各バッチを次の順に処理する。
+ReviewStageは旧来の単一Reviewer経路を持たず、各バッチを次の順に処理する。
 
 1. `--review-rag` があれば、各英語原文をQdrantのbatch queryで検索する。
 2. Fidelity ReviewerとTerminology Reviewerへ同じ原文・現在訳・RAG根拠を渡して独立に並列実行する。

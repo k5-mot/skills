@@ -53,10 +53,9 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
   --translation-rules ./skills/translate-ja-v2/examples/translation-rules.md
 ```
 
-Qdrantのドメイン根拠を使う複数Agent Reviewは次のoptionを追加します。`QDRANT_COLLECTION` 未指定時は、Qdrant上にcollectionが1件だけなら自動選択します。
+ReviewはFidelity ReviewerとTerminology Reviewerを並列実行し、不一致要素だけをAdjudicatorで裁定します。Qdrantのドメイン根拠も使う場合は次のoptionを追加します。`QDRANT_COLLECTION` 未指定時は、Qdrant上にcollectionが1件だけなら自動選択します。
 
 ```bash
-  --review-mode multi \
   --review-rag
 ```
 
@@ -76,8 +75,7 @@ Qdrantのドメイン根拠を使う複数Agent Reviewは次のoptionを追加�
 | `--batch-chars INTEGER` | いいえ | `1500` | TranslateとReviewで1回のbatchへ詰める原文・訳文の最大文字数を指定します。 |
 | `--max-batch-elements INTEGER` | いいえ | `0` | Translate（両backend）とReviewの1バッチの要素数上限。`0` は固定件数で制限せず、文字数・推定応答量から動的に分割します。正数ならその件数も上限になります。Structureには適用しません。 |
 | `--translator default\|llm` | いいえ | `default` | Translate backendを選びます。`default` はLibreTranslate、`llm` はOpenAI互換APIです。StructureとReviewには影響しません。 |
-| `--review-mode single\|multi` | いいえ | `single` | Review構成を選びます。`multi` はFidelityとTerminologyの独立Reviewerを実行し、不一致要素だけAdjudicatorで裁定します。 |
-| `--review-rag` | いいえ | 無効 | `multi` ReviewでQdrantからドメイン根拠を検索します。`QDRANT_URI` と `QDRANT_API_KEY` が必要です。 |
+| `--review-rag` | いいえ | 無効 | Agent ReviewでQdrantからドメイン根拠を検索します。`QDRANT_URI` と `QDRANT_API_KEY` が必要です。 |
 | `--env PATH` | いいえ | `.env` | 読み込むdotenvファイルを指定します。既存の環境変数は上書きしません。 |
 | `--force` | いいえ | 無効 | 完了済みParse成果物があってもDocling変換から再実行します。 |
 | `--skip-vlm` | いいえ | 無効 | StructureのVLM補正だけを省略します。Normalizeは実行します。 |
