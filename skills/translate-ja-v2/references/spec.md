@@ -150,11 +150,13 @@ PDFページ画像は `artifacts/page_<6桁page>.png` とし、JSONのURIはJSON
 
 ### Structureの境界
 
-コードlabel、隣接するコードtextの結合、表セルinline code metadataだけを補正する。翻訳、要約、本文生成、見出し補正、順序変更はしない。patch適用時は存在するref、操作種別、値の型を検証し、結合本文は元textからローカル生成する。
+既存見出しのlevel、見出しと誤認識されたcaption、コードlabel、隣接するコードtextの結合、表セルinline code metadataだけを補正する。翻訳、要約、本文生成、順序変更はしない。見出しlevelは1から6、caption化は現在見出しであるtextだけを受理する。patch適用時は存在するref、操作種別、値の型を検証し、結合本文は元textからローカル生成する。
 
 ### Cleanの境界
 
 本文と表セルの `.` と `・` の3文字以上の連続だけを3文字へ縮める。コードと見出しは変更しない。
+
+CleanはStructureが特定したコードと表セルinline code spanを保護する必要があるため、Structureより後に実行する。NormalizeはStructureが参照する読み順と隣接関係を確定するため、Structureより前に実行する。
 
 ### Translateの境界
 

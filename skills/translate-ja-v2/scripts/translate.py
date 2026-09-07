@@ -2063,13 +2063,14 @@ def build_page_structure_messages(
         for cell in table_cells or []
     ]
     system = (
-        "あなたはDocling JSONのコード構造補正を担当するVLMです。"
+        "あなたはDocling JSONの文書構造補正を担当するVLMです。"
         "翻訳、要約、本文の創作は禁止です。"
+        "ページ画像、bbox、文字サイズ、前後関係から見出し階層とcaptionを補正し、"
         "本文と誤認識されたコードはcodeへ変更し、隣接する同一コードブロック"
         "だけを結合してください。表セルはインラインコードのexact spanだけを"
         "特定してください。"
     )
-    user = f"""次の1ページ分のDocling要素を読み、ページ画像とbboxを参照してコード構造だけをpatchで返してください。
+    user = f"""次の1ページ分のDocling要素を読み、ページ画像とbboxを参照して構造補正patchだけを返してください。
 
 ページ: {page_no if page_no is not None else "unknown"}
 text要素:
@@ -2082,12 +2083,14 @@ text要素:
 {{
   "patches": [
     {{"op": "set_label", "ref": "#/texts/0", "label": "code", "reason": "コード構文"}},
+    {{"op": "set_heading_level", "ref": "#/texts/1", "level": 2, "reason": "見出し階層"}},
+    {{"op": "set_label", "ref": "#/texts/2", "label": "caption", "reason": "図表の説明"}},
     {{"op": "merge_texts", "refs": ["#/texts/0", "#/texts/1"], "reason": "同じコードブロック"}},
     {{"op": "set_table_cell_inline_code", "ref": "#/tables/0/data/grid/0/0", "code_spans": ["api.call()"], "reason": "理由"}}
   ]
 }}
 
-`set_label` のlabelは `code` だけ使用できます。`merge_texts` は同一コードブロックとして隣接する要素だけに使い、本文はローカルで改行連結します。`code_spans` は表セル原文に完全一致する文字列だけを返してください。
+`set_label` のlabelは、本文をコードへ直す `code` と、見出しと誤認識された図・表・コードの説明を直す `caption` だけ使用できます。`set_heading_level` は現在見出しである要素にだけ使い、levelは1から6にしてください。番号表記だけで判断せず、ページ画像上の文字サイズ、位置、前後の見出し階層を優先してください。`merge_texts` は同一コードブロックとして隣接する要素だけに使い、本文はローカルで改行連結します。`code_spans` は表セル原文に完全一致する文字列だけを返してください。
 
 補正不要なら {{"patches":[]}} を返してください。
 """
@@ -2175,7 +2178,7 @@ def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
         data: Docling JSON。
 
     Returns:
-        ref、page、bbox、label、text を持つ unit 配列。
+        ref、page、bbox、label、level、text を持つ unit 配列。
     """
 
     values = data.get("texts")
@@ -2194,6 +2197,7 @@ def collect_structure_units(data: dict[str, Any]) -> list[dict[str, Any]]:
                 "page": page_numbers(item),
                 "bbox": position["bbox"] if position else None,
                 "label": item.get("label"),
+                "level": item.get("level", item.get("heading_level")),
                 "text": text[:500],
             }
         )
@@ -2328,7 +2332,8 @@ def build_merge_messages(
         for unit in (left, right)
     ]
     system = (
-        "あなたはDocling JSONのコード構造補正を担当するVLMです。"
+        "あなたはDocling JSONの文書構造補正を担当するVLMです。"
+        "ページ画像と前後関係から見出し階層とcaptionを補正してください。"
         "本文と誤認識されたコードをcodeへ変更し、隣接要素が同じコードブロック"
         "ならmergeしてください。意味変更、翻訳、要約は禁止です。"
     )
@@ -2342,11 +2347,13 @@ def build_merge_messages(
 {{
   "patches": [
     {{"op": "set_label", "ref": "{left["ref"]}", "label": "code", "reason": "コード構文"}},
+    {{"op": "set_heading_level", "ref": "{left["ref"]}", "level": 2, "reason": "見出し階層"}},
+    {{"op": "set_label", "ref": "{right["ref"]}", "label": "caption", "reason": "図表の説明"}},
     {{"op": "merge_texts", "refs": ["{left["ref"]}", "{right["ref"]}"], "reason": "同じコードブロック"}}
   ]
 }}
 
-本文labelの要素がコードなら `set_label` だけを返せます。同じコードブロックの前後要素だけ `merge_texts` を返してください。結合後の本文はローカルで原文を改行連結します。
+本文labelの要素がコードなら `set_label` の `code` を返せます。見出しの階層が誤っていれば `set_heading_level`、見出しと誤認識された図・表・コードの説明なら `set_label` の `caption` を返せます。番号表記だけで判断せず画像上の文字サイズ、位置、前後関係を優先してください。同じコードブロックの前後要素だけ `merge_texts` を返してください。結合後の本文はローカルで原文を改行連結します。
 
 結合不要なら {{"patches":[]}} を返してください。
 """
@@ -2373,6 +2380,10 @@ def apply_structure_patches(
         op = patch.get("op")
         if op == "set_label" and patch.get("label") in CODE_LABELS:
             applied.append(apply_field_patch(result, patch))
+        elif op == "set_label" and patch.get("label") == "caption":
+            applied.append(apply_caption_label_patch(result, patch))
+        elif op == "set_heading_level":
+            applied.append(apply_heading_level_patch(result, patch))
         elif op == "merge_texts":
             applied.append(apply_merge_texts(result, patch))
         elif op == "set_table_cell_inline_code":
@@ -2643,6 +2654,111 @@ def pointer_target(data: dict[str, Any], pointer: str) -> tuple[Any, str | int]:
         current = current[int(key)] if isinstance(current, list) else current[key]
     tail = parts[-1].replace("~1", "/").replace("~0", "~")
     return current, int(tail) if isinstance(current, list) else tail
+
+
+def text_item_at_ref(data: dict[str, Any], ref: str) -> dict[str, Any] | None:
+    """text要素を安全なJSON pointerから取得する。
+
+    Args:
+        data: 検索対象JSON。
+        ref: `#/texts/<index>` 形式のJSON pointer。
+
+    Returns:
+        対応するtext要素。不正または存在しないrefならNone。
+    """
+
+    if not re.fullmatch(r"#/texts/\d+", ref):
+        return None
+    try:
+        parent, key = pointer_target(data, ref)
+        value = parent[key] if isinstance(parent, list) else parent.get(key)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+    return cast(dict[str, Any], value) if isinstance(value, dict) else None
+
+
+def apply_caption_label_patch(
+    data: dict[str, Any], patch: dict[str, Any]
+) -> dict[str, Any]:
+    """見出しと誤認識されたtext要素をcaptionへ補正する。
+
+    Args:
+        data: 更新対象JSON。
+        patch: text要素refを持つset_label patch。
+
+    Returns:
+        patch適用結果。対象が見出しでなければfailed。
+
+    Side Effects:
+        成功時は対象要素のlabelを変更し、見出しlevelを除去する。
+    """
+
+    ref = str(patch.get("ref") or "")
+    item = text_item_at_ref(data, ref)
+    if item is None or not is_heading(item):
+        return {
+            "op": "set_label",
+            "ref": ref,
+            "status": "failed",
+            "error": "caption target must be a heading text",
+        }
+    before = item.get("label")
+    item["label"] = "caption"
+    item.pop("level", None)
+    item.pop("heading_level", None)
+    return {
+        "op": "set_label",
+        "ref": ref,
+        "status": "success",
+        "before": before,
+        "after": "caption",
+        "reason": patch.get("reason"),
+    }
+
+
+def apply_heading_level_patch(
+    data: dict[str, Any], patch: dict[str, Any]
+) -> dict[str, Any]:
+    """既存見出しの階層を1から6の範囲で補正する。
+
+    Args:
+        data: 更新対象JSON。
+        patch: text要素refとlevelを持つpatch。
+
+    Returns:
+        patch適用結果。対象またはlevelが不正ならfailed。
+
+    Side Effects:
+        成功時は対象見出しのlevelを更新する。
+    """
+
+    ref = str(patch.get("ref") or "")
+    level = patch.get("level")
+    item = text_item_at_ref(data, ref)
+    if (
+        item is None
+        or not is_heading(item)
+        or isinstance(level, bool)
+        or not isinstance(level, int)
+        or not 1 <= level <= 6
+    ):
+        return {
+            "op": "set_heading_level",
+            "ref": ref,
+            "status": "failed",
+            "error": "target must be a heading and level must be 1..6",
+        }
+    before = item.get("level", item.get("heading_level"))
+    item["level"] = level
+    item.pop("heading_level", None)
+    return {
+        "op": "set_heading_level",
+        "ref": ref,
+        "status": "success",
+        "before": before,
+        "after": level,
+        "reason": patch.get("reason"),
+    }
 
 
 def apply_field_patch(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
@@ -5470,7 +5586,7 @@ class StructureStage(FrozenModel):
         )
         config_hash = sha256_json(
             {
-                "version": 5,
+                "version": 6,
                 "skip_vlm": self.skip_vlm,
                 "context_chars": self.context_chars,
                 "model": None if self.skip_vlm else os.environ.get("OPENAI_MODEL"),

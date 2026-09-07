@@ -35,7 +35,7 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
 
 1. 正本の実装は [scripts/translate.py](scripts/translate.py) に保ち、必要性のないwrapper、基底class、factory、package階層を増やさない。
 2. Normalizeは座標によるtext順序と参照の補正だけを行う。
-3. Structureはコードblock、コード連結、表セルinline codeなどの構造だけをVLMで補正し、翻訳や全文再生成をさせない。
+3. Structureは見出し階層、見出しと誤認識されたcaption、コードblock、コード連結、表セルinline codeをVLMで補正し、翻訳や全文再生成をさせない。
 4. Cleanは非コード本文と表セルの3文字以上連続する `.` と `・` を3文字へ縮める。
 5. Translateは既定でLibreTranslateを使い、`--translator llm` の場合だけOpenAI互換APIを使う。Reviewはbackendにかかわらず原文に一致する用語集を参照する。どちらも原文を上書きせず、`translate_ja_v2` metadataへ追加する。
 6. 見出しと表タイトルは英日併記、本文は日本語、コード・URL・パス・識別子は原文を描画する。

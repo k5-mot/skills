@@ -122,7 +122,7 @@ Normalizeは座標に基づくtext要素の並べ替えだけを行う。本文�
 
 ### 目的
 
-Doclingが本文として検出したコードをコードブロックへ補正し、同じコードブロックに属する前後要素を連結する。表セルでは、自然言語中のインラインコードをexact spanとして特定する。
+Doclingが誤検出した見出し階層とcaptionを補正する。本文として検出したコードはコードブロックへ補正し、同じコードブロックに属する前後要素を連結する。表セルでは、自然言語中のインラインコードをexact spanとして特定する。
 
 ### ページ画像の解決
 
@@ -133,13 +133,14 @@ Doclingが本文として検出したコードをコードブロックへ補正�
 ページごとに次をVLMへ渡す。
 
 - ページ番号
-- 座標補正済みtextのref、bbox、label、最大500文字のtext
+- 座標補正済みtextのref、bbox、label、level、最大500文字のtext
 - 表セルのref、bbox、最大500文字のtext
 - 対応するページPNG
 
 VLMには翻訳、要約、本文の創作を許可しない。返却patchは次だけを受理する。
 
-- `set_label`。labelは `code` または `program_listing` だけを受理する。
+- `set_heading_level`。現在見出しであるtextに対する1から6のlevelだけを受理する。
+- `set_label`。コード化する `code` / `program_listing` と、現在見出しであるtextを直す `caption` だけを受理する。
 - `merge_texts`。現在の文書上で隣接するtextだけを受理する。
 - `set_table_cell_inline_code`
 
@@ -151,7 +152,7 @@ APIにはJSON object形式と最大4,096出力tokensを指定する。HTTP成功
 
 ページ単位promptが `--context-chars` を超える場合は次へ切り替える。
 
-1. 同一ページで隣接する2要素だけを比較し、コードlabelとコード連結を判断する。
+1. 同一ページで隣接する2要素だけを比較し、見出しlevel、caption、コードlabel、コード連結を判断する。
 2. 表セルはcontext上限内のまとまりに分割する。
 
 順序はNormalizeの出力を正とし、Structureでは並べ替えない。配列順とページ単位の入力から分かる `coordinate_order` と要素ごとのpageはpromptへ重複して渡さない。
@@ -177,6 +178,8 @@ APIにはJSON object形式と最大4,096出力tokensを指定する。HTTP成功
 ```
 
 2文字以下と、すでに3文字の並びは変えない。見出し、コードブロック、表セル内の `structure_ja_v2.inline_code_spans` は保護する。外部APIを使わず、工程単位でResumeする。
+
+CleanをStructureより前へ移動してはならない。表セルinline code spanと本文コードlabelはStructureで確定するため、先にCleanするとコード中の連続ピリオドを変更する可能性がある。またNormalizeはStructureのコード連結と見出し階層判断に使う読み順を確定するため、全体順は `Parse → Normalize → Structure → Clean` とする。
 
 ## 9. TranslateStage
 

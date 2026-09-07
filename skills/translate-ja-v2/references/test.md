@@ -43,7 +43,7 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - 成果物破損、入力変更、設定変更時のResume拒否
 - bbox順序、座標なし要素のslot保持、Docling参照更新
 - Normalizeが本文や表セルを変更しないこと
-- Structureの許可patch、コードlabel、隣接コード連結、本文生成・順序補正の拒否
+- Structureの許可patch、見出しlevel、見出しと誤認識されたcaption、コードlabel、隣接コード連結、本文生成・順序補正の拒否
 - 表セルinline codeのexact span
 - page image URIの安全な解決と、無関係なPNGへfallbackしないこと
 - context上限時の隣接コードだけのpairwise fallback
@@ -152,6 +152,7 @@ manifest.json
 
 - manifestの `elements` が空でなく、すべて `completed` である。
 - VLMが返したpatch以外の原文変更がない。
+- 見出しlevel補正は1から6で、caption化された要素に古いlevelが残っていない。
 - コードへ変更した要素のlabelが `code` または `program_listing` である。
 - 表セルinline code spanがある場合、各spanがセル原文に完全一致する。
 

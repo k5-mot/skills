@@ -2138,8 +2138,8 @@ def test_render_markdown_uses_translated_json_fields() -> None:
     assert "| `api.call()` を実行 |" in markdown
 
 
-def test_apply_structure_patches_rejects_non_code_operations() -> None:
-    """Structureはコード化以外のlabel・本文・順序変更を拒否する。
+def test_apply_structure_patches_rejects_unsupported_operations() -> None:
+    """Structureは許可外のlabel・本文・順序変更を拒否する。
 
     Returns:
         なし。
@@ -2174,6 +2174,75 @@ def test_apply_structure_patches_rejects_non_code_operations() -> None:
     assert patched["texts"] == [
         {"self_ref": "#/texts/0", "label": "code", "text": "Body"},
         {"self_ref": "#/texts/1", "label": "paragraph", "text": "Title"},
+    ]
+
+
+def test_apply_structure_patches_corrects_heading_level_and_caption() -> None:
+    """Structureは見出し階層とcaptionの見出し誤検出を補正する。
+
+    Returns:
+        なし。
+    """
+
+    data = {
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "section_header",
+                "level": 1,
+                "text": "1.2 Scope",
+            },
+            {
+                "self_ref": "#/texts/1",
+                "label": "section_header",
+                "heading_level": 3,
+                "text": "Figure 1 Overview",
+            },
+            {"self_ref": "#/texts/2", "label": "paragraph", "text": "Body"},
+        ]
+    }
+
+    patched, applied = apply_structure_patches(
+        data,
+        [
+            {
+                "op": "set_heading_level",
+                "ref": "#/texts/0",
+                "level": 2,
+            },
+            {"op": "set_label", "ref": "#/texts/1", "label": "caption"},
+            {
+                "op": "set_heading_level",
+                "ref": "#/texts/2",
+                "level": 3,
+            },
+            {
+                "op": "set_heading_level",
+                "ref": "#/texts/0",
+                "level": 7,
+            },
+        ],
+    )
+
+    assert [entry["status"] for entry in applied] == [
+        "success",
+        "success",
+        "failed",
+        "failed",
+    ]
+    assert patched["texts"] == [
+        {
+            "self_ref": "#/texts/0",
+            "label": "section_header",
+            "level": 2,
+            "text": "1.2 Scope",
+        },
+        {
+            "self_ref": "#/texts/1",
+            "label": "caption",
+            "text": "Figure 1 Overview",
+        },
+        {"self_ref": "#/texts/2", "label": "paragraph", "text": "Body"},
     ]
 
 
@@ -2303,9 +2372,10 @@ def test_structure_messages_include_table_cells_for_inline_code_detection() -> N
     assert "#/tables/0/data/grid/0/0" in content
     assert "Run api.call() now" in content
     assert "set_table_cell_inline_code" in content
+    assert "set_heading_level" in content
+    assert '"label": "caption"' in content
     assert '"page":' not in content
     assert "coordinate_order" not in content
-    assert "set_level" not in content
     assert "set_text" not in content
     assert "reorder_texts" not in content
     assert "swap_texts" not in content
