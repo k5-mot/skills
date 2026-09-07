@@ -36,7 +36,7 @@ flowchart TD
     RULES -.-> REVIEW
     REVIEW --> REVIEWED["document.reviewed.json"]
 
-    REVIEWED --> MARKDOWN["RenderStage<br/>日本語Markdownを生成"]
+    REVIEWED --> MARKDOWN["MarkdownStage<br/>日本語Markdownを生成"]
     MARKDOWN --> JA_MD["document.ja.md"]
 
     JA_MD --> DOCX["DocxStage<br/>MarkdownをWordへ変換"]

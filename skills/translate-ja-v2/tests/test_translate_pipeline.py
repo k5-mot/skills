@@ -52,7 +52,7 @@ from translate import (  # noqa: E402
     read_translation_rules,
     is_retryable_libretranslate_error,
     require_libretranslate_settings,
-    RenderStage,
+    MarkdownStage,
     ReviewStage,
     run_pipeline,
     stage_is_resumable,
@@ -2430,7 +2430,7 @@ def test_render_markdown_uses_translated_json_fields() -> None:
         ],
     }
 
-    markdown = RenderStage._render_markdown(data)
+    markdown = MarkdownStage._render_markdown(data)
 
     assert "## Strategy / 戦略" in markdown
     assert "部隊が移動する。" in markdown

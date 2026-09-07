@@ -252,7 +252,7 @@ Qdrantにはバッチ内の各要素を個別queryとして1 HTTP requestへま�
 
 Reviewバッチ数を `B`、Adjudicatorが必要なバッチ数を `D` とすると、LLM呼出しは `2B + D`、Qdrant batch queryは通常 `B` 回である。RAGは検索結果を決定論的に整形し、別のLLMで要約しない。これによりRAG要約による根拠の変質と追加の `B` 回を避ける。失敗時にバッチが二分された場合は、成功する子バッチ分の呼出しが追加される。
 
-## 11. RenderStage
+## 11. MarkdownStage
 
 ### 入力と出力
 

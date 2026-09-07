@@ -6373,7 +6373,7 @@ class ReviewStage(FrozenModel):
         return reviewed
 
 
-class RenderStage(FrozenModel):
+class MarkdownStage(FrozenModel):
     """翻訳済み文書から Markdown を生成する。"""
 
     paths: StagePaths
@@ -6413,13 +6413,13 @@ class RenderStage(FrozenModel):
         """
 
         parts: list[str] = []
-        for group, index, item in RenderStage._collect_items(data):
+        for group, index, item in MarkdownStage._collect_items(data):
             if group == "texts":
-                rendered = RenderStage._render_text(item)
+                rendered = MarkdownStage._render_text(item)
             elif group == "tables":
-                rendered = RenderStage._render_table(item, self_ref(item, group, index))
+                rendered = MarkdownStage._render_table(item, self_ref(item, group, index))
             else:
-                rendered = RenderStage._render_picture(item)
+                rendered = MarkdownStage._render_picture(item)
             if rendered.strip():
                 parts.append(rendered.strip())
         return re.sub(r"\n{3,}", "\n\n", "\n\n".join(parts)).strip() + "\n"
@@ -6458,7 +6458,7 @@ class RenderStage(FrozenModel):
             Markdown table 断片。
         """
 
-        rows = RenderStage._table_rows(item, ref)
+        rows = MarkdownStage._table_rows(item, ref)
         if not rows:
             return text_of(item)
         width = max(len(row) for row in rows)
@@ -6474,9 +6474,9 @@ class RenderStage(FrozenModel):
         if caption:
             lines.append(f"**{caption}**")
             lines.append("")
-        lines.append(RenderStage._table_line(header))
-        lines.append(RenderStage._table_line(["---"] * width))
-        lines.extend(RenderStage._table_line(row) for row in body)
+        lines.append(MarkdownStage._table_line(header))
+        lines.append(MarkdownStage._table_line(["---"] * width))
+        lines.extend(MarkdownStage._table_line(row) for row in body)
         return "\n".join(lines)
 
     @staticmethod
@@ -6496,7 +6496,7 @@ class RenderStage(FrozenModel):
             return []
         grid = data.get("grid")
         if isinstance(grid, list):
-            return RenderStage._table_rows_from_grid(grid)
+            return MarkdownStage._table_rows_from_grid(grid)
         cells = iter_table_cells(item, ref)
         if not cells:
             return []
@@ -6512,7 +6512,7 @@ class RenderStage(FrozenModel):
             )
             if not isinstance(row, int) or not isinstance(col, int):
                 continue
-            normalized.append((row, col, RenderStage._cell_text(cell)))
+            normalized.append((row, col, MarkdownStage._cell_text(cell)))
             max_row = max(max_row, row)
             max_col = max(max_col, col)
         rows = [["" for _ in range(max_col + 1)] for _ in range(max_row + 1)]
@@ -6538,7 +6538,7 @@ class RenderStage(FrozenModel):
             rendered: list[str] = []
             for cell in row:
                 if isinstance(cell, dict):
-                    rendered.append(RenderStage._cell_text(cell))
+                    rendered.append(MarkdownStage._cell_text(cell))
                 else:
                     rendered.append(str(cell or "").strip())
             rows.append(rendered)
@@ -6560,7 +6560,7 @@ class RenderStage(FrozenModel):
         text = str(
             meta.get("render_text") or cell.get("text") or cell.get("content") or ""
         )
-        return RenderStage._render_inline_code(
+        return MarkdownStage._render_inline_code(
             text.replace("\n", " ").strip(), inline_code_spans(cell)
         )
 
@@ -6907,7 +6907,7 @@ def run_pipeline(args: PipelineOptions) -> StagePaths:
             max_batch_elements=args.max_batch_elements,
             review_rag=args.review_rag,
         ).run(translated)
-    markdown_path = RenderStage(paths=paths).run(render_source)
+    markdown_path = MarkdownStage(paths=paths).run(render_source)
     if not args.skip_docx:
         DocxStage(
             paths=paths,
