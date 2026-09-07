@@ -828,6 +828,38 @@ def test_read_glossary_csv_requires_new_schema(tmp_path: Path) -> None:
         read_glossary_csv(glossary_path)
 
 
+def test_external_input_examples_are_valid() -> None:
+    """外部ルール、用語集、DOCXテンプレートのサンプルを検証する。
+
+    Returns:
+        なし。
+    """
+
+    examples_dir = SCRIPT_DIR.parent / "examples"
+    assert "caption" in read_rules(examples_dir / "structure-rules.md")
+    assert "原文にない" in read_rules(examples_dir / "translation-rules.md")
+    assert "現在の訳文" in read_rules(examples_dir / "review-rules.md")
+    glossary = read_glossary_csv(examples_dir / "glossary.csv")
+    assert {entry["english-short"] for entry in glossary} >= {
+        "API",
+        "Docling",
+        "VLM",
+    }
+
+    with (
+        zipfile.ZipFile(examples_dir / "template.docx") as docx,
+        zipfile.ZipFile(examples_dir / "template.dotx") as dotx,
+    ):
+        docx_files = {name for name in docx.namelist() if not name.endswith("/")}
+        dotx_files = {name for name in dotx.namelist() if not name.endswith("/")}
+        assert docx_files == dotx_files
+        for name in docx_files - {"[Content_Types].xml"}:
+            assert docx.read(name) == dotx.read(name)
+        content_types = docx.read("[Content_Types].xml")
+        assert b"wordprocessingml.document.main+xml" in content_types
+        assert b"wordprocessingml.template.main+xml" not in content_types
+
+
 def test_english_abbreviation_rule_is_external_only() -> None:
     """英語略称ルールをexample外部ルールだけに保持する。
 

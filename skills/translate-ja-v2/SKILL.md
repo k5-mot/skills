@@ -1,6 +1,6 @@
 ---
 name: translate-ja-v2
-description: PDF/Word文書をDocling Serve、pypdfium2、LibreTranslateまたはOpenAI互換API、pandocで段階別JSON、ページ画像、日本語Markdown、Word docxへ変換し、manifestによる工程・要素単位Resumeを行う。Use when Codex runs or modifies scripts/translate.py, troubleshoots Parse/Normalize/Structure/Clean/Translate/Review/Markdown/Docx stages, validates translation output, or maintains the bundled DOTX template.
+description: PDF/Word文書をDocling Serve、pypdfium2、LibreTranslateまたはOpenAI互換API、pandocで段階別JSON、ページ画像、日本語Markdown、Word docxへ変換し、manifestによる工程・要素単位Resumeを行う。Use when Codex runs or modifies scripts/translate.py, troubleshoots Parse/Normalize/Structure/Clean/Translate/Review/Markdown/Docx stages, validates translation output, or maintains the bundled DOCX/DOTX templates and external rule or glossary samples.
 ---
 
 # translate-ja-v2
@@ -14,7 +14,7 @@ PDF/Word文書を解析し、構造補正、clean、日本語翻訳、レビュ�
 - パイプラインの実行、Stageの処理順、Resume、障害調査: [workflow.md](references/workflow.md)
 - `translate.py`、CLI、依存関係、データ、hash、API設定の変更: [spec.md](references/spec.md)
 - テスト、統合検証、期待値の確認: [test.md](references/test.md)
-- `examples/template.dotx` の作成、修正、検証: [template-format.md](references/template-format.md)
+- `examples/template.docx` / `examples/template.dotx` の作成、修正、検証: [template-format.md](references/template-format.md)
 
 実装と文書が矛盾する場合は、実際に検証された `scripts/translate.py` とテストを確認し、同じ変更で対応する参照資料も更新する。
 
@@ -26,7 +26,10 @@ PDF/Word文書を解析し、構造補正、clean、日本語翻訳、レビュ�
 uv run python skills/translate-ja-v2/scripts/translate.py \
   --input ./inputs/sample.pdf \
   --output-dir ./outputs/sample \
-  --template ./skills/translate-ja-v2/examples/template.dotx
+  --template ./skills/translate-ja-v2/examples/template.docx \
+  --glossary ./skills/translate-ja-v2/examples/glossary.csv \
+  --structure-rules ./skills/translate-ja-v2/examples/structure-rules.md \
+  --review-rules ./skills/translate-ja-v2/examples/review-rules.md
 ```
 
 同じ設定と出力先で再実行し、validな完了工程と要素をResumeする。Structure、Translate、Reviewは要素単位、その他は工程単位である。全ステージの検証では `--skip-vlm`、`--skip-review`、`--skip-docx` を指定しない。

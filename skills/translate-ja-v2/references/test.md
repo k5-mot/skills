@@ -51,6 +51,7 @@ uv run pytest skills/translate-ja-v2/tests/test_translate_pipeline.py
 - 翻訳対象、コード・ページ装飾・記号の保護、見出し/本文/表の描画規則
 - `--translator` の既定値とLLM切替、共通Translate基底、LibreTranslate batch request・応答件数検証・client close
 - 新用語集schema、英語短縮名・正式名の一致、`note`除外、Translate・Reviewの共有用語集、Stage別ルール、意味ブロック、batch分割
+- `examples/` のStage別ルール、用語集schema、DOCX package種別、DOTXとの書式内容一致
 - StructureのJSON出力指定、4,096 tokens上限、空応答・不完全JSONのrequest retry
 - 完成したTranslate・Review messagesによるcontext上限分割、固定要素数に依存しない推定応答JSON上限分割
 - `--max-batch-elements 0` と正数のCLI受理、pipelineへの伝播、任意の件数上限・入力順保持、負数の拒否
@@ -105,9 +106,11 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
   --translator llm \
   --input ./inputs/sample.pdf \
   --output-dir ./outputs/sample-full-validation \
-  --template ./skills/translate-ja-v2/examples/template.dotx \
+  --template ./skills/translate-ja-v2/examples/template.docx \
   --glossary ./skills/translate-ja-v2/examples/glossary.csv \
-  --translation-rules ./skills/translate-ja-v2/examples/translation-rules.md
+  --structure-rules ./skills/translate-ja-v2/examples/structure-rules.md \
+  --translation-rules ./skills/translate-ja-v2/examples/translation-rules.md \
+  --review-rules ./skills/translate-ja-v2/examples/review-rules.md
 ```
 
 全ステージと3つのLLM工程を確認するため `--translator llm` を指定し、`--skip-vlm`、`--skip-review`、`--skip-docx` は指定しない。LibreTranslateはservice準備後、別の新規出力先で `--translator default` に変更してTranslateを検証する。出力先がすでに存在する場合は、削除せず別名の新規ディレクトリを使う。

@@ -1,6 +1,6 @@
-# template.dotx 書式仕様
+# template.docx / template.dotx 書式仕様
 
-この文書は `skills/translate-ja-v2/examples/template.dotx` の正本仕様である。テンプレートの作成、修正、検証では、以下の要件をすべて満たすこと。
+この文書は `skills/translate-ja-v2/examples/template.docx` と `template.dotx` の正本仕様である。DOCXはQuick Start用のreference document、DOTXは同じ書式を持つWordテンプレートとして提供する。テンプレートの作成、修正、検証では、以下の要件をすべて満たすこと。
 
 ## 1. 基本フォント・色
 

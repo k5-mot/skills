@@ -41,7 +41,7 @@ flowchart TD
     MARKDOWN --> JA_MD["document.ja.md"]
 
     JA_MD --> DOCX["DocxStage<br/>MarkdownをWordへ変換"]
-    TEMPLATE["template.dotx"] -.-> DOCX
+    TEMPLATE["template.docx / template.dotx"] -.-> DOCX
     DOCX --> JA_DOCX["document.ja.docx"]
 
     PARSE -.-> MANIFEST["manifest.json"]

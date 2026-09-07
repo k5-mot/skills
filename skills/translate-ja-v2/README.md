@@ -35,7 +35,10 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
   --max-batch-elements 0 \
   --input ./inputs/sample.pdf \
   --output-dir ./outputs/sample \
-  --template ./skills/translate-ja-v2/examples/template.dotx
+  --template ./skills/translate-ja-v2/examples/template.docx \
+  --glossary ./skills/translate-ja-v2/examples/glossary.csv \
+  --structure-rules ./skills/translate-ja-v2/examples/structure-rules.md \
+  --review-rules ./skills/translate-ja-v2/examples/review-rules.md
 ```
 
 TranslateにもLLMを使って全ステージを実行する場合は、次のように指定します。
@@ -48,17 +51,14 @@ uv run python skills/translate-ja-v2/scripts/translate.py \
   --max-batch-elements 0 \
   --input ./inputs/sample.pdf \
   --output-dir ./outputs/sample \
-  --template ./skills/translate-ja-v2/examples/template.dotx \
+  --template ./skills/translate-ja-v2/examples/template.docx \
   --glossary ./skills/translate-ja-v2/examples/glossary.csv \
-  --translation-rules ./skills/translate-ja-v2/examples/translation-rules.md
+  --structure-rules ./skills/translate-ja-v2/examples/structure-rules.md \
+  --translation-rules ./skills/translate-ja-v2/examples/translation-rules.md \
+  --review-rules ./skills/translate-ja-v2/examples/review-rules.md
 ```
 
-StructureとReviewへ別々の外部ルールを渡す場合は、それぞれ次のoptionを追加します。`--translation-rules` はLLM Translateだけに適用されます。
-
-```bash
-  --structure-rules ./rules/structure-rules.md \
-  --review-rules ./rules/review-rules.md
-```
+`--structure-rules`、`--translation-rules`、`--review-rules` はそれぞれ対応するStageだけに適用されます。既定のLibreTranslateでは `--translation-rules` を使用しません。
 
 ReviewはFidelity ReviewerとTerminology Reviewerを並列実行し、不一致要素だけをAdjudicatorで裁定します。Qdrantのドメイン根拠も使う場合は次のoptionを追加します。`QDRANT_COLLECTION` 未指定時は、Qdrant上にcollectionが1件だけなら自動選択します。
 
