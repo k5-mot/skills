@@ -71,6 +71,8 @@ TranslateにもLLMを使う場合は `--translator llm` と翻訳ルールを指
 
 用語集schemaは `english-short,english-long,japanse-short,japanese-long,kind,description,note,reference` です。検索は英語2列に対して行い、一致した行だけをLLMへ渡します。`note` と `reference` は内部管理用で、promptには含めません。
 
+Langfuseを使う場合は `.env` に `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`、必要に応じて `LANGFUSE_BASE_URL` と `LANGFUSE_TRACING_ENVIRONMENT` を設定します。両keyが未設定ならtracingは無効です。片方だけの設定は誤構成として停止します。
+
 Review RAGへ文書を登録する場合は、ファイルまたはディレクトリを指定します。対応形式はPDF、DOCX/DOTX、Markdown、UTF-8テキスト系です。
 
 ```bash

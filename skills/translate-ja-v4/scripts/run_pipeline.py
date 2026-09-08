@@ -12,6 +12,7 @@ import typer
 
 from translate_ja_v4 import PipelineOptions, TranslationBackend, run
 from translate_ja_v4.io import LOGGER, configure_logging, load_environment
+from translate_ja_v4.llm import flush_langfuse
 
 app = typer.Typer(
     add_completion=False,
@@ -174,6 +175,8 @@ def cli(
     except Exception as error:
         LOGGER.exception("translate-ja-v4 failed: %s", error)
         raise typer.Exit(code=1) from None
+    finally:
+        flush_langfuse()
     LOGGER.info("Outputs markdown=%s docx=%s", paths.markdown, paths.docx)
 
 

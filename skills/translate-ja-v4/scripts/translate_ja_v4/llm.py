@@ -11,13 +11,62 @@ from typing import Any, Literal, TypeVar, cast
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import Runnable
+from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
+from langfuse import get_client
+from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel
 
 from .config import PipelineOptions
+from .io import LOGGER
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
+
+
+def _langfuse_config(trace_name: str) -> RunnableConfig:
+    """環境変数が揃う場合だけLangfuse callback設定を作る。
+
+    Args:
+        trace_name: Langfuseで識別するStage・agent名。
+
+    Returns:
+        LangChain runnableへ渡すrun名、tag、任意のcallback。
+
+    Raises:
+        RuntimeError: Langfuse credentialが片方だけ設定されている場合。
+    """
+
+    public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+    secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+    if bool(public_key) != bool(secret_key):
+        raise RuntimeError(
+            "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY must be set together"
+        )
+    config: RunnableConfig = {
+        "run_name": f"translate-ja-v4.{trace_name}",
+        "tags": ["translate-ja-v4", trace_name],
+    }
+    if public_key and secret_key:
+        config["callbacks"] = [CallbackHandler()]
+    return config
+
+
+def flush_langfuse() -> None:
+    """有効なLangfuse clientの送信待ちtraceをflushする。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        credential設定時だけLangfuse endpointへ未送信eventを送る。
+    """
+
+    if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
+        return
+    try:
+        get_client().flush()
+    except Exception as error:
+        LOGGER.warning("Failed to flush Langfuse traces error=%s", error)
 
 
 def estimate_output_tokens(
@@ -131,7 +180,11 @@ def chat_model(options: PipelineOptions, *, max_tokens: int) -> ChatOpenAI:
 
 
 def structured_model(
-    options: PipelineOptions, schema: type[SchemaT], *, max_tokens: int
+    options: PipelineOptions,
+    schema: type[SchemaT],
+    *,
+    max_tokens: int,
+    trace_name: str = "llm",
 ) -> Runnable[Any, SchemaT]:
     """Pydantic schemaを返すLangChain runnableを作る。
 
@@ -139,6 +192,7 @@ def structured_model(
         options: LLM接続に使う設定。
         schema: 応答Pydantic model。
         max_tokens: 応答token上限。
+        trace_name: Langfuseのrun名とtagに使う識別子。
 
     Returns:
         検証済みschemaを返すrunnable。
@@ -148,12 +202,13 @@ def structured_model(
         Literal["function_calling", "json_mode", "json_schema"],
         os.getenv("OPENAI_STRUCTURED_METHOD", "json_mode"),
     )
-    return cast(
+    runnable = cast(
         Runnable[Any, SchemaT],
         chat_model(options, max_tokens=max_tokens).with_structured_output(
             schema, method=method
         ),
     )
+    return runnable.with_config(_langfuse_config(trace_name))
 
 
 def prompt_runnable(
@@ -163,6 +218,7 @@ def prompt_runnable(
     human: str,
     *,
     max_tokens: int,
+    trace_name: str = "llm",
 ) -> Runnable[dict[str, Any], SchemaT]:
     """ChatPromptTemplateとstructured modelをLCELで結合する。
 
@@ -172,13 +228,16 @@ def prompt_runnable(
         system: system prompt template。
         human: human prompt template。
         max_tokens: 応答token上限。
+        trace_name: Langfuseのrun名とtagに使う識別子。
 
     Returns:
         template変数dictを受け取るLCEL runnable。
     """
 
     prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
-    return prompt | structured_model(options, schema, max_tokens=max_tokens)
+    return prompt | structured_model(
+        options, schema, max_tokens=max_tokens, trace_name=trace_name
+    )
 
 
 def image_messages(

@@ -33,7 +33,7 @@ from translate_ja_v4.io import (
     stage_cached,
     write_json,
 )
-from translate_ja_v4.llm import estimate_output_tokens, llm_batches
+from translate_ja_v4.llm import _langfuse_config, estimate_output_tokens, llm_batches
 from translate_ja_v4.stages.clean import clean
 from translate_ja_v4.stages.docx import _enhance_word, _fix_heading_spacing
 from translate_ja_v4.stages.markdown import (
@@ -269,6 +269,54 @@ def test_llm_batches_obey_estimated_output_limit() -> None:
     result = llm_batches(items, 10_000, 0, 350)
     assert [len(batch) for batch in result] == [2, 1]
     assert estimate_output_tokens(200, 2) == 346
+
+
+def test_langfuse_callback_is_optional_and_named(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Langfuseが未設定なら無効、設定時はStage名付きcallbackになることを確認する。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        なし。
+    """
+
+    import translate_ja_v4.llm as module
+
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    assert "callbacks" not in _langfuse_config("translate")
+
+    class FakeHandler:
+        """外部送信を行わないtest用Langfuse handler。"""
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "public")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "secret")
+    monkeypatch.setattr(module, "CallbackHandler", FakeHandler)
+    config = _langfuse_config("structure")
+    assert config["run_name"] == "translate-ja-v4.structure"
+    assert config["tags"] == ["translate-ja-v4", "structure"]
+    assert isinstance(config["callbacks"][0], FakeHandler)
+
+
+def test_langfuse_rejects_partial_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Langfuse credentialの片側だけを設定した誤構成を拒否する。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        なし。
+    """
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "public")
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="must be set together"):
+        _langfuse_config("translate")
 
 
 def test_translation_targets_include_text_caption_and_cell() -> None:
@@ -1101,6 +1149,7 @@ def test_review_graph_adjudicates_only_disputes(
         _human: str,
         *,
         max_tokens: int,
+        trace_name: str = "llm",
     ) -> FakeChain:
         """system promptからroleを選ぶfake factoryを返す。
 
@@ -1110,12 +1159,13 @@ def test_review_graph_adjudicates_only_disputes(
             system: roleを含むsystem prompt。
             _human: 未使用のhuman prompt。
             max_tokens: 未使用の出力上限。
+            trace_name: 未使用のLangfuse識別子。
 
         Returns:
             FakeChain。
         """
 
-        del max_tokens
+        del max_tokens, trace_name
         role = "adjudicator" if "Adjudicator" in system else system.split()[0]
         return FakeChain(role)
 

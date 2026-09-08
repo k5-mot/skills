@@ -84,6 +84,7 @@ def _reviewer(
         ),
         "Reviewルール:\n{rules}\n\n入力JSON:\n{items}",
         max_tokens=16_384,
+        trace_name=f"review-{role}",
     )
     response = chain.invoke(
         {
@@ -163,6 +164,7 @@ def _adjudicate(state: ReviewBatchState) -> dict[str, Any]:
             ),
             "Reviewルール:\n{rules}\n\n競合JSON:\n{items}",
             max_tokens=16_384,
+            trace_name="review-adjudicator",
         )
         response = chain.invoke(
             {"rules": state["rules"], "items": json.dumps(disputes, ensure_ascii=False)}

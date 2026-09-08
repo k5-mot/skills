@@ -209,7 +209,9 @@ patch形式:
 """
     if len(prompt) > options.context_chars:
         raise ValueError("Structure prompt exceeds context_chars")
-    runnable = structured_model(options, StructureResponse, max_tokens=4096)
+    runnable = structured_model(
+        options, StructureResponse, max_tokens=4096, trace_name="structure"
+    )
     return runnable.invoke(image_messages(system, prompt, image)).patches
 
 

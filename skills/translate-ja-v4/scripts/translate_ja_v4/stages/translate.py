@@ -203,6 +203,7 @@ class LLMTranslator(Translator):
             ),
             "翻訳ルール:\n{rules}\n\n入力JSON:\n{items}",
             max_tokens=16_384,
+            trace_name="translate",
         )
 
     def translate(self, batch: list[dict[str, Any]]) -> dict[str, str]:

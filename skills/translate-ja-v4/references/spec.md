@@ -32,6 +32,7 @@ flowchart TD
 - LangGraph: pipeline graph、並列Review subgraph、retry、SQLite checkpoint
 - `langchain-openai`: OpenAI互換Chat/Embedding model
 - `langchain-qdrant`: 任意のReview RAG
+- Langfuse: LangChain callbackによる任意のLLM/VLM tracing
 - httpx: Docling Serve、LibreTranslate
 - pypdfium2: PDF分割、text objectのspan抽出、ローカルpage image生成
 - Pydantic: CLI設定とLLM出力schema
@@ -59,6 +60,8 @@ ParseStageはversion文字列を完全固定せず、`schema_name=DoclingDocumen
 span schemaは `id`、`text`、`bbox`、`font`、`size`、`weight` とする。bboxは `BOTTOMLEFT` に統一し、sizeはPDF text objectのfont sizeへ変換matrixのscaleを掛けた実効値とする。Structure payloadへはDocling要素のbboxと15%以上重なる同一ページspanだけを含める。
 
 LibreTranslateはv1.9.6互換 `/translate` の配列入力を使う。送信対象は翻訳対象要素のtextだけとし、URL、path、command option、inline code、identifierを衝突しないplaceholderで保護して応答後に復元する。OpenAI互換APIは `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` を使い、Pydantic structured outputで検証する。
+
+`LANGFUSE_PUBLIC_KEY` と `LANGFUSE_SECRET_KEY` が両方ある場合、Langfuse v3以降のLangChain `CallbackHandler` を有効にする。run名は `translate-ja-v4.<stage-or-agent>` とし、Structure、Translate、Fidelity Reviewer、Terminology Reviewer、Adjudicatorを区別する。CLI終了時にeventをflushする。両keyが未設定なら外部送信せず、片方だけなら設定errorにする。endpointと環境はLangfuse標準の `LANGFUSE_BASE_URL`、`LANGFUSE_TRACING_ENVIRONMENT` に従う。
 
 Review RAGは `QDRANT_URI`、`QDRANT_API_KEY`、`QDRANT_COLLECTION` を使う。collection未指定時は1件だけ存在するときに限り自動選択する。
 
@@ -125,12 +128,10 @@ fieldの表示結果はWordなどのfield更新対応アプリで更新する。
 | 元実装 | 未継承機能 | v4での判断点 |
 | --- | --- | --- |
 | translate-ja | `run.sh` / `run.ps1` wrapper | uv CLIだけで十分か、OS別entrypointが必要か。 |
-| translate-ja | Langfuse trace header | LangChain callback/tracingへ統合するか。 |
 | translate-ja | 独立したchunk JSONL、page番号・見出しpath・asset参照付きchunk | 要素metadataとmanifestに加えて交換用JSONLが必要か。 |
 | translate-ja | LLM streaming差分log | 機密原文がDEBUG logへ出るriskを許容するか。 |
 | translate-ja | chunkごとのattempt/statusと `fallback_source` | 失敗を例外にするv4契約から原文fallbackへ変えるか。 |
 | translate-ja | HTML labelを独立chunkとして保持 | Docling HTML要素をMarkdownへどう描画するか。 |
 | translate-ja-v2 | status別の細粒度retry分類 | 現在のAPI retry・batch二分をさらに分けるか。 |
-| translate-ja-v2 | Qdrant payload field名とtimeoutの個別設定 | 接続先schemaの可変性が必要か。 |
 
 なお `translate-ja/SPEC_v2.md` の未完了checklistは実装済み機能ではないため、この一覧には含めない。
