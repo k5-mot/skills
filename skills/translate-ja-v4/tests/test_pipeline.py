@@ -15,6 +15,7 @@ import httpx
 from translate_ja_v4.config import PipelineOptions, build_paths, initial_state
 from translate_ja_v4.document import (
     batches,
+    iter_table_cells,
     matching_spans,
     resolve_target,
     translation_targets,
@@ -223,6 +224,48 @@ def test_translation_targets_include_text_caption_and_cell() -> None:
         "#/tables/0/data/grid/0/0",
     ]
     assert resolve_target(_document(), targets[-1]["path"])["text"].startswith("Call")
+
+
+@pytest.mark.parametrize("cell_key", ["table_cells", "cells"])
+def test_flat_table_cells_flow_through_later_stages(cell_key: str) -> None:
+    """flat table schemaをStructure、Clean、Translate、Markdownで共有する。
+
+    Args:
+        cell_key: 検証するDocling flat cell key。
+
+    Returns:
+        なし。
+    """
+
+    cell = {
+        "text": "Call api()......",
+        "start_row_offset_idx": 0,
+        "start_col_offset_idx": 0,
+        "structure_ja_v4": {"inline_code_spans": ["api()"]},
+    }
+    document = {
+        "texts": [],
+        "pictures": [],
+        "tables": [
+            {
+                "self_ref": "#/tables/0",
+                "label": "table",
+                "prov": [{"page_no": 1}],
+                "data": {cell_key: [cell], "num_rows": 1, "num_cols": 1},
+            }
+        ],
+        "pages": {"1": {}},
+    }
+    entries = list(iter_table_cells(document["tables"][0], 0))
+    assert entries[0][0] == f"#/tables/0/data/{cell_key}/0"
+    assert _page_payload(document, 1)["cells"][0]["text"].startswith("Call")
+    target = translation_targets(document)[0]
+    assert target["path"] == ["tables", 0, "data", cell_key, 0]
+    cleaned = clean(document)
+    cleaned_cell = cleaned["tables"][0]["data"][cell_key][0]
+    assert cleaned_cell["text"].endswith("...")
+    cleaned_cell["translate_ja_v4"] = {"render_text": "api()を呼ぶ"}
+    assert "`api()`を呼ぶ" in markdown(cleaned)
 
 
 def test_translation_targets_keep_appendix_headings_in_english() -> None:

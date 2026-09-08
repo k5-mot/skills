@@ -25,6 +25,7 @@ uv run python /home/penguin/.codex/skills/.system/skill-creator/scripts/quick_va
 - PipelineOptions: API timeout/retry、Stage retry、PDF分割ページ数がCLIから型付き設定へ渡る。
 - Parse: `#/texts/0` 等のref、page number、artifact URIをchunk offsetで再採番し、PDF spanのbbox、font、実効size、weightを抽出する。
 - Normalize: header/footer、図中文字、目次系ページを参照ごと削除する。座標順、本文・list・code断片、同一ページ/改ページtable断片を補正し、全参照を維持する。
+- table: `grid`、`table_cells`、`cells` の更新先をStructure、Clean、Translate、Review、Markdownで共通して扱う。
 - Structure: 対応spanをpayloadへ含め、許可されたpatchだけを適用し、code結合後もrefを削除しない。既知操作の短縮応答を正規化し、許可外の値を無視し、失敗batchを二分し、見出し階層の飛びを丸める。
 - Clean: 本文と表セルのdot・中黒を3文字へ縮め、codeとinline codeを保持する。
 - glossary: 8列を必須とし、英語2列だけで検索し、`note` と `reference` をprompt行から除く。

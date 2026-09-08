@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from collections.abc import Iterator
+from typing import Any, cast
 
 from .io import self_ref, text_of
 
@@ -83,6 +84,69 @@ def matching_spans(
     return matched
 
 
+def iter_table_cells(
+    table: dict[str, Any], table_index: int
+) -> Iterator[tuple[str, list[str | int], dict[str, Any], int, int]]:
+    """既知のDocling table schemaからcellと更新先を列挙する。
+
+    Args:
+        table: `grid`、`table_cells`、`cells`のいずれかを持つtable。
+        table_index: documentのtables配列内index。
+
+    Yields:
+        ref、document内path、cell object、row番号、column番号。
+    """
+
+    data = table.get("data")
+    if not isinstance(data, dict):
+        return
+    grid = data.get("grid")
+    if isinstance(grid, list) and grid:
+        for row_index, row in enumerate(grid):
+            if not isinstance(row, list):
+                continue
+            for column_index, cell in enumerate(row):
+                if isinstance(cell, dict):
+                    ref = f"#/tables/{table_index}/data/grid/{row_index}/{column_index}"
+                    yield (
+                        ref,
+                        [
+                            "tables",
+                            table_index,
+                            "data",
+                            "grid",
+                            row_index,
+                            column_index,
+                        ],
+                        cast(dict[str, Any], cell),
+                        row_index,
+                        column_index,
+                    )
+        return
+    key = next(
+        (name for name in ("table_cells", "cells") if isinstance(data.get(name), list)),
+        None,
+    )
+    if key is None:
+        return
+    for index, cell in enumerate(data[key]):
+        if not isinstance(cell, dict):
+            continue
+        row = cell.get("start_row_offset_idx", cell.get("row", cell.get("row_idx", 0)))
+        column = cell.get(
+            "start_col_offset_idx", cell.get("col", cell.get("col_idx", 0))
+        )
+        if not isinstance(row, int) or not isinstance(column, int):
+            continue
+        yield (
+            f"#/tables/{table_index}/data/{key}/{index}",
+            ["tables", table_index, "data", key, index],
+            cast(dict[str, Any], cell),
+            row,
+            column,
+        )
+
+
 def translation_targets(document: dict[str, Any]) -> list[dict[str, Any]]:
     """本文、表題、表セルから英語を含む翻訳対象を文書順に集める。
 
@@ -128,28 +192,16 @@ def translation_targets(document: dict[str, Any]) -> list[dict[str, Any]]:
                     "field": field,
                 }
             )
-        grid = table.get("data", {}).get("grid", [])
-        for row_index, row in enumerate(grid if isinstance(grid, list) else []):
-            for column_index, cell in enumerate(row if isinstance(row, list) else []):
-                if isinstance(cell, dict) and _translatable(text_of(cell), "cell"):
-                    targets.append(
-                        {
-                            "id": (
-                                f"#/tables/{table_index}/data/grid/"
-                                f"{row_index}/{column_index}"
-                            ),
-                            "source": text_of(cell),
-                            "kind": "body",
-                            "path": [
-                                "tables",
-                                table_index,
-                                "data",
-                                "grid",
-                                row_index,
-                                column_index,
-                            ],
-                        }
-                    )
+        for ref, path, cell, _row, _column in iter_table_cells(table, table_index):
+            if _translatable(text_of(cell), "cell"):
+                targets.append(
+                    {
+                        "id": ref,
+                        "source": text_of(cell),
+                        "kind": "body",
+                        "path": path,
+                    }
+                )
     return targets
 
 

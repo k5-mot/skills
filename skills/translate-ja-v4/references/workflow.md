@@ -43,7 +43,7 @@ Word入力は分割せずDocling Serveへ送る。`--force` がなければ完�
 
 残った座標付きtextをpage、縦位置、横位置で並べ替える。座標がない要素のslotは保つ。その後、同じ親・ページ・行またはPDF spanに属する本文/list断片、近接している改行分割本文、既にcodeと判定された断片を連結する。codeは改行、それ以外は必要な空白で結ぶ。
 
-同じ列数を持ち、同一ページで近接するか連続ページの下端・上端に接するtableは連結する。重複したheader rowを除き、grid、table_cells、provを統合する。ここでは明白な断片だけを扱い、本文をcodeへ再分類するような意味判断はStructureStageへ残す。
+同じ列数を持ち、同一ページで近接するか連続ページの下端・上端に接するtableは連結する。重複したheader rowを除き、grid、table_cellsまたはcells、provを統合する。ここでは明白な断片だけを扱い、本文をcodeへ再分類するような意味判断はStructureStageへ残す。
 
 ## StructureStage
 
@@ -57,7 +57,7 @@ Word入力は分割せずDocling Serveへ送る。`--force` がなければ完�
 
 ## TranslateStage
 
-英字を含む本文、見出し、table caption、table cellを対象にする。code、page header/footer、および `APPENDIX <番号または英字>` 以降の付録内見出しは除外する。したがって付録の見出しだけが英語のまま残り、付録本文は翻訳される。原文は上書きせず `translate_ja_v4` metadataへ英語、日本語、描画文字列、種別を保存する。通常見出しは英日併記、本文は日本語だけを描画する。
+英字を含む本文、見出し、table caption、table cellを対象にする。table cellは `data.grid`、`data.table_cells`、`data.cells` を共通iteratorで走査し、Structure、Clean、Translate、Review、Markdownで同じ更新先pathを使う。code、page header/footer、および `APPENDIX <番号または英字>` 以降の付録内見出しは除外する。したがって付録の見出しだけが英語のまま残り、付録本文は翻訳される。原文は上書きせず `translate_ja_v4` metadataへ英語、日本語、描画文字列、種別を保存する。通常見出しは英日併記、本文は日本語だけを描画する。
 
 LLM backendはLangChainの `ChatPromptTemplate | with_structured_output` LCEL chainを使う。各要素では英語2列に一致した用語だけを添付し、`note` と `reference` は除外する。LibreTranslate backendは同じ基底classを実装し、配列を一括送信する。
 

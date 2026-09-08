@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from ..config import PipelineState, state_paths
+from ..document import iter_table_cells
 from ..io import (
     LOGGER,
     hash_file,
@@ -51,32 +52,26 @@ def _inline_code(text: str, item: dict[str, Any]) -> str:
     return text
 
 
-def _table(table: dict[str, Any]) -> str:
+def _table(table: dict[str, Any], table_index: int) -> str:
     """Docling tableをMarkdown tableへ変換する。
 
     Args:
         table: Docling table要素。
+        table_index: documentのtables配列内index。
 
     Returns:
         captionを含むMarkdown断片。
     """
 
-    rows: list[list[str]] = []
-    grid = table.get("data", {}).get("grid", [])
-    for row in grid if isinstance(grid, list) else []:
-        values = []
-        for cell in row if isinstance(row, list) else []:
-            value = (
-                _inline_code(_render_value(cell), cell)
-                if isinstance(cell, dict)
-                else str(cell)
-            )
-            values.append(value.replace("|", "\\|").replace("\n", "<br>"))
-        rows.append(values)
-    if not rows:
+    cells = list(iter_table_cells(table, table_index))
+    if not cells:
         return ""
-    width = max(map(len, rows))
-    rows = [row + [""] * (width - len(row)) for row in rows]
+    height = max(cell[3] for cell in cells) + 1
+    width = max(cell[4] for cell in cells) + 1
+    rows = [["" for _column in range(width)] for _row in range(height)]
+    for _ref, _path, cell, row, column in cells:
+        value = _inline_code(_render_value(cell), cell)
+        rows[row][column] = value.replace("|", "\\|").replace("\n", "<br>")
     lines: list[str] = []
     caption = _render_value(table)
     if caption:
@@ -97,10 +92,10 @@ def markdown(document: dict[str, Any]) -> str:
         UTF-8 Markdown文字列。
     """
 
-    entries: list[tuple[int, int, str, dict[str, Any]]] = []
+    entries: list[tuple[int, int, str, dict[str, Any], int]] = []
     order = 0
     for group in ("texts", "tables", "pictures"):
-        for item in document.get(group, []):
+        for index, item in enumerate(document.get(group, [])):
             if not isinstance(item, dict):
                 continue
             prov = item.get("prov") or [{}]
@@ -109,12 +104,12 @@ def markdown(document: dict[str, Any]) -> str:
                 if isinstance(prov, list) and prov
                 else 10**9
             )
-            entries.append((int(page), order, group, item))
+            entries.append((int(page), order, group, item, index))
             order += 1
     parts: list[str] = []
-    for _page, _order, group, item in sorted(entries):
+    for _page, _order, group, item, index in sorted(entries):
         if group == "tables":
-            value = _table(item)
+            value = _table(item, index)
         elif group == "pictures":
             uri = item.get("image", {}).get("uri") or item.get("uri")
             value = f"![{text_of(item) or 'image'}]({uri})" if uri else ""

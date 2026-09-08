@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from ..config import PipelineState, state_paths
+from ..document import iter_table_cells
 from ..io import (
     LOGGER,
     hash_file,
@@ -64,20 +65,16 @@ def clean(document: dict[str, Any]) -> dict[str, Any]:
             continue
         if isinstance(item.get("text"), str):
             item["text"] = _collapse(item["text"], [])
-    for table in result.get("tables", []):
+    for table_index, table in enumerate(result.get("tables", [])):
         if not isinstance(table, dict):
             continue
-        grid = table.get("data", {}).get("grid", [])
-        for row in grid if isinstance(grid, list) else []:
-            for cell in row if isinstance(row, list) else []:
-                if not isinstance(cell, dict):
-                    continue
-                spans = cell.get("structure_ja_v4", {}).get("inline_code_spans", [])
-                for key in ("text", "content"):
-                    if isinstance(cell.get(key), str):
-                        cell[key] = _collapse(
-                            cell[key], spans if isinstance(spans, list) else []
-                        )
+        for _ref, _path, cell, _row, _column in iter_table_cells(table, table_index):
+            spans = cell.get("structure_ja_v4", {}).get("inline_code_spans", [])
+            for key in ("text", "content"):
+                if isinstance(cell.get(key), str):
+                    cell[key] = _collapse(
+                        cell[key], spans if isinstance(spans, list) else []
+                    )
     return result
 
 

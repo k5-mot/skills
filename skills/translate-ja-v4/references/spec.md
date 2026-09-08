@@ -93,7 +93,9 @@ JSONとmanifestは同一directoryの一時ファイルを `os.replace` してato
 
 NormalizeStageはheader/footer、picture配下の非caption text、`document_index` を含むページを削除する。削除後と並べ替え・結合後にtop-level collectionを再採番し、body、furniture、parent、childrenを含む参照を更新する。
 
-本文・listは同一親・同一ページで、同一行、同一PDF span、または左端が揃った近接行という根拠があるときだけ結合する。終端記号で終わる本文は次段落と結合しない。既存code断片は改行で結合する。tableは同じ列数と連続座標を必須とし、gridと `table_cells` のrow offsetを統合する。意味判断が必要な本文からcodeへの変更とcode結合はStructureStageのpatchで行う。
+本文・listは同一親・同一ページで、同一行、同一PDF span、または左端が揃った近接行という根拠があるときだけ結合する。終端記号で終わる本文は次段落と結合しない。既存code断片は改行で結合する。tableは同じ列数と連続座標を必須とし、gridと `table_cells` / `cells` のrow offsetを統合する。意味判断が必要な本文からcodeへの変更とcode結合はStructureStageのpatchで行う。
+
+table cell走査は `data.grid` を優先し、gridが空または存在しない場合に `data.table_cells`、`data.cells` の順で選ぶ。flat cellのrow/columnは `start_*_offset_idx`、`row` / `col`、`row_idx` / `col_idx` の順で解決する。同じ共通iteratorをStructure、Clean、Translate、Review、Markdownが利用し、翻訳metadataは元のcell objectへ保存する。
 
 StructureStageはVLM patch適用後、見出しlevelを1〜6に制限し、先頭をlevel 1、後続を直前から最大1段深い値へ丸める。caption誤検出、code、表セルinline codeの変更は許可されたpatchだけを適用する。
 
@@ -124,7 +126,6 @@ fieldの表示結果はWordなどのfield更新対応アプリで更新する。
 | translate-ja | HTML labelを独立chunkとして保持 | Docling HTML要素をMarkdownへどう描画するか。 |
 | translate-ja-v2 | Docling JSON schema/version/page数の厳格検証 | 対応Docling versionを固定するか。 |
 | translate-ja-v2 | artifacts directoryのatomic置換とdirectory hash | 大容量artifact複製costと完全性のどちらを優先するか。 |
-| translate-ja-v2 | `grid` 以外の `data.table_cells` / `data.cells` 翻訳走査 | Docling schema差をどこまで互換にするか。 |
 | translate-ja-v2 | URL・path・identifierの保護heuristic | LibreTranslate前後の置換方式を導入するか。 |
 | translate-ja-v2 | LLM出力長の事前見積り | 利用modelごとのtoken上限をCLI化するか。 |
 | translate-ja-v2 | status別の細粒度retry分類 | 現在のAPI retry・batch二分をさらに分けるか。 |

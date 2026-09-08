@@ -556,8 +556,24 @@ def _merge_table_fragments(document: dict[str, Any]) -> set[str]:
         previous_rows = int(left["data"].get("num_rows", len(left_grid) - len(rows)))
         dropped_header = bool(right_grid and rows != list(right_grid))
         row_offset = previous_rows - int(dropped_header)
-        right_cells = right.get("data", {}).get("table_cells", [])
-        left_cells = left["data"].setdefault("table_cells", [])
+        left_key = next(
+            (
+                key
+                for key in ("table_cells", "cells")
+                if isinstance(left["data"].get(key), list)
+            ),
+            "table_cells",
+        )
+        right_data = right.get("data", {})
+        right_cells = next(
+            (
+                right_data[key]
+                for key in ("table_cells", "cells")
+                if isinstance(right_data.get(key), list)
+            ),
+            [],
+        )
+        left_cells = left["data"].setdefault(left_key, [])
         if isinstance(left_cells, list) and isinstance(right_cells, list):
             for cell in right_cells:
                 if not isinstance(cell, dict):

@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field, model_validator
 
 from ..config import PipelineOptions, PipelineState, state_options, state_paths
-from ..document import matching_spans
+from ..document import iter_table_cells, matching_spans
 from ..io import (
     LOGGER,
     hash_file,
@@ -131,17 +131,14 @@ def _page_payload(
     for table_index, table in enumerate(document.get("tables", [])):
         if not isinstance(table, dict) or _page_no(table) != page:
             continue
-        grid = table.get("data", {}).get("grid", [])
-        for row_index, row in enumerate(grid if isinstance(grid, list) else []):
-            for column_index, cell in enumerate(row if isinstance(row, list) else []):
-                if isinstance(cell, dict):
-                    cells.append(
-                        {
-                            "ref": f"#/tables/{table_index}/data/grid/{row_index}/{column_index}",
-                            "text": text_of(cell)[:500],
-                            "bbox": cell.get("bbox"),
-                        }
-                    )
+        for ref, _path, cell, _row, _column in iter_table_cells(table, table_index):
+            cells.append(
+                {
+                    "ref": ref,
+                    "text": text_of(cell)[:500],
+                    "bbox": cell.get("bbox"),
+                }
+            )
     return {"texts": texts, "cells": cells}
 
 
