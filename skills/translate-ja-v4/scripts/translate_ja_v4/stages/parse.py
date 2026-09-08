@@ -11,6 +11,7 @@ from io import BytesIO
 from math import hypot
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
+from uuid import uuid4
 
 import httpx
 import pypdfium2 as pdfium
@@ -30,6 +31,10 @@ from ..io import (
 
 COLLECTIONS = ("groups", "texts", "pictures", "tables", "key_value_items", "form_items")
 PAGE_SCALE = 1.0
+
+
+class DoclingValidationError(ValueError):
+    """Docling JSONまたはartifactの契約違反を表す。"""
 
 
 def _settings() -> tuple[str, str]:
@@ -229,6 +234,295 @@ def _extract_zip(payload: bytes, output_json: Path, artifacts: Path) -> None:
                 write_bytes(artifacts.joinpath(*relative), archive.read(name))
 
 
+def _resolve_pointer(document: dict[str, Any], ref: str) -> bool:
+    """JSON pointerが文書内の値へ解決できるか判定する。
+
+    Args:
+        document: 検証対象Docling JSON。
+        ref: `#/` で始まるJSON pointer。
+
+    Returns:
+        pointerが解決できればTrue。
+    """
+
+    value: Any = document
+    try:
+        for part in ref.removeprefix("#/").split("/"):
+            key = part.replace("~1", "/").replace("~0", "~")
+            value = value[int(key)] if isinstance(value, list) else value[key]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _validate_document(
+    document: dict[str, Any], expected_pages: int | None = None
+) -> str:
+    """対応可能なDocling schemaと参照整合性を検証する。
+
+    Args:
+        document: Docling Serveから得たJSON object。
+        expected_pages: 入力PDFの期待ページ数。Noneなら件数を検証しない。
+
+    Returns:
+        検証済みschema名とversion。
+
+    Raises:
+        DoclingValidationError: 必須field、型、ページ、参照が不正な場合。
+    """
+
+    schema = document.get("schema_name")
+    version = document.get("version")
+    if schema != "DoclingDocument" or not isinstance(version, str) or not version:
+        raise DoclingValidationError(
+            f"unsupported Docling schema schema={schema!r} version={version!r}"
+        )
+    for key in COLLECTIONS:
+        if not isinstance(document.get(key), list):
+            raise DoclingValidationError(f"Docling collection must be a list: {key}")
+    for key in ("body", "furniture"):
+        tree = document.get(key)
+        if not isinstance(tree, dict) or not isinstance(tree.get("children"), list):
+            raise DoclingValidationError(f"Docling tree is invalid: {key}")
+    pages = document.get("pages")
+    if not isinstance(pages, dict) or any(not str(key).isdigit() for key in pages):
+        raise DoclingValidationError("Docling pages must use numeric object keys")
+    page_numbers = sorted(int(key) for key in pages)
+    if page_numbers != list(range(1, len(page_numbers) + 1)):
+        raise DoclingValidationError("Docling page numbers must be consecutive from 1")
+    if expected_pages is not None and len(pages) != expected_pages:
+        raise DoclingValidationError(
+            f"Docling page count mismatch expected={expected_pages} actual={len(pages)}"
+        )
+    for collection in COLLECTIONS:
+        for index, item in enumerate(document[collection]):
+            if not isinstance(item, dict):
+                raise DoclingValidationError(
+                    f"Docling collection item must be an object: {collection}/{index}"
+                )
+            expected_ref = f"#/{collection}/{index}"
+            if item.get("self_ref") != expected_ref:
+                raise DoclingValidationError(
+                    f"Docling self_ref mismatch expected={expected_ref}"
+                )
+            prov = item.get("prov", [])
+            for entry in prov if isinstance(prov, list) else []:
+                page = entry.get("page_no") if isinstance(entry, dict) else None
+                if page is not None and str(page) not in pages:
+                    raise DoclingValidationError(
+                        f"Docling provenance references missing page: {page}"
+                    )
+    for index, table in enumerate(document["tables"]):
+        data = table.get("data")
+        if not isinstance(data, dict) or not any(
+            isinstance(data.get(key), list) for key in ("grid", "table_cells", "cells")
+        ):
+            raise DoclingValidationError(f"unsupported Docling table schema: {index}")
+
+    def validate_refs(value: Any) -> None:
+        """文書内の全`$ref`を再帰検証する。
+
+        Args:
+            value: 検証するJSON値。
+
+        Returns:
+            なし。
+
+        Raises:
+            DoclingValidationError: 解決不能な参照がある場合。
+        """
+
+        if isinstance(value, dict):
+            ref = value.get("$ref")
+            if (
+                isinstance(ref, str)
+                and ref.startswith("#/")
+                and not _resolve_pointer(document, ref)
+            ):
+                raise DoclingValidationError(f"unresolved Docling reference: {ref}")
+            for child in value.values():
+                validate_refs(child)
+        elif isinstance(value, list):
+            for child in value:
+                validate_refs(child)
+
+    validate_refs(document)
+    return f"{schema}/{version}"
+
+
+def _convert_validated(
+    source: Path,
+    output_json: Path,
+    artifacts: Path,
+    options: PipelineOptions,
+    expected_pages: int | None,
+) -> dict[str, Any]:
+    """Docling変換とschema検証を行い、検証失敗時は再変換する。
+
+    Args:
+        source: 変換する入力file。
+        output_json: 一時JSON保存先。
+        artifacts: 一時artifact directory。
+        options: retry設定。
+        expected_pages: 入力の期待ページ数。
+
+    Returns:
+        検証済みDocling JSON。
+
+    Raises:
+        DoclingValidationError: 最終試行でも検証に失敗した場合。
+    """
+
+    attempts = options.max_retries + 1
+    for attempt in range(1, attempts + 1):
+        output_json.unlink(missing_ok=True)
+        if artifacts.exists():
+            shutil.rmtree(artifacts)
+        _convert_one(source, output_json, artifacts, options)
+        document = read_json(output_json)
+        try:
+            schema = _validate_document(document, expected_pages)
+            LOGGER.debug("Validated Docling document schema=%s", schema)
+            return document
+        except DoclingValidationError:
+            if attempt == attempts:
+                raise
+            delay = min(
+                options.retry_max_seconds,
+                options.retry_initial_seconds * (2 ** (attempt - 1)),
+            )
+            LOGGER.warning(
+                "Docling validation failed; retrying conversion attempt=%s/%s delay=%.1fs",
+                attempt,
+                attempts,
+                delay,
+            )
+            time.sleep(delay)
+    raise RuntimeError("Docling validation retry loop ended unexpectedly")
+
+
+def _artifact_inventory(path: Path) -> dict[str, Any]:
+    """artifact directoryの件数、容量、安定hashを返す。
+
+    Args:
+        path: 検査するartifact directory。
+
+    Returns:
+        file_count、total_bytes、sha256を持つobject。
+    """
+
+    entries = [
+        {
+            "path": item.relative_to(path).as_posix(),
+            "size": item.stat().st_size,
+            "sha256": hash_file(item),
+        }
+        for item in sorted(value for value in path.rglob("*") if value.is_file())
+    ]
+    return {
+        "file_count": len(entries),
+        "total_bytes": sum(item["size"] for item in entries),
+        "sha256": hash_json(entries),
+    }
+
+
+def _validate_artifacts(document: dict[str, Any], artifacts: Path) -> None:
+    """Docling JSON内のartifact URIが安全な実在fileを指すか検証する。
+
+    Args:
+        document: artifact URIを含むDocling JSON。
+        artifacts: URIの `artifacts/` に対応するdirectory。
+
+    Returns:
+        なし。
+
+    Raises:
+        DoclingValidationError: 不正URIまたは欠落fileがある場合。
+    """
+
+    def visit(value: Any) -> None:
+        """JSONを再帰走査してartifact URIを検証する。
+
+        Args:
+            value: 検証するJSON値。
+
+        Returns:
+            なし。
+        """
+
+        if isinstance(value, dict):
+            uri = value.get("uri")
+            if isinstance(uri, str) and uri.startswith("artifacts/"):
+                parts = PurePosixPath(uri).parts
+                if ".." in parts or len(parts) < 2:
+                    raise DoclingValidationError(f"unsafe artifact URI: {uri}")
+                candidate = artifacts.joinpath(*parts[1:])
+                if not candidate.is_file():
+                    raise DoclingValidationError(f"missing artifact: {uri}")
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(document)
+
+
+def _commit_parse(
+    document: dict[str, Any], output_json: Path, staging: Path, artifacts: Path
+) -> dict[str, Any]:
+    """検証済みJSONとartifact directoryを一括して公開する。
+
+    Args:
+        document: 保存するDocling JSON。
+        output_json: 公開JSON path。
+        staging: 完成済みartifact staging directory。
+        artifacts: 公開artifact directory。
+
+    Returns:
+        公開したartifact inventory。
+
+    Side Effects:
+        旧artifactをbackupしてstagingと入れ替え、JSONをatomic保存する。
+    """
+
+    _validate_artifacts(document, staging)
+    inventory = _artifact_inventory(staging)
+    backup = artifacts.with_name(f".{artifacts.name}.backup-{uuid4().hex}")
+    artifacts.parent.mkdir(parents=True, exist_ok=True)
+    if artifacts.exists():
+        os.replace(artifacts, backup)
+    try:
+        os.replace(staging, artifacts)
+        write_json(output_json, document)
+    except Exception:
+        if artifacts.exists():
+            shutil.rmtree(artifacts)
+        if backup.exists():
+            os.replace(backup, artifacts)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
+    return inventory
+
+
+def _artifacts_cached(manifest: Path, artifacts: Path) -> bool:
+    """manifest記録と現在のartifact directory hashが一致するか判定する。
+
+    Args:
+        manifest: ParseStage状態を持つmanifest.json。
+        artifacts: 検証するartifact directory。
+
+    Returns:
+        件数、容量、directory hashが一致すればTrue。
+    """
+
+    if not manifest.is_file() or not artifacts.is_dir():
+        return False
+    expected = read_json(manifest).get("stages", {}).get("parse", {}).get("artifacts")
+    return isinstance(expected, dict) and expected == _artifact_inventory(artifacts)
+
+
 def _remap(value: Any, offsets: dict[str, int], page_offset: int, subdir: str) -> Any:
     """チャンクJSON内のref、ページ、artifact URIを全体座標へ直す。
 
@@ -391,7 +685,7 @@ def _convert_pdf(
     output_json: Path,
     artifacts: Path,
     options: PipelineOptions,
-) -> None:
+) -> dict[str, Any]:
     """PDFを10ページずつ変換し、JSONとページ画像を連結する。
 
     Args:
@@ -401,40 +695,87 @@ def _convert_pdf(
         options: PDF chunk数、timeout、retry設定。
 
     Returns:
-        なし。
+        公開したartifact inventory。
     """
 
+    artifacts.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{artifacts.name}.staging-", dir=artifacts.parent)
+    )
+    try:
+        with tempfile.TemporaryDirectory(prefix="translate-ja-v4-") as temporary:
+            root = Path(temporary)
+            chunks: list[dict[str, Any]] = []
+            with pdfium.PdfDocument(source) as pdf:
+                page_count = len(pdf)
+                for number, start in enumerate(
+                    range(0, page_count, options.pdf_chunk_pages), 1
+                ):
+                    indexes = list(
+                        range(start, min(start + options.pdf_chunk_pages, page_count))
+                    )
+                    chunk_pdf = root / f"chunk-{number}.pdf"
+                    chunk_json = root / f"chunk-{number}.json"
+                    chunk_artifacts = root / "artifacts" / f"chunk_{number:06d}"
+                    with pdfium.PdfDocument.new() as destination:
+                        destination.import_pages(pdf, pages=indexes)
+                        destination.save(chunk_pdf)
+                    LOGGER.info(
+                        "Started ParseStage chunk=%s pages=%s", number, len(indexes)
+                    )
+                    chunks.append(
+                        _convert_validated(
+                            chunk_pdf,
+                            chunk_json,
+                            chunk_artifacts,
+                            options,
+                            len(indexes),
+                        )
+                    )
+            document = _merge(chunks, source)
+            _validate_document(document, page_count)
+            source_artifacts = root / "artifacts"
+            if source_artifacts.exists():
+                shutil.copytree(source_artifacts, staging, dirs_exist_ok=True)
+            _render_pages(source, document, staging)
+            return _commit_parse(document, output_json, staging, artifacts)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+
+def _convert_document(
+    source: Path,
+    output_json: Path,
+    artifacts: Path,
+    options: PipelineOptions,
+) -> dict[str, Any]:
+    """PDF以外の入力をstaging上で検証して公開する。
+
+    Args:
+        source: 変換する入力file。
+        output_json: 公開JSON path。
+        artifacts: 公開artifact directory。
+        options: timeoutとretry設定。
+
+    Returns:
+        公開したartifact inventory。
+    """
+
+    artifacts.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{artifacts.name}.staging-", dir=artifacts.parent)
+    )
     with tempfile.TemporaryDirectory(prefix="translate-ja-v4-") as temporary:
-        root = Path(temporary)
-        chunks: list[dict[str, Any]] = []
-        with pdfium.PdfDocument(source) as pdf:
-            for number, start in enumerate(
-                range(0, len(pdf), options.pdf_chunk_pages), 1
-            ):
-                indexes = list(
-                    range(start, min(start + options.pdf_chunk_pages, len(pdf)))
-                )
-                chunk_pdf = root / f"chunk-{number}.pdf"
-                chunk_json = root / f"chunk-{number}.json"
-                chunk_artifacts = root / "artifacts" / f"chunk_{number:06d}"
-                with pdfium.PdfDocument.new() as destination:
-                    destination.import_pages(pdf, pages=indexes)
-                    destination.save(chunk_pdf)
-                LOGGER.info(
-                    "Started ParseStage chunk=%s pages=%s", number, len(indexes)
-                )
-                _convert_one(chunk_pdf, chunk_json, chunk_artifacts, options)
-                chunks.append(read_json(chunk_json))
-        document = _merge(chunks, source)
-        if artifacts.exists():
-            shutil.rmtree(artifacts)
-        source_artifacts = root / "artifacts"
-        if source_artifacts.exists():
-            shutil.copytree(source_artifacts, artifacts)
-        else:
-            artifacts.mkdir(parents=True)
-        _render_pages(source, document, artifacts)
-        write_json(output_json, document)
+        staged_json = Path(temporary) / "document.json"
+        try:
+            document = _convert_validated(
+                source, staged_json, staging, options, expected_pages=None
+            )
+            return _commit_parse(document, output_json, staging, artifacts)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
 
 
 def parse_stage(state: PipelineState) -> PipelineState:
@@ -452,7 +793,7 @@ def parse_stage(state: PipelineState) -> PipelineState:
     input_hash = hash_file(source)
     config_hash = hash_json(
         {
-            "version": 2,
+            "version": 3,
             "payload": _payload(),
             "chunk_pages": options.pdf_chunk_pages,
             "text_spans": "pypdfium2",
@@ -461,18 +802,21 @@ def parse_stage(state: PipelineState) -> PipelineState:
     cached = stage_cached(
         paths.manifest, "parse", input_hash, config_hash, paths.document_json
     )
-    if not options.force and cached and paths.artifacts.is_dir():
+    if (
+        not options.force
+        and cached
+        and _artifacts_cached(paths.manifest, paths.artifacts)
+    ):
         LOGGER.info("Resumed ParseStage output=%s", paths.document_json)
         return {"current_path": str(paths.document_json), "completed_stage": "parse"}
     record_stage(
         paths.manifest, "parse", "running", input_hash, config_hash, paths.document_json
     )
-    if source.suffix.lower() == ".pdf":
+    artifacts = (
         _convert_pdf(source, paths.document_json, paths.artifacts, options)
-    else:
-        if paths.artifacts.exists():
-            shutil.rmtree(paths.artifacts)
-        _convert_one(source, paths.document_json, paths.artifacts, options)
+        if source.suffix.lower() == ".pdf"
+        else _convert_document(source, paths.document_json, paths.artifacts, options)
+    )
     record_stage(
         paths.manifest,
         "parse",
@@ -480,5 +824,6 @@ def parse_stage(state: PipelineState) -> PipelineState:
         input_hash,
         config_hash,
         paths.document_json,
+        {"artifacts": artifacts},
     )
     return {"current_path": str(paths.document_json), "completed_stage": "parse"}

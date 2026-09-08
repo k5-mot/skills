@@ -53,6 +53,8 @@ flowchart TD
 
 Docling Serveには `include_page_images=false`、`images_scale=1.0` を送り、page imageを返させない。PDFは `pdf_chunk_pages` 単位で直列変換し、collection ref、ページ番号、artifact URIをローカルで再採番・連結する。全ページPNGとPDF text spanはpypdfium2でローカル生成する。
 
+ParseStageはversion文字列を完全固定せず、`schema_name=DoclingDocument`、必須collection、body/furniture tree、連続page番号、`self_ref`、provenance、table cell形式、全ローカルJSON pointerを検証して対応schemaか判定する。chunkのschema検証失敗はDocling変換からAPI retry設定で再試行する。全chunk連結後にも入力PDFのページ数を含めて再検証する。
+
 span schemaは `id`、`text`、`bbox`、`font`、`size`、`weight` とする。bboxは `BOTTOMLEFT` に統一し、sizeはPDF text objectのfont sizeへ変換matrixのscaleを掛けた実効値とする。Structure payloadへはDocling要素のbboxと15%以上重なる同一ページspanだけを含める。
 
 LibreTranslateはv1.9.6互換 `/translate` の配列入力を使う。OpenAI互換APIは `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` を使い、Pydantic structured outputで検証する。
@@ -85,7 +87,7 @@ Structure、Translate、Reviewはrequest失敗時に対象を要素境界で二�
 
 ## データと安全性
 
-JSONとmanifestは同一directoryの一時ファイルを `os.replace` してatomic保存する。artifact URIは出力directoryからの相対pathだけを許可し、absolute URI、外部scheme、`..` を拒否する。ログにsecret、prompt本文、巨大hashを出力しない。
+JSONとmanifestは同一directoryの一時ファイルを `os.replace` してatomic保存する。ParseStageはartifactを同一filesystem上のstaging directoryへ構築し、全URIの存在確認後にdirectory単位で置換する。旧directoryはJSON保存成功まで退避し、失敗時は戻す。manifestのParse記録には相対path、size、個別hashから算出したdirectory hash、file件数、合計byte数を含め、Resume時に再計算する。artifact URIは出力directoryからの相対pathだけを許可し、absolute URI、外部scheme、`..` を拒否する。ログにsecret、prompt本文、巨大hashを出力しない。
 
 ログ本文は英語とし、ANSI色はlevel名だけに適用する。Stage完了、skip、ResumeはINFO、pollingとrunning progressはDEBUG、縮小retryはWARNING、停止理由はERRORとする。既定DEBUGでもhttpx、httpcore、OpenAI SDKの通信内部logはWARNINGへ抑え、pipelineの進捗を埋めない。
 
@@ -124,8 +126,6 @@ fieldの表示結果はWordなどのfield更新対応アプリで更新する。
 | translate-ja | chunkごとのattempt/statusと `fallback_source` | 失敗を例外にするv4契約から原文fallbackへ変えるか。 |
 | translate-ja | Markdown構文検証と警告 | MarkdownStageの生成結果へvalidatorを追加するか。 |
 | translate-ja | HTML labelを独立chunkとして保持 | Docling HTML要素をMarkdownへどう描画するか。 |
-| translate-ja-v2 | Docling JSON schema/version/page数の厳格検証 | 対応Docling versionを固定するか。 |
-| translate-ja-v2 | artifacts directoryのatomic置換とdirectory hash | 大容量artifact複製costと完全性のどちらを優先するか。 |
 | translate-ja-v2 | URL・path・identifierの保護heuristic | LibreTranslate前後の置換方式を導入するか。 |
 | translate-ja-v2 | LLM出力長の事前見積り | 利用modelごとのtoken上限をCLI化するか。 |
 | translate-ja-v2 | status別の細粒度retry分類 | 現在のAPI retry・batch二分をさらに分けるか。 |

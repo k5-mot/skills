@@ -29,9 +29,11 @@ Structureの処理済みIDは `completed_elements`、Translate/Reviewは各要�
 
 PDFを既定10ページずつ一時PDFへ分け、Docling Serveへ順番に送る。分割数は `--pdf-chunk-pages` で変更できる。server側page image生成は無効にする。返却ZIPからJSONとartifactを取り出し、collection index、JSON pointer、page number、artifact URIを全体文書へ再採番して連結する。
 
+各chunkの返却直後に、`DoclingDocument` schema、versionの存在、必須collection、ページ数、`self_ref`、全JSON pointer、provenanceのpage参照、table cell形式を検証する。version番号そのものは固定せず、対応fieldを満たすschemaを受け入れる。検証失敗時は同じchunkの変換から指数backoffで再試行し、不完全なJSONを後続Stageへ渡さない。
+
 連結後、元PDFをpypdfium2で直接走査する。各PDF text objectから原文、bbox、font名、実効文字サイズ、weightを抽出して `pages[*].text_spans` に保存し、全ページをPNG化して `pages[*].image.uri` を `artifacts/page_XXXXXX.png` にする。spanは翻訳対象ではなく、StructureStageが見出しlevelを判断する根拠である。
 
-Word入力は分割せずDocling Serveへ送る。`--force` がなければ完了成果物を再利用する。
+Word入力は分割せずDocling Serveへ送る。JSONとartifact URIの整合性を確認後、artifact staging directoryを `os.replace` で切り替え、最後にJSONをatomic保存する。manifestにはartifact全fileの相対path、size、SHA-256から算出したdirectory hash、件数、合計byte数を保存する。Resume時はdirectory hashも一致した場合だけParse成果物を再利用する。`--force` があれば完了成果物を再利用しない。
 
 ## NormalizeStage
 

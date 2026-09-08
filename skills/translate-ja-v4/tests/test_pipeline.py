@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-import pytest
 import httpx
+import pytest
 
 from translate_ja_v4.config import PipelineOptions, build_paths, initial_state
 from translate_ja_v4.document import (
@@ -26,6 +26,7 @@ from translate_ja_v4.io import (
     glossary_matches,
     hash_file,
     hash_json,
+    read_json,
     read_glossary,
     record_stage,
     configure_logging,
@@ -37,9 +38,14 @@ from translate_ja_v4.stages.docx import _enhance_word, _fix_heading_spacing
 from translate_ja_v4.stages.markdown import markdown
 from translate_ja_v4.stages.normalize import normalize
 from translate_ja_v4.stages.parse import (
+    DoclingValidationError,
+    _artifact_inventory,
+    _commit_parse,
+    _convert_validated,
     _merge,
     _remap,
     _request_with_retry as _parse_request_with_retry,
+    _validate_document,
 )
 from translate_ja_v4.stages.review import (
     ReviewResponse,
@@ -102,6 +108,37 @@ def _document() -> dict[str, Any]:
             }
         ],
         "pictures": [],
+        "pages": {"1": {}},
+    }
+
+
+def _docling_document() -> dict[str, Any]:
+    """Parse schema検証に使う最小Docling文書を返す。
+
+    Returns:
+        必須collection、tree、pageを持つDocling JSON。
+    """
+
+    return {
+        "schema_name": "DoclingDocument",
+        "version": "1.10.0",
+        "name": "test",
+        "origin": {},
+        "body": {"children": [{"$ref": "#/texts/0"}]},
+        "furniture": {"children": []},
+        "groups": [],
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "label": "paragraph",
+                "text": "Text",
+                "prov": [{"page_no": 1}],
+            }
+        ],
+        "pictures": [],
+        "tables": [],
+        "key_value_items": [],
+        "form_items": [],
         "pages": {"1": {}},
     }
 
@@ -601,6 +638,93 @@ def test_parse_request_retries_temporary_status() -> None:
     )
     assert _parse_request_with_retry(request, options, "test").status_code == 200
     assert calls == 2
+
+
+def test_parse_validates_schema_and_retries_invalid_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """不正なDocling JSONを同じchunkの再変換で回復することを確認する。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    import translate_ja_v4.stages.parse as module
+
+    calls = 0
+
+    def convert(
+        _source: Path,
+        output: Path,
+        artifacts: Path,
+        _options: PipelineOptions,
+    ) -> None:
+        """初回だけ不正refを含むDocling JSONを保存する。
+
+        Args:
+            _source: 未使用の入力path。
+            output: fake JSON保存先。
+            artifacts: fake artifact保存先。
+            _options: 未使用のPipelineOptions。
+
+        Returns:
+            なし。
+        """
+
+        nonlocal calls
+        calls += 1
+        document = _docling_document()
+        if calls == 1:
+            document["body"]["children"] = [{"$ref": "#/texts/99"}]
+        artifacts.mkdir(parents=True)
+        write_json(output, document)
+
+    monkeypatch.setattr(module, "_convert_one", convert)
+    options = PipelineOptions(
+        input=tmp_path / "input.pdf", max_retries=1, retry_initial_seconds=0
+    )
+    result = _convert_validated(
+        options.input,
+        tmp_path / "chunk.json",
+        tmp_path / "artifacts",
+        options,
+        expected_pages=1,
+    )
+    assert calls == 2
+    assert _validate_document(result, 1) == "DoclingDocument/1.10.0"
+    broken = _docling_document()
+    broken["body"]["children"] = [{"$ref": "#/texts/99"}]
+    with pytest.raises(DoclingValidationError, match="unresolved"):
+        _validate_document(broken, 1)
+
+
+def test_parse_commits_artifacts_atomically_with_inventory(tmp_path: Path) -> None:
+    """完成済みstagingだけを公開してdirectory hashを記録する。
+
+    Args:
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "old.bin").write_bytes(b"old")
+    staging = tmp_path / ".artifacts.staging"
+    staging.mkdir()
+    (staging / "page.png").write_bytes(b"new")
+    document = {"image": {"uri": "artifacts/page.png"}}
+    output = tmp_path / "document.json"
+    inventory = _commit_parse(document, output, staging, artifacts)
+    assert not (artifacts / "old.bin").exists()
+    assert (artifacts / "page.png").read_bytes() == b"new"
+    assert inventory == _artifact_inventory(artifacts)
+    assert read_json(output) == document
 
 
 def test_structure_patches_keep_stable_refs() -> None:
