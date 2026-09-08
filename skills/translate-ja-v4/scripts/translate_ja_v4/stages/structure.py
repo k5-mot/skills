@@ -234,12 +234,53 @@ def _target(document: dict[str, Any], ref: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _apply(document: dict[str, Any], patches: list[StructurePatch]) -> int:
+def _snapshot(target: dict[str, Any] | None) -> dict[str, Any] | None:
+    """監査に必要なStructure対象fieldだけを複製する。
+
+    Args:
+        target: patch対象object。解決不能ならNone。
+
+    Returns:
+        label、level、text、Structure metadataのsnapshot。
+    """
+
+    if target is None:
+        return None
+    return copy.deepcopy(
+        {
+            key: target[key]
+            for key in ("label", "level", "text", "structure_ja_v4")
+            if key in target
+        }
+    )
+
+
+def _audit_refs(patch: StructurePatch) -> list[str]:
+    """patchが参照する全target IDを返す。
+
+    Args:
+        patch: VLMのStructure patch。
+
+    Returns:
+        重複を除いたref配列。
+    """
+
+    return list(dict.fromkeys([ref for ref in [patch.ref, *patch.refs] if ref]))
+
+
+def _apply(
+    document: dict[str, Any],
+    patches: list[StructurePatch],
+    audit: list[dict[str, Any]] | None = None,
+    page: int | None = None,
+) -> int:
     """検証済みpatchを追加のローカル制約付きで適用する。
 
     Args:
         document: 更新対象Docling JSON。
         patches: VLMのpatch候補。
+        audit: patch単位の監査記録を追加する配列。Noneなら記録しない。
+        page: VLM判定に使ったページ番号。
 
     Returns:
         適用したpatch数。
@@ -250,6 +291,9 @@ def _apply(document: dict[str, Any], patches: list[StructurePatch]) -> int:
 
     applied = 0
     for patch in patches:
+        refs = _audit_refs(patch)
+        before = {ref: _snapshot(_target(document, ref)) for ref in refs}
+        accepted = False
         target = _target(document, patch.ref or "")
         if patch.op == "set_label" and target and patch.label in {"code", "caption"}:
             if patch.label == "code" or target.get("label") in {
@@ -260,6 +304,7 @@ def _apply(document: dict[str, Any], patches: list[StructurePatch]) -> int:
             }:
                 target["label"] = patch.label
                 applied += 1
+                accepted = True
         elif (
             patch.op == "set_heading_level"
             and target
@@ -269,11 +314,13 @@ def _apply(document: dict[str, Any], patches: list[StructurePatch]) -> int:
         ):
             target["level"] = patch.level
             applied += 1
+            accepted = True
         elif patch.op == "set_table_cell_inline_code" and target:
             source = text_of(target)
             spans = [span for span in patch.code_spans if span and span in source]
             target.setdefault("structure_ja_v4", {})["inline_code_spans"] = spans
             applied += 1
+            accepted = True
         elif patch.op == "merge_texts" and len(patch.refs) == 2:
             left, right = (_target(document, ref) for ref in patch.refs)
             texts = document.get("texts", [])
@@ -292,6 +339,21 @@ def _apply(document: dict[str, Any], patches: list[StructurePatch]) -> int:
                     left, "texts", texts.index(left)
                 )
                 applied += 1
+                accepted = True
+        if audit is not None:
+            audit.append(
+                {
+                    "id": hash_json({"page": page, "patch": patch.model_dump()}),
+                    "page": page,
+                    "status": "applied" if accepted else "rejected",
+                    "patch": patch.model_dump(),
+                    "before": before,
+                    "after": {ref: _snapshot(_target(document, ref)) for ref in refs},
+                    "reason": patch.reason
+                    if accepted
+                    else "Rejected by local Structure constraints",
+                }
+            )
     return applied
 
 
@@ -452,7 +514,7 @@ def structure_stage(state: PipelineState) -> PipelineState:
     input_hash = hash_file(paths.normalized_json)
     config_hash = hash_json(
         {
-            "version": 3,
+            "version": 4,
             "skip": options.skip_vlm,
             "rules": rules,
             "context_chars": options.context_chars,
@@ -460,8 +522,11 @@ def structure_stage(state: PipelineState) -> PipelineState:
             "model": None if options.skip_vlm else os.getenv("OPENAI_MODEL"),
         }
     )
-    if stage_cached(
-        paths.manifest, "structure", input_hash, config_hash, paths.structured_json
+    if (
+        stage_cached(
+            paths.manifest, "structure", input_hash, config_hash, paths.structured_json
+        )
+        and paths.structure_audit.is_file()
     ):
         LOGGER.info("Resumed StructureStage output=%s", paths.structured_json)
         return {
@@ -477,6 +542,14 @@ def structure_stage(state: PipelineState) -> PipelineState:
         paths.structured_json,
     )
     document = read_json(paths.structured_json) if partial else copy.deepcopy(source)
+    audit_document = (
+        read_json(paths.structure_audit)
+        if partial and paths.structure_audit.is_file()
+        else {"schema_version": 1, "patches": []}
+    )
+    audit = audit_document.setdefault("patches", [])
+    if not isinstance(audit, list):
+        raise ValueError("Structure audit patches must be a list")
     stage_state = (
         read_json(paths.manifest).get("stages", {}).get("structure", {})
         if partial
@@ -529,9 +602,10 @@ def structure_stage(state: PipelineState) -> PipelineState:
             for completed_batch, patches in _request_with_fallback(
                 options, batch, rules, image
             ):
-                applied += _apply(document, patches)
+                applied += _apply(document, patches, audit, page)
                 completed.update(_batch_refs(completed_batch))
                 write_json(paths.structured_json, document)
+                write_json(paths.structure_audit, audit_document)
                 record_stage(
                     paths.manifest,
                     "structure",
@@ -548,6 +622,7 @@ def structure_stage(state: PipelineState) -> PipelineState:
                 )
     heading_jumps = _fix_heading_jumps(document)
     write_json(paths.structured_json, document)
+    write_json(paths.structure_audit, audit_document)
     record_stage(
         paths.manifest,
         "structure",
@@ -560,6 +635,8 @@ def structure_stage(state: PipelineState) -> PipelineState:
             "completed": len(completed),
             "completed_elements": sorted(completed),
             "patches": applied,
+            "audit_entries": len(audit),
+            "audit_hash": hash_file(paths.structure_audit),
             "heading_jumps": heading_jumps,
             "vlm_skipped": options.skip_vlm,
         },

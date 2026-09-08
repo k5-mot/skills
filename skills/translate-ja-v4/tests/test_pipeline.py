@@ -163,6 +163,7 @@ def test_build_paths_uses_input_stem(tmp_path: Path) -> None:
     paths = build_paths(PipelineOptions(input=tmp_path / "source.pdf"))
     assert paths.document_json.name == "source.json"
     assert paths.normalized_json.name == "document.normalized.json"
+    assert paths.structure_audit.name == "document.structure-audit.json"
     assert paths.cleaned_json.name == "document.cleaned.json"
     assert paths.checkpoints.name == ".langgraph.sqlite3"
 
@@ -846,6 +847,29 @@ def test_structure_ignores_invalid_semantic_patch() -> None:
 
     assert _apply(document, response.patches) == 0
     assert document["texts"][0]["label"] == "section_header"
+
+
+def test_structure_records_applied_and_rejected_patch_audit() -> None:
+    """Structure patchの変更前後と拒否を監査記録へ残すことを確認する。
+
+    Returns:
+        なし。
+    """
+
+    document = _document()
+    audit: list[dict[str, Any]] = []
+    patches = [
+        StructurePatch(
+            op="set_heading_level", ref="#/texts/0", level=1, reason="font size"
+        ),
+        StructurePatch(op="set_label", ref="#/texts/1", label="caption"),
+    ]
+
+    assert _apply(document, patches, audit, page=1) == 1
+    assert [entry["status"] for entry in audit] == ["applied", "rejected"]
+    assert audit[0]["before"]["#/texts/0"]["level"] == 2
+    assert audit[0]["after"]["#/texts/0"]["level"] == 1
+    assert audit[0]["reason"] == "font size"
 
 
 def test_page_image_rejects_parent_traversal(tmp_path: Path) -> None:

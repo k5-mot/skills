@@ -64,6 +64,7 @@ class StagePaths(FrozenModel):
     document_json: Path
     normalized_json: Path
     structured_json: Path
+    structure_audit: Path
     cleaned_json: Path
     translated_json: Path
     reviewed_json: Path
@@ -104,6 +105,7 @@ def build_paths(options: PipelineOptions) -> StagePaths:
         document_json=output_dir / f"{source.stem}.json",
         normalized_json=output_dir / "document.normalized.json",
         structured_json=output_dir / "document.structured.json",
+        structure_audit=output_dir / "document.structure-audit.json",
         cleaned_json=output_dir / "document.cleaned.json",
         translated_json=output_dir / "document.translated.json",
         reviewed_json=output_dir / "document.reviewed.json",

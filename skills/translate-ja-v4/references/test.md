@@ -26,7 +26,7 @@ uv run python /home/penguin/.codex/skills/.system/skill-creator/scripts/quick_va
 - Parse: `#/texts/0` 等のref、page number、artifact URIをchunk offsetで再採番し、PDF spanのbbox、font、実効size、weightを抽出する。対応schemaの必須fieldと全参照を検証し、不正なchunkを再変換する。artifact directoryを置換してdirectory hashをmanifestへ保存し、欠落・改変時はResumeしない。
 - Normalize: header/footer、図中文字、目次系ページを参照ごと削除する。座標順、本文・list・code断片、同一ページ/改ページtable断片を補正し、全参照を維持する。
 - table: `grid`、`table_cells`、`cells` の更新先をStructure、Clean、Translate、Review、Markdownで共通して扱う。
-- Structure: 対応spanをpayloadへ含め、許可されたpatchだけを適用し、code結合後もrefを削除しない。既知操作の短縮応答を正規化し、許可外の値を無視し、推定出力上限でも事前分割し、失敗batchを二分し、見出し階層の飛びを丸める。
+- Structure: 対応spanをpayloadへ含め、許可されたpatchだけを適用し、code結合後もrefを削除しない。既知操作の短縮応答を正規化し、許可外の値を無視し、適用・拒否patchの変更前後と理由を監査ファイルへ残す。推定出力上限でも事前分割し、失敗batchを二分し、見出し階層の飛びを丸める。
 - Clean: 本文と表セルのdot・中黒を3文字へ縮め、codeとinline codeを保持する。
 - glossary: 8列を必須とし、英語2列だけで検索し、`note` と `reference` をprompt行から除く。
 - Translate: backend共通契約、入力文字数・要素数・推定出力tokenによるbatch上限、structured ID照合、失敗時二分、metadata保存、付録内見出しだけの除外を確認する。LibreTranslateへはtext配列だけを送り、URL、path、command option、inline code、identifierを可逆placeholderで保持する。

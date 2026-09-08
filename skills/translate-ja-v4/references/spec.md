@@ -10,6 +10,7 @@ flowchart TD
     N --> J1[document.normalized.json]
     J1 --> S[StructureStage<br/>span・VLMで構造補正]
     S --> J2[document.structured.json]
+    S --> A[document.structure-audit.json]
     J2 --> C[CleanStage<br/>連続記号を校正]
     C --> J3[document.cleaned.json]
     J3 --> T[TranslateStage<br/>本文と表を日本語化]
@@ -101,7 +102,7 @@ NormalizeStageはheader/footer、picture配下の非caption text、`document_ind
 
 table cell走査は `data.grid` を優先し、gridが空または存在しない場合に `data.table_cells`、`data.cells` の順で選ぶ。flat cellのrow/columnは `start_*_offset_idx`、`row` / `col`、`row_idx` / `col_idx` の順で解決する。同じ共通iteratorをStructure、Clean、Translate、Review、Markdownが利用し、翻訳metadataは元のcell objectへ保存する。
 
-StructureStageはVLM patch適用後、見出しlevelを1〜6に制限し、先頭をlevel 1、後続を直前から最大1段深い値へ丸める。caption誤検出、code、表セルinline codeの変更は許可されたpatchだけを適用する。
+StructureStageはVLM patch適用後、見出しlevelを1〜6に制限し、先頭をlevel 1、後続を直前から最大1段深い値へ丸める。caption誤検出、code、表セルinline codeの変更は許可されたpatchだけを適用する。各VLM patchは適用・拒否の別、変更前後、VLM理由、ページ、安定hash IDを `document.structure-audit.json` へ記録する。manifestには監査件数と監査ファイルhashだけを保存し、進捗正本と詳細監査を分離する。
 
 ## Word後処理契約
 
@@ -130,6 +131,5 @@ fieldの表示結果はWordなどのfield更新対応アプリで更新する。
 | translate-ja | HTML labelを独立chunkとして保持 | Docling HTML要素をMarkdownへどう描画するか。 |
 | translate-ja-v2 | status別の細粒度retry分類 | 現在のAPI retry・batch二分をさらに分けるか。 |
 | translate-ja-v2 | Qdrant payload field名とtimeoutの個別設定 | 接続先schemaの可変性が必要か。 |
-| translate-ja-v2 | Structure patchごとの詳細監査記録 | manifestを進捗正本だけでなく監査logにもするか。 |
 
 なお `translate-ja/SPEC_v2.md` の未完了checklistは実装済み機能ではないため、この一覧には含めない。

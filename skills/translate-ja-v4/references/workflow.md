@@ -9,6 +9,7 @@ outputs/<document_filename>/
 ├── <input-stem>.json
 ├── document.normalized.json
 ├── document.structured.json
+├── document.structure-audit.json
 ├── document.cleaned.json
 ├── document.translated.json
 ├── document.reviewed.json
@@ -51,7 +52,9 @@ Word入力は分割せずDocling Serveへ送る。JSONとartifact URIの整合�
 
 ページごとにtext、対応するPDF span、table cellのcompact JSONを作り、ローカルpage imageと一緒にLangChain structured modelへ渡す。spanの文字サイズ、font、weight、画像上の位置を根拠に、見出しlevel、見出しとcaptionの誤検出、本文として検出されたcode、隣接code結合、表セルinline codeを外部ルールに従って補正する。
 
-コード結合では左要素へ原文を結合し、右要素を空にして `merged_into` を記録する。要素を配列から削除しないため、後続batchとResumeでrefが変化しない。全VLM補正後、先頭見出しをlevel 1以下、後続見出しを直前より最大1段深いlevelへ決定論的に丸め、階層の飛びを残さない。この最終補正は `--skip-vlm` でも実行する。promptが `context_chars` を超えないよう事前分割し、全要素にpatchが返る最悪ケースの推定出力が `max_output_tokens` を超える場合も要素境界で分割する。API失敗時は要素数を半減する。
+コード結合では左要素へ原文を結合し、右要素を空にして `merged_into` を記録する。要素を配列から削除しないため、後続batchとResumeでrefが変化しない。VLMが返した各patchは `document.structure-audit.json` へ、安定ID、ページ、patch、適用・拒否、変更前後、理由を記録する。監査ファイルも各成功batch後にatomic保存する。
+
+全VLM補正後、先頭見出しをlevel 1以下、後続見出しを直前より最大1段深いlevelへ決定論的に丸め、階層の飛びを残さない。この最終補正は `--skip-vlm` でも実行する。promptが `context_chars` を超えないよう事前分割し、全要素にpatchが返る最悪ケースの推定出力が `max_output_tokens` を超える場合も要素境界で分割する。API失敗時は要素数を半減する。
 
 ## CleanStage
 
