@@ -57,6 +57,14 @@ LibreTranslateはv1.9.6互換 `/translate` の配列入力を使う。OpenAI互�
 
 Review RAGは `QDRANT_URI`、`QDRANT_API_KEY`、`QDRANT_COLLECTION` を使う。collection未指定時は1件だけ存在するときに限り自動選択する。
 
+### Qdrant Ingest
+
+`scripts/ingest_qdrant.py` はPDF、DOCX/DOTX、Markdown、UTF-8テキスト系のfileまたはdirectoryを読み、LangChain `Document` とOpenAI互換embeddingでReview用collectionへupsertする。PDFはpage番号、全形式はsource、形式、原文SHA-256、unit番号、chunk番号をmetadataへ保存する。
+
+point IDはsource、unit、chunk番号からUUID5で決定し、同じ入力の再実行で重複しない。`--replace-source` を明示した場合だけ、upsert成功後に同じsourceの旧SHA-256 revisionを削除する。`--dry-run` はQdrantとembedding APIを呼ばない。
+
+既定値は `chunk_chars=1500`、`overlap_chars=200`、`batch_size=64`。IngestとReviewは同じ `OPENAI_EMBEDDING_MODEL`、`QDRANT_COLLECTION`、`QDRANT_VECTOR_NAME` を使わなければならない。
+
 ## 用語集契約
 
 CSV headerは次の8列を完全に含む。

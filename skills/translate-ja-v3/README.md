@@ -61,6 +61,18 @@ TranslateにもLLMを使う場合は `--translator llm` と翻訳ルールを指
 
 用語集schemaは `english-short,english-long,japanse-short,japanese-long,kind,description,note,reference` です。検索は英語2列に対して行い、一致した行だけをLLMへ渡します。`note` と `reference` は内部管理用で、promptには含めません。
 
+Review RAGへ文書を登録する場合は、ファイルまたはディレクトリを指定します。対応形式はPDF、DOCX/DOTX、Markdown、UTF-8テキスト系です。
+
+```bash
+uv run python skills/translate-ja-v3/scripts/ingest_qdrant.py \
+  --input ./docs/domain \
+  --collection domain-documents \
+  --chunk-chars 1500 \
+  --overlap-chars 200
+```
+
+同じ入力は安定IDでupsertされます。更新前の余剰chunkも削除する場合だけ `--replace-source` を追加します。外部APIを呼ばず抽出結果を確認するには `--dry-run` を使います。
+
 ## 👤 Author
 
 k5-mot

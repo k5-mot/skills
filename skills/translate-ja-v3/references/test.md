@@ -33,8 +33,17 @@ uv run python /home/penguin/.codex/skills/.system/skill-creator/scripts/quick_va
 - Docx: pandoc引数と連続見出し余白のOOXML補正を確認する。
 - manifest: hash一致だけをResumeし、設定変更時は再実行する。
 - logging: 本文は英語で、ANSI escapeがlevel名だけを囲む。
+- ingest: 対応file収集、PDF/Word/text抽出、chunk overlap、安定ID、metadata、dry-run、Qdrant upsert、明示時だけの旧revision削除を確認する。
 
 外部APIを使うunit testは必ずfakeまたはmonkeypatchを使い、実接続しない。
+
+Qdrant接続前の実file確認にはdry-runを使う。
+
+```bash
+uv run python skills/translate-ja-v3/scripts/ingest_qdrant.py \
+  --input ./docs/domain \
+  --dry-run
+```
 
 ## sample.pdf統合検証
 

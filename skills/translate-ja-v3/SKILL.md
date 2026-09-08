@@ -35,6 +35,14 @@ uv run python skills/translate-ja-v3/scripts/run_pipeline.py \
   --max-batch-elements 0
 ```
 
+Review RAG用文書をQdrantへ登録するときは、[spec.md](references/spec.md) のIngest契約を確認して次を実行する。
+
+```bash
+uv run python skills/translate-ja-v3/scripts/ingest_qdrant.py \
+  --input ./docs/domain \
+  --collection domain-documents
+```
+
 ## 実装規則
 
 1. `run_pipeline.py` はCLIだけを扱い、Stage順序は `translate_ja_v3/graph.py` に置く。
@@ -44,3 +52,4 @@ uv run python skills/translate-ja-v3/scripts/run_pipeline.py \
 5. Structure、Translate、Reviewは要素単位、それ以外はStage単位でResumeする。
 6. ログ本文は英語、既定levelはDEBUGとし、level名だけを色付きにする。secretや巨大payloadは記録しない。
 7. 挙動を変更した場合は関連するreferenceとテストも同じ変更で更新する。
+8. Qdrant ingestは安定IDでupsertし、既存pointの削除は明示的な `--replace-source` の場合だけ行う。
