@@ -1,0 +1,4 @@
+interface:
+  display_name: "Translate JA v4"
+  short_description: "LangGraphでPDF/Wordを日本語DOCXへ変換"
+  default_prompt: "Use $translate-ja-v4 to translate a PDF or Word document with the LangChain/LangGraph pipeline."

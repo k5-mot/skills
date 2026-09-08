@@ -1,0 +1,7 @@
+english-short,english-long,japanse-short,japanese-long,kind,description,note,reference
+STRATCOM,Strategic Command,STRATCOM,戦略軍,proper noun,Command organization,Keep English when the official name is required.,Internal terminology guide
+Docling,,Docling,,product,Document parsing tool,Do not translate product names.,https://docling-project.github.io/docling/
+VLM,Vision Language Model,VLM,視覚言語モデル,technical term,Model that processes text and images,Keep the abbreviation in headings.,Internal AI glossary
+API,Application Programming Interface,API,アプリケーションプログラミングインターフェース,technical term,Interface used by software,Keep the abbreviation when it appears in the source.,Internal engineering glossary
+,reading order,,読み順,term,Order in which document elements should be read,,
+,bounding box,,バウンディングボックス,term,Rectangle coordinates for a detected element,,
