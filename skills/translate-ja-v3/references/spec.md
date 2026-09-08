@@ -77,7 +77,7 @@ english-short,english-long,japanse-short,japanese-long,kind,description,note,ref
 
 ## Prompt契約
 
-組み込みpromptは、担当する役割、日本語訳、外部ルールへの従属、structured outputの最上位container名だけにする。保持対象、補正範囲、忠実性、用語判断など変更可能な方針は `examples/*-rules.md` に置く。
+組み込みpromptは、担当する役割、日本語訳、外部ルールへの従属、structured output schemaだけにする。保持対象、補正範囲、忠実性、用語判断など変更可能な方針は `examples/*-rules.md` に置く。Structureは `op` と対象値を別fieldで返す正規patch形式を指示し、既知の操作名をkeyにした単一操作の短縮形式だけは同じ形式へ正規化する。
 
 Structure、Translate、Reviewはrequest失敗時に対象を要素境界で二分する。1要素でも失敗すれば例外を返し、保存済み要素は次回Resumeする。LangGraph node retryは最大2回である。
 

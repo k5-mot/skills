@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..config import PipelineOptions, PipelineState, state_options, state_paths
 from ..io import (
@@ -41,6 +41,36 @@ class StructurePatch(BaseModel):
     level: int | None = Field(default=None, ge=1, le=6)
     code_spans: list[str] = Field(default_factory=list)
     reason: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_shorthand(cls, value: Any) -> Any:
+        """操作名をkeyにしたVLM応答を正規patch形式へ変換する。
+
+        Args:
+            value: Pydantic検証前のpatch候補。
+
+        Returns:
+            単一の既知操作を正規化した値。対象外なら元の値。
+        """
+
+        if not isinstance(value, dict) or value.get("op"):
+            return value
+        fields = {
+            "set_label": "label",
+            "set_heading_level": "level",
+            "merge_texts": "refs",
+            "set_table_cell_inline_code": "code_spans",
+        }
+        operations = [operation for operation in fields if operation in value]
+        if len(operations) != 1:
+            return value
+        operation = operations[0]
+        normalized = dict(value)
+        operation_value = normalized.pop(operation)
+        normalized["op"] = operation
+        normalized.setdefault(fields[operation], operation_value)
+        return normalized
 
 
 class StructureResponse(BaseModel):
@@ -156,8 +186,17 @@ def _request(
         Pydantic検証済みpatch配列。
     """
 
-    system = "Docling JSONの構造を補正し、patches配列を持つobjectで回答してください。"
+    system = (
+        "Docling JSONの構造を補正し、patches配列を持つobjectで回答してください。"
+        "各patchはopと対象値を別fieldで返してください。"
+    )
     prompt = f"""次の要素と画像を確認し、必要なpatchだけをJSONで返してください。
+
+patch形式:
+- set_label: {{"op":"set_label","ref":"...","label":"code|caption"}}
+- set_heading_level: {{"op":"set_heading_level","ref":"...","level":1}}
+- merge_texts: {{"op":"merge_texts","refs":["...","..."]}}
+- set_table_cell_inline_code: {{"op":"set_table_cell_inline_code","ref":"...","code_spans":["..."]}}
 
 外部ルール:
 {rules or "なし"}

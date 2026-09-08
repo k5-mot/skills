@@ -37,6 +37,7 @@ from translate_ja_v3.stages.review import (
 )
 from translate_ja_v3.stages.structure import (
     StructurePatch,
+    StructureResponse,
     _apply,
     _page_image,
     _request_with_fallback,
@@ -305,6 +306,22 @@ def test_structure_patches_keep_stable_refs() -> None:
     assert len(document["texts"]) == 3
     assert document["texts"][2]["self_ref"] == "#/texts/2"
     assert document["texts"][2]["structure_ja_v3"]["merged_into"] == "#/texts/1"
+
+
+def test_structure_response_normalizes_operation_shorthand() -> None:
+    """操作名をkeyにしたVLM応答を正規patchへ変換することを確認する。
+
+    Returns:
+        なし。
+    """
+
+    response = StructureResponse.model_validate(
+        {"patches": [{"ref": "#/texts/70", "set_heading_level": 3}]}
+    )
+
+    assert response.patches == [
+        StructurePatch(op="set_heading_level", ref="#/texts/70", level=3)
+    ]
 
 
 def test_page_image_rejects_parent_traversal(tmp_path: Path) -> None:
