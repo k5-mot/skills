@@ -76,7 +76,7 @@ Reviewもbatch単位で実行し、現在訳の1.1倍とreason・JSON field余�
 
 ## MarkdownStageとDocxStage
 
-MarkdownStageはpage/order順に本文、見出し、code block、表、画像を描画する。表セルinline codeはbacktickで囲む。
+MarkdownStageはpage/order順に本文、見出し、code block、表、画像を描画する。表セルinline codeはbacktickで囲む。code本文内のbacktick列より長いfenceを選び、保存前にfenceの対応、table列数、制御文字、翻訳placeholderの残存、ローカル画像URIの安全性と存在を検証する。不正なMarkdownは保存せずStageを失敗させる。
 
 DocxStageはpandocとreference docxでWordを生成した後、OOXMLを後処理する。内容が `---` だけの段落は文字列を消して段落下罫線へ変換する。図・表captionには `SEQ 図` / `SEQ 表` fieldを付け、文書先頭へ「目次」「図目次」「表目次」と対応するTOC fieldを挿入する。`updateFields=true` によりWordで開いたときにfieldを更新できる。最後に連続する見出し段落間だけ前後余白を0にする。`--skip-docx` ではMarkdownまで生成する。
 

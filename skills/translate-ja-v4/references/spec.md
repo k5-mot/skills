@@ -106,6 +106,8 @@ StructureStageはVLM patch適用後、見出しlevelを1〜6に制限し、先�
 
 ## Word後処理契約
 
+MarkdownStageは生成結果のcode fenceが閉じていること、連続table行の列数が一致すること、未対応制御文字と翻訳placeholderがないことを検証する。画像は成果物directory内の相対URIだけを許可し、対象fileの存在も必須とする。検証成功はmanifestのMarkdown記録へ残す。
+
 DocxStageはpandoc生成物へ次のOOXMLだけを追加する。
 
 - 単独の `---` 段落を `w:pBdr/w:bottom` の水平線へ変換する
@@ -127,7 +129,6 @@ fieldの表示結果はWordなどのfield更新対応アプリで更新する。
 | translate-ja | 独立したchunk JSONL、page番号・見出しpath・asset参照付きchunk | 要素metadataとmanifestに加えて交換用JSONLが必要か。 |
 | translate-ja | LLM streaming差分log | 機密原文がDEBUG logへ出るriskを許容するか。 |
 | translate-ja | chunkごとのattempt/statusと `fallback_source` | 失敗を例外にするv4契約から原文fallbackへ変えるか。 |
-| translate-ja | Markdown構文検証と警告 | MarkdownStageの生成結果へvalidatorを追加するか。 |
 | translate-ja | HTML labelを独立chunkとして保持 | Docling HTML要素をMarkdownへどう描画するか。 |
 | translate-ja-v2 | status別の細粒度retry分類 | 現在のAPI retry・batch二分をさらに分けるか。 |
 | translate-ja-v2 | Qdrant payload field名とtimeoutの個別設定 | 接続先schemaの可変性が必要か。 |

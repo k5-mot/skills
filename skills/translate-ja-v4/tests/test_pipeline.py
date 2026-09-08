@@ -36,7 +36,11 @@ from translate_ja_v4.io import (
 from translate_ja_v4.llm import estimate_output_tokens, llm_batches
 from translate_ja_v4.stages.clean import clean
 from translate_ja_v4.stages.docx import _enhance_word, _fix_heading_spacing
-from translate_ja_v4.stages.markdown import markdown
+from translate_ja_v4.stages.markdown import (
+    MarkdownValidationError,
+    _validate_markdown,
+    markdown,
+)
 from translate_ja_v4.stages.normalize import normalize
 from translate_ja_v4.stages.parse import (
     DoclingValidationError,
@@ -1184,6 +1188,47 @@ def test_markdown_renders_translations_code_and_inline_code() -> None:
     assert "APIを使う。" in result
     assert "```\nprint('x')" in result
     assert "API table" in result
+
+
+def test_markdown_validation_checks_fences_tables_and_images(tmp_path: Path) -> None:
+    """Markdownの主要構文とローカル画像参照を検証することを確認する。
+
+    Args:
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "page.png").write_bytes(b"png")
+    _validate_markdown(
+        "| A | B |\n| --- | --- |\n![page](artifacts/page.png)\n",
+        tmp_path,
+    )
+    with pytest.raises(MarkdownValidationError, match="unclosed code fence"):
+        _validate_markdown("```\ncode\n", tmp_path)
+    with pytest.raises(MarkdownValidationError, match="inconsistent table width"):
+        _validate_markdown("| A | B |\n| --- |\n", tmp_path)
+    with pytest.raises(MarkdownValidationError, match="missing image"):
+        _validate_markdown("![missing](artifacts/missing.png)\n", tmp_path)
+
+
+def test_markdown_uses_longer_fence_for_embedded_backticks(tmp_path: Path) -> None:
+    """code本文中のbacktick列と外側fenceが衝突しないことを確認する。
+
+    Args:
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    document = {"texts": [{"label": "code", "text": "```nested```"}]}
+    result = markdown(document)
+    assert result.startswith("````\n")
+    _validate_markdown(result, tmp_path)
 
 
 def test_manifest_cache_requires_output_hash(tmp_path: Path) -> None:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from ..config import PipelineState, state_paths
 from ..document import iter_table_cells
@@ -17,6 +19,14 @@ from ..io import (
     text_of,
     write_bytes,
 )
+
+FENCE_PATTERN = re.compile(r"^(`{3,}|~{3,})(.*)$")
+IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+PLACEHOLDER_PATTERN = re.compile(r"ZXQKEEPX*\d{6}QXZ")
+
+
+class MarkdownValidationError(ValueError):
+    """生成Markdownの構文またはローカル参照違反を表す。"""
 
 
 def _render_value(item: dict[str, Any]) -> str:
@@ -50,6 +60,91 @@ def _inline_code(text: str, item: dict[str, Any]) -> str:
     for span in sorted(spans if isinstance(spans, list) else [], key=len, reverse=True):
         text = text.replace(span, f"`{span}`")
     return text
+
+
+def _code_block(text: str) -> str:
+    """内容と衝突しない長さのbacktick fenceでcode blockを作る。
+
+    Args:
+        text: code block本文。
+
+    Returns:
+        fenced code block。
+    """
+
+    longest = max(
+        (len(match.group(0)) for match in re.finditer(r"`+", text)), default=0
+    )
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}\n{text}\n{fence}"
+
+
+def _validate_markdown(value: str, output_dir: Path) -> None:
+    """Markdownのfence、table、画像参照、制御文字を検証する。
+
+    Args:
+        value: 検証するMarkdown文字列。
+        output_dir: `artifacts/` を含む成果物directory。
+
+    Returns:
+        なし。
+
+    Raises:
+        MarkdownValidationError: 構文または画像参照が不正な場合。
+    """
+
+    errors: list[str] = []
+    controls = [
+        character
+        for character in value
+        if ord(character) < 32 and character not in "\n\r\t"
+    ]
+    if controls:
+        errors.append("unsupported control characters")
+    if PLACEHOLDER_PATTERN.search(value):
+        errors.append("unresolved translation placeholder")
+
+    fence: tuple[str, int, int] | None = None
+    outside_lines: list[tuple[int, str]] = []
+    for line_number, line in enumerate(value.splitlines(), start=1):
+        match = FENCE_PATTERN.match(line)
+        if fence is not None:
+            marker, length, _opening_line = fence
+            stripped = line.strip()
+            if stripped and set(stripped) == {marker} and len(stripped) >= length:
+                fence = None
+            continue
+        if match:
+            marker = match.group(1)
+            fence = (marker[0], len(marker), line_number)
+        else:
+            outside_lines.append((line_number, line))
+    if fence is not None:
+        errors.append(f"unclosed code fence at line {fence[2]}")
+
+    table_width: int | None = None
+    for line_number, line in outside_lines:
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.endswith("|"):
+            width = len(re.findall(r"(?<!\\)\|", stripped)) - 1
+            if width < 1:
+                errors.append(f"invalid table row at line {line_number}")
+            elif table_width is not None and width != table_width:
+                errors.append(f"inconsistent table width at line {line_number}")
+            table_width = width
+        else:
+            table_width = None
+
+    for raw_uri in IMAGE_PATTERN.findall("\n".join(line for _, line in outside_lines)):
+        uri = unquote(raw_uri.strip().split(maxsplit=1)[0].strip("<>"))
+        parsed = urlparse(uri)
+        pure = PurePosixPath(uri)
+        if parsed.scheme or Path(uri).is_absolute() or ".." in pure.parts:
+            errors.append(f"unsafe image URI: {raw_uri}")
+        elif not output_dir.joinpath(*pure.parts).is_file():
+            errors.append(f"missing image: {raw_uri}")
+    if errors:
+        raise MarkdownValidationError("; ".join(errors))
 
 
 def _table(table: dict[str, Any], table_index: int) -> str:
@@ -117,7 +212,7 @@ def markdown(document: dict[str, Any]) -> str:
             text = _render_value(item).strip()
             label = str(item.get("label", ""))
             if label in {"code", "program_listing"}:
-                value = f"```\n{text}\n```"
+                value = _code_block(text)
             elif label in {"title", "section_header", "heading", "header"}:
                 value = f"{'#' * max(1, min(6, int(item.get('level', 1))))} {text}"
             else:
@@ -138,7 +233,7 @@ def markdown_stage(state: PipelineState) -> PipelineState:
     """
 
     paths = state_paths(state)
-    input_hash, config_hash = hash_file(paths.reviewed_json), hash_json({"version": 1})
+    input_hash, config_hash = hash_file(paths.reviewed_json), hash_json({"version": 2})
     if stage_cached(
         paths.manifest, "markdown", input_hash, config_hash, paths.markdown
     ):
@@ -152,9 +247,9 @@ def markdown_stage(state: PipelineState) -> PipelineState:
             config_hash,
             paths.markdown,
         )
-        write_bytes(
-            paths.markdown, markdown(read_json(paths.reviewed_json)).encode("utf-8")
-        )
+        value = markdown(read_json(paths.reviewed_json))
+        _validate_markdown(value, paths.output_dir)
+        write_bytes(paths.markdown, value.encode("utf-8"))
         record_stage(
             paths.manifest,
             "markdown",
@@ -162,5 +257,6 @@ def markdown_stage(state: PipelineState) -> PipelineState:
             input_hash,
             config_hash,
             paths.markdown,
+            {"validated": True},
         )
     return {"current_path": str(paths.markdown), "completed_stage": "markdown"}
