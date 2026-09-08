@@ -29,7 +29,7 @@ uv run python /home/penguin/.codex/skills/.system/skill-creator/scripts/quick_va
 - Structure: 対応spanをpayloadへ含め、許可されたpatchだけを適用し、code結合後もrefを削除しない。既知操作の短縮応答を正規化し、許可外の値を無視し、失敗batchを二分し、見出し階層の飛びを丸める。
 - Clean: 本文と表セルのdot・中黒を3文字へ縮め、codeとinline codeを保持する。
 - glossary: 8列を必須とし、英語2列だけで検索し、`note` と `reference` をprompt行から除く。
-- Translate: backend共通契約、batch上限、structured ID照合、失敗時二分、metadata保存、付録内見出しだけの除外を確認する。
+- Translate: backend共通契約、batch上限、structured ID照合、失敗時二分、metadata保存、付録内見出しだけの除外を確認する。LibreTranslateへはtext配列だけを送り、URL、path、command option、inline code、identifierを可逆placeholderで保持する。
 - Review: 二Reviewerの並列分岐、Adjudicatorへの不一致限定、RAGのbatch検索、失敗時二分を確認する。
 - Markdown: 見出し英日併記、本文日本語、code、表、inline code、画像を確認する。
 - Docx: pandoc引数、水平線、図表SEQ、目次・図目次・表目次、field自動更新、連続見出し余白のOOXML補正を確認する。

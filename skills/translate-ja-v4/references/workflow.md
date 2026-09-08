@@ -61,7 +61,7 @@ Word入力は分割せずDocling Serveへ送る。JSONとartifact URIの整合�
 
 英字を含む本文、見出し、table caption、table cellを対象にする。table cellは `data.grid`、`data.table_cells`、`data.cells` を共通iteratorで走査し、Structure、Clean、Translate、Review、Markdownで同じ更新先pathを使う。code、page header/footer、および `APPENDIX <番号または英字>` 以降の付録内見出しは除外する。したがって付録の見出しだけが英語のまま残り、付録本文は翻訳される。原文は上書きせず `translate_ja_v4` metadataへ英語、日本語、描画文字列、種別を保存する。通常見出しは英日併記、本文は日本語だけを描画する。
 
-LLM backendはLangChainの `ChatPromptTemplate | with_structured_output` LCEL chainを使う。各要素では英語2列に一致した用語だけを添付し、`note` と `reference` は除外する。LibreTranslate backendは同じ基底classを実装し、配列を一括送信する。
+LLM backendはLangChainの `ChatPromptTemplate | with_structured_output` LCEL chainを使う。各要素では英語2列に一致した用語だけを添付し、`note` と `reference` は除外する。LibreTranslate backendは同じ基底classを実装し、JSON全体ではなく対象の原文文字列だけを配列送信する。送信前にURL、path、command option、inline code、機械的に識別できるidentifierを一意なplaceholderへ置換し、応答内に各placeholderが1個あることを確認してから原文表記へ戻す。欠落・重複時は成果物を更新せず失敗にする。
 
 batchは `batch_chars` と任意の `max_batch_elements` で作る。`0` は件数無制限であり、文字数制限は残る。LLM backendだけはpromptが `context_chars` に収まるよう追加調整し、失敗時は失敗batchだけを二分する。LibreTranslateのbatchは `context_chars` の影響を受けない。
 

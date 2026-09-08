@@ -61,7 +61,13 @@ from translate_ja_v4.stages.structure import (
     _page_payload,
     _request_with_fallback,
 )
-from translate_ja_v4.stages.translate import Translator, _translate_with_fallback
+from translate_ja_v4.stages.translate import (
+    LibreTranslator,
+    Translator,
+    _protect_text,
+    _restore_text,
+    _translate_with_fallback,
+)
 
 
 def _document() -> dict[str, Any]:
@@ -928,6 +934,69 @@ def test_translate_fallback_halves_failed_batch() -> None:
     results = list(_translate_with_fallback(backend, batch, split_on_error=True))
     assert len(results) == 4
     assert backend.calls == [4, 2, 1, 1, 2, 1, 1]
+
+
+def test_libre_translator_sends_only_protected_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LibreTranslateへJSONを送らず保持対象を可逆置換することを確認する。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        なし。
+    """
+
+    import translate_ja_v4.stages.translate as module
+
+    sent: dict[str, Any] = {}
+
+    def post(url: str, **kwargs: Any) -> httpx.Response:
+        """保護済みqueryを記録して疑似訳を返す。
+
+        Args:
+            url: LibreTranslate endpoint。
+            **kwargs: JSON bodyとtimeout。
+
+        Returns:
+            queryをそのまま含む成功response。
+        """
+
+        sent.update(kwargs["json"])
+        values = [f"訳:{value}" for value in kwargs["json"]["q"]]
+        return httpx.Response(
+            200,
+            json={"translatedText": values},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setenv("LIBRETRANSLATE_URL", "http://libre")
+    monkeypatch.setattr(module.httpx, "post", post)
+    source = "Run `api_call()` at https://example.com/a with ./bin/tool --dry-run."
+    result = LibreTranslator(PipelineOptions(input=Path("input.pdf"))).translate(
+        [{"id": "#/texts/0", "source": source}]
+    )
+
+    assert set(sent) <= {"q", "source", "target", "format", "api_key"}
+    assert len(sent["q"]) == 1
+    assert "https://example.com/a" not in sent["q"][0]
+    assert "./bin/tool" not in sent["q"][0]
+    assert result["#/texts/0"] == f"訳:{source}"
+
+
+def test_protected_text_rejects_changed_placeholder() -> None:
+    """欠落したplaceholderを黙って適用しないことを確認する。
+
+    Returns:
+        なし。
+    """
+
+    value, protected = _protect_text("Use API at /opt/tool.")
+    assert protected
+    assert "API" not in value
+    with pytest.raises(ValueError, match="changed protected placeholder"):
+        _restore_text("placeholder was removed", protected)
 
 
 def test_review_graph_adjudicates_only_disputes(

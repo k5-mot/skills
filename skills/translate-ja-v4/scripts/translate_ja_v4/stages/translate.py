@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
@@ -37,6 +38,74 @@ from ..io import (
 from ..llm import prompt_runnable
 
 DEFAULT_RULES = "- 日本語へ翻訳する。\n- 指定された外部翻訳ルールに従う。"
+PROTECTED_PATTERN = re.compile(
+    r"`[^`\n]+`"
+    r"|https?://[^\s<>()]+"
+    r"|www\.[^\s<>()]+"
+    r"|(?<!\w)[A-Za-z]:\\[^\s]+"
+    r"|(?<!\w)(?:\.\.?/|~/|/)[A-Za-z0-9_.~+@%/-]+"
+    r"|(?<!\w)--?[A-Za-z][A-Za-z0-9-]*"
+    r"|\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b"
+    r"|\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b"
+    r"|\b[a-z]+(?:[A-Z][A-Za-z0-9]*)+\b"
+    r"|\b[A-Z][A-Z0-9]{1,}\b"
+)
+
+
+def _protect_text(value: str) -> tuple[str, list[tuple[str, str]]]:
+    """機械翻訳で保持すべき断片を衝突しないplaceholderへ置換する。
+
+    Args:
+        value: LibreTranslateへ送る原文。
+
+    Returns:
+        保護済み文字列とplaceholder・原文断片の対応表。
+    """
+
+    prefix = "ZXQKEEP"
+    while prefix in value:
+        prefix += "X"
+    protected: list[tuple[str, str]] = []
+
+    def replace(match: re.Match[str]) -> str:
+        """一致断片を一意なplaceholderへ変換する。
+
+        Args:
+            match: 保護対象の正規表現match。
+
+        Returns:
+            LibreTranslateが翻訳しにくいASCII placeholder。
+        """
+
+        placeholder = f"{prefix}{len(protected):06d}QXZ"
+        protected.append((placeholder, match.group(0)))
+        return placeholder
+
+    return PROTECTED_PATTERN.sub(replace, value), protected
+
+
+def _restore_text(value: str, protected: list[tuple[str, str]]) -> str:
+    """LibreTranslate応答のplaceholderを原文断片へ戻す。
+
+    Args:
+        value: LibreTranslateから返された訳文。
+        protected: `_protect_text` が作った対応表。
+
+    Returns:
+        URL、path、identifierを復元した訳文。
+
+    Raises:
+        ValueError: placeholderが欠落または重複している場合。
+    """
+
+    restored = value
+    for placeholder, original in protected:
+        if restored.count(placeholder) != 1:
+            raise ValueError(
+                f"LibreTranslate changed protected placeholder={placeholder}"
+            )
+        restored = restored.replace(placeholder, original)
+    return restored
 
 
 class TranslationItem(BaseModel):
@@ -199,8 +268,9 @@ class LibreTranslator(Translator):
             対象IDから日本語訳への対応。
         """
 
+        protected = [_protect_text(str(item["source"])) for item in batch]
         payload: dict[str, Any] = {
-            "q": [item["source"] for item in batch],
+            "q": [value for value, _ in protected],
             "source": "en",
             "target": "ja",
             "format": "text",
@@ -222,8 +292,10 @@ class LibreTranslator(Translator):
                 if not isinstance(values, list) or len(values) != len(batch):
                     raise ValueError("LibreTranslate response count mismatch")
                 return {
-                    str(item["id"]): str(value)
-                    for item, value in zip(batch, values, strict=True)
+                    str(item["id"]): _restore_text(str(value), replacements)
+                    for item, value, (_, replacements) in zip(
+                        batch, values, protected, strict=True
+                    )
                 }
             except httpx.HTTPError as error:
                 response = getattr(error, "response", None)
@@ -316,7 +388,7 @@ def translate_stage(state: PipelineState) -> PipelineState:
     input_hash = hash_file(paths.cleaned_json)
     config_hash = hash_json(
         {
-            "version": 1,
+            "version": 2,
             "backend": options.translator,
             "batch_chars": options.batch_chars,
             "context_chars": options.context_chars,
