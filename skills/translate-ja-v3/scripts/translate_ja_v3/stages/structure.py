@@ -7,7 +7,7 @@ import json
 import os
 from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, model_validator
@@ -30,15 +30,13 @@ from ..llm import image_messages, structured_model
 
 
 class StructurePatch(BaseModel):
-    """VLMが返す許可済み構造補正候補を表す。"""
+    """VLMが返す構造補正候補を表す。"""
 
-    op: Literal[
-        "set_label", "set_heading_level", "merge_texts", "set_table_cell_inline_code"
-    ]
+    op: str
     ref: str | None = None
     refs: list[str] = Field(default_factory=list)
-    label: Literal["code", "caption"] | None = None
-    level: int | None = Field(default=None, ge=1, le=6)
+    label: str | None = None
+    level: int | None = None
     code_spans: list[str] = Field(default_factory=list)
     reason: str = ""
 
@@ -248,7 +246,7 @@ def _apply(document: dict[str, Any], patches: list[StructurePatch]) -> int:
     applied = 0
     for patch in patches:
         target = _target(document, patch.ref or "")
-        if patch.op == "set_label" and target and patch.label:
+        if patch.op == "set_label" and target and patch.label in {"code", "caption"}:
             if patch.label == "code" or target.get("label") in {
                 "title",
                 "section_header",
@@ -260,7 +258,8 @@ def _apply(document: dict[str, Any], patches: list[StructurePatch]) -> int:
         elif (
             patch.op == "set_heading_level"
             and target
-            and patch.level
+            and patch.level is not None
+            and 1 <= patch.level <= 6
             and target.get("label") in {"title", "section_header", "heading", "header"}
         ):
             target["level"] = patch.level

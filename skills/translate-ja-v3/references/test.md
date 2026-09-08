@@ -24,7 +24,7 @@ uv run python /home/penguin/.codex/skills/.system/skill-creator/scripts/quick_va
 - path: 入力stem JSONと固定 `document.*` 名が生成される。
 - Parse: `#/texts/0` 等のref、page number、artifact URIをchunk offsetで再採番する。
 - Normalize: 座標のあるtextだけを読み順に並べ、全参照を維持する。
-- Structure: 許可されたpatchだけを適用し、code結合後もrefを削除しない。既知操作の短縮応答を正規化し、失敗batchを二分する。
+- Structure: 許可されたpatchだけを適用し、code結合後もrefを削除しない。既知操作の短縮応答を正規化し、許可外の値を無視し、失敗batchを二分する。
 - Clean: 本文と表セルのdot・中黒を3文字へ縮め、codeとinline codeを保持する。
 - glossary: 8列を必須とし、英語2列だけで検索し、`note` と `reference` をprompt行から除く。
 - Translate: backend共通契約、batch上限、structured ID照合、失敗時二分、metadata保存を確認する。

@@ -324,6 +324,22 @@ def test_structure_response_normalizes_operation_shorthand() -> None:
     ]
 
 
+def test_structure_ignores_invalid_semantic_patch() -> None:
+    """schema外のlabelを含むpatchだけを安全に無視することを確認する。
+
+    Returns:
+        なし。
+    """
+
+    document = _document()
+    response = StructureResponse.model_validate(
+        {"patches": [{"op": "set_label", "ref": "#/texts/0", "label": "text"}]}
+    )
+
+    assert _apply(document, response.patches) == 0
+    assert document["texts"][0]["label"] == "section_header"
+
+
 def test_page_image_rejects_parent_traversal(tmp_path: Path) -> None:
     """Structure画像pathが出力先外へ脱出できないことを確認する。
 
