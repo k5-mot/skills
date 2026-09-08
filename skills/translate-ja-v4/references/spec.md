@@ -45,7 +45,7 @@ flowchart TD
 
 ## CLI契約
 
-正本は `scripts/run_pipeline.py --help` とする。主要既定値は `translator=default`、`context_chars=50000`、`batch_chars=20000`、`max_batch_elements=0`、`pdf_chunk_pages=10`、`request_timeout_seconds=1800`、`max_retries=5`、`stage_max_attempts=2`、`LOG_LEVEL=DEBUG` である。API retryとLangGraph Stage retryは障害範囲が異なるため別々に調整できる。
+正本は `scripts/run_pipeline.py --help` とする。主要既定値は `translator=default`、`context_chars=50000`、`batch_chars=20000`、`max_batch_elements=0`、`max_output_tokens=16384`、`pdf_chunk_pages=10`、`request_timeout_seconds=1800`、`max_retries=5`、`stage_max_attempts=2`、`LOG_LEVEL=DEBUG` である。API retryとLangGraph Stage retryは障害範囲が異なるため別々に調整できる。
 
 `--translator default` はLibreTranslate、`--translator llm` はLangChain ChatOpenAIを使う。StructureとReviewはtranslator設定に関係なくOpenAI互換APIを使う。ただし `--skip-vlm`、`--skip-review` で省略できる。
 
@@ -84,6 +84,8 @@ english-short,english-long,japanse-short,japanese-long,kind,description,note,ref
 組み込みpromptは、担当する役割、日本語訳、外部ルールへの従属、structured output schemaだけにする。保持対象、補正範囲、忠実性、用語判断など変更可能な方針は `examples/*-rules.md` に置く。Structureは `op` と対象値を別fieldで返す正規patch形式を指示し、既知の操作名をkeyにした単一操作の短縮形式だけは同じ形式へ正規化する。VLMが返した未知操作や許可外の値は、応答全体を失敗させずローカル適用時に無視する。
 
 Structure、Translate、Reviewはrequest失敗時に対象を要素境界で二分する。1要素でも失敗すれば例外を返し、保存済み要素は次回Resumeする。DoclingとLibreTranslateの408、409、429、5xxおよび通信障害は指数backoffでAPI retryする。LangGraph node retryの回数と間隔はPipelineOptionsで独立に設定する。
+
+LLM batchは入力文字数だけでなく出力長も事前評価する。Translateは原文文字数の1.25倍、Reviewは現在訳の1.1倍に要素ごとのstructured JSON余白を加え、Structureは全対象にpatchが返る場合の要素別余白を見積もる。単一要素が上限を超える場合だけはAPIへ送り、既存の縮小fallbackまたはAPI errorへ委ねる。`max_output_tokens` はChatOpenAIの出力上限にも適用する。
 
 ## データと安全性
 
@@ -126,7 +128,6 @@ fieldの表示結果はWordなどのfield更新対応アプリで更新する。
 | translate-ja | chunkごとのattempt/statusと `fallback_source` | 失敗を例外にするv4契約から原文fallbackへ変えるか。 |
 | translate-ja | Markdown構文検証と警告 | MarkdownStageの生成結果へvalidatorを追加するか。 |
 | translate-ja | HTML labelを独立chunkとして保持 | Docling HTML要素をMarkdownへどう描画するか。 |
-| translate-ja-v2 | LLM出力長の事前見積り | 利用modelごとのtoken上限をCLI化するか。 |
 | translate-ja-v2 | status別の細粒度retry分類 | 現在のAPI retry・batch二分をさらに分けるか。 |
 | translate-ja-v2 | Qdrant payload field名とtimeoutの個別設定 | 接続先schemaの可変性が必要か。 |
 | translate-ja-v2 | Structure patchごとの詳細監査記録 | manifestを進捗正本だけでなく監査logにもするか。 |

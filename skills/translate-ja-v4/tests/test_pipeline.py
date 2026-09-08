@@ -33,6 +33,7 @@ from translate_ja_v4.io import (
     stage_cached,
     write_json,
 )
+from translate_ja_v4.llm import estimate_output_tokens, llm_batches
 from translate_ja_v4.stages.clean import clean
 from translate_ja_v4.stages.docx import _enhance_word, _fix_heading_spacing
 from translate_ja_v4.stages.markdown import markdown
@@ -250,6 +251,19 @@ def test_batches_obey_both_limits() -> None:
     items = [{"source": value} for value in ("1234", "5678", "90")]
     assert [len(batch) for batch in batches(items, 8, 0)] == [2, 1]
     assert [len(batch) for batch in batches(items, 100, 1)] == [1, 1, 1]
+
+
+def test_llm_batches_obey_estimated_output_limit() -> None:
+    """LLM batchが推定出力token上限でも分割されることを確認する。
+
+    Returns:
+        なし。
+    """
+
+    items = [{"source": "x" * 100} for _ in range(3)]
+    result = llm_batches(items, 10_000, 0, 350)
+    assert [len(batch) for batch in result] == [2, 1]
+    assert estimate_output_tokens(200, 2) == 346
 
 
 def test_translation_targets_include_text_caption_and_cell() -> None:

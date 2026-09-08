@@ -17,7 +17,7 @@ from qdrant_client import QdrantClient
 from typing_extensions import TypedDict
 
 from ..config import PipelineOptions, PipelineState, state_options, state_paths
-from ..document import batches, resolve_target, translation_targets
+from ..document import resolve_target, translation_targets
 from ..io import (
     LOGGER,
     glossary_matches,
@@ -31,7 +31,7 @@ from ..io import (
     stage_partial,
     write_json,
 )
-from ..llm import prompt_runnable
+from ..llm import llm_batches, prompt_runnable
 
 DEFAULT_RULES = "- 日本語訳をレビューする。\n- 指定された外部Reviewルールに従う。"
 
@@ -385,7 +385,7 @@ def review_stage(state: PipelineState) -> PipelineState:
     )
     config_hash = hash_json(
         {
-            "version": 1,
+            "version": 2,
             "skip": options.skip_review,
             "rules": rules,
             "glossary": glossary,
@@ -393,6 +393,7 @@ def review_stage(state: PipelineState) -> PipelineState:
             "context_chars": options.context_chars,
             "batch_chars": options.batch_chars,
             "max_elements": options.max_batch_elements,
+            "max_output_tokens": options.max_output_tokens,
             "model": os.getenv("OPENAI_MODEL"),
             "collection": os.getenv("QDRANT_COLLECTION")
             if options.review_rag
@@ -438,8 +439,23 @@ def review_stage(state: PipelineState) -> PipelineState:
     retriever = _retriever() if options.review_rag else None
     graph = _review_graph()
     prompt_budget = max(1, (options.context_chars - len(rules) - 2_000) // 2)
-    for batch in batches(
-        pending, min(options.batch_chars, prompt_budget), options.max_batch_elements
+    estimated = [
+        {
+            **target,
+            "_output_text": resolve_target(document, target["path"])["translate_ja_v4"][
+                "text_ja"
+            ],
+        }
+        for target in pending
+    ]
+    for batch in llm_batches(
+        estimated,
+        min(options.batch_chars, prompt_budget),
+        options.max_batch_elements,
+        options.max_output_tokens,
+        text_key="_output_text",
+        expansion=1.1,
+        per_element_tokens=120,
     ):
         for completed_batch, result in _run_with_fallback(
             graph, options, rules, glossary, retriever, document, batch

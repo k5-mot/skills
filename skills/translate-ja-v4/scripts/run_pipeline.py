@@ -53,6 +53,9 @@ def cli(
     max_batch_elements: Annotated[
         int, typer.Option(min=0, help="maximum elements; 0 means no element limit")
     ] = 0,
+    max_output_tokens: Annotated[
+        int, typer.Option(min=256, help="maximum estimated LLM output tokens")
+    ] = 16_384,
     request_timeout_seconds: Annotated[
         float,
         typer.Option(
@@ -110,6 +113,7 @@ def cli(
         context_chars: prompt全体の最大文字数。
         batch_chars: batch内原文の最大文字数。
         max_batch_elements: batch内要素数上限。0は無制限。
+        max_output_tokens: LLM応答の見積りおよびAPI上限token数。
         request_timeout_seconds: Docling、LLM、翻訳APIのtimeout秒数。
         max_retries: 初回失敗後のAPI最大再試行回数。
         retry_initial_seconds: API再試行の初期待機秒数。
@@ -145,6 +149,7 @@ def cli(
         context_chars=context_chars,
         batch_chars=batch_chars,
         max_batch_elements=max_batch_elements,
+        max_output_tokens=max_output_tokens,
         request_timeout_seconds=request_timeout_seconds,
         max_retries=max_retries,
         retry_initial_seconds=retry_initial_seconds,

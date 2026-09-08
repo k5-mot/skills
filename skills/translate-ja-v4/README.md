@@ -52,6 +52,7 @@ TranslateにもLLMを使う場合は `--translator llm` と翻訳ルールを指
 | `--context-chars INTEGER` | `50000` | 1 requestのprompt文字数上限。 |
 | `--batch-chars INTEGER` | `20000` | Translate/Reviewの原文文字数上限。 |
 | `--max-batch-elements INTEGER` | `0` | 要素数上限。`0` は文字数だけで動的に決定。 |
+| `--max-output-tokens INTEGER` | `16384` | LLM応答の事前見積りとAPI出力上限。 |
 | `--request-timeout-seconds FLOAT` | `1800` | Docling・LibreTranslate・LLMの1 requestのtimeout秒数。 |
 | `--max-retries INTEGER` | `5` | 一時的なAPI障害に対する初回後の再試行回数。 |
 | `--retry-initial-seconds FLOAT` | `1` | API再試行の初期待機秒数。 |
@@ -66,7 +67,7 @@ TranslateにもLLMを使う場合は `--translator llm` と翻訳ルールを指
 | `--skip-docx` | 無効 | docx生成を省略。 |
 | `--force` | 無効 | ParseStage cacheを無視。 |
 
-`--context-chars 50000 --max-batch-elements 0` では、`--batch-chars 20000`〜`30000` が実用的です。出力が長い文書や小さい出力上限のmodelでは `10000`〜`20000` に下げてください。LLM/VLM呼び出しが失敗すると、そのbatchだけを要素境界で半分にし、1要素まで自動縮小します。Docling OOMが続く場合は `--pdf-chunk-pages` を5程度まで下げます。
+`--context-chars 50000 --max-batch-elements 0 --max-output-tokens 16384` では、`--batch-chars 20000`〜`30000` が実用的です。Translateは原文長、Reviewは現在訳長、Structureは要素数からstructured output量も見積もり、入力上限より先に出力上限へ達する場合はbatchを分割します。出力上限が8,192 token程度のmodelでは `--max-output-tokens 8192 --batch-chars 10000`〜`15000` を目安にしてください。LLM/VLM呼び出しが失敗すると、そのbatchだけを要素境界で半分にし、1要素まで自動縮小します。Docling OOMが続く場合は `--pdf-chunk-pages` を5程度まで下げます。
 
 用語集schemaは `english-short,english-long,japanse-short,japanese-long,kind,description,note,reference` です。検索は英語2列に対して行い、一致した行だけをLLMへ渡します。`note` と `reference` は内部管理用で、promptには含めません。
 

@@ -51,7 +51,7 @@ Word入力は分割せずDocling Serveへ送る。JSONとartifact URIの整合�
 
 ページごとにtext、対応するPDF span、table cellのcompact JSONを作り、ローカルpage imageと一緒にLangChain structured modelへ渡す。spanの文字サイズ、font、weight、画像上の位置を根拠に、見出しlevel、見出しとcaptionの誤検出、本文として検出されたcode、隣接code結合、表セルinline codeを外部ルールに従って補正する。
 
-コード結合では左要素へ原文を結合し、右要素を空にして `merged_into` を記録する。要素を配列から削除しないため、後続batchとResumeでrefが変化しない。全VLM補正後、先頭見出しをlevel 1以下、後続見出しを直前より最大1段深いlevelへ決定論的に丸め、階層の飛びを残さない。この最終補正は `--skip-vlm` でも実行する。promptが `context_chars` を超えないよう事前分割し、API失敗時は要素数を半減する。
+コード結合では左要素へ原文を結合し、右要素を空にして `merged_into` を記録する。要素を配列から削除しないため、後続batchとResumeでrefが変化しない。全VLM補正後、先頭見出しをlevel 1以下、後続見出しを直前より最大1段深いlevelへ決定論的に丸め、階層の飛びを残さない。この最終補正は `--skip-vlm` でも実行する。promptが `context_chars` を超えないよう事前分割し、全要素にpatchが返る最悪ケースの推定出力が `max_output_tokens` を超える場合も要素境界で分割する。API失敗時は要素数を半減する。
 
 ## CleanStage
 
@@ -63,13 +63,13 @@ Word入力は分割せずDocling Serveへ送る。JSONとartifact URIの整合�
 
 LLM backendはLangChainの `ChatPromptTemplate | with_structured_output` LCEL chainを使う。各要素では英語2列に一致した用語だけを添付し、`note` と `reference` は除外する。LibreTranslate backendは同じ基底classを実装し、JSON全体ではなく対象の原文文字列だけを配列送信する。送信前にURL、path、command option、inline code、機械的に識別できるidentifierを一意なplaceholderへ置換し、応答内に各placeholderが1個あることを確認してから原文表記へ戻す。欠落・重複時は成果物を更新せず失敗にする。
 
-batchは `batch_chars` と任意の `max_batch_elements` で作る。`0` は件数無制限であり、文字数制限は残る。LLM backendだけはpromptが `context_chars` に収まるよう追加調整し、失敗時は失敗batchだけを二分する。LibreTranslateのbatchは `context_chars` の影響を受けない。
+batchは `batch_chars` と任意の `max_batch_elements` で作る。`0` は件数無制限であり、文字数制限は残る。LLM backendだけはpromptが `context_chars` に収まるよう追加調整し、原文の1.25倍とJSON field余白から見積もった応答が `max_output_tokens` を超える前にも分割する。失敗時は失敗batchだけを二分する。LibreTranslateのbatchは `context_chars` と `max_output_tokens` の影響を受けない。
 
 ## ReviewStage
 
 対象ごとに原文、現在訳、一致用語、任意のQdrant根拠を作る。LangGraph subgraphがFidelity ReviewerとTerminology Reviewerを並列実行し、同じ案はそのまま採用する。不一致だけをAdjudicatorへ渡す。全agentは同じ外部Reviewルールに従う。
 
-Reviewもbatch単位で実行し、失敗時は要素境界で二分する。結果は `translate_ja_v4.review_ja_v4` に理由を保存する。異常に長い出力は元の翻訳へ戻す。`--skip-review` ではtranslated JSONをreviewed JSONへコピーする。
+Reviewもbatch単位で実行し、現在訳の1.1倍とreason・JSON field余白から推定した応答が `max_output_tokens` を超えないよう分割する。失敗時は要素境界で二分する。結果は `translate_ja_v4.review_ja_v4` に理由を保存する。異常に長い出力は元の翻訳へ戻す。`--skip-review` ではtranslated JSONをreviewed JSONへコピーする。
 
 ## MarkdownStageとDocxStage
 

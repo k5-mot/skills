@@ -35,7 +35,7 @@ from ..io import (
     stage_partial,
     write_json,
 )
-from ..llm import prompt_runnable
+from ..llm import llm_batches, prompt_runnable
 
 DEFAULT_RULES = "- 日本語へ翻訳する。\n- 指定された外部翻訳ルールに従う。"
 PROTECTED_PATTERN = re.compile(
@@ -393,6 +393,7 @@ def translate_stage(state: PipelineState) -> PipelineState:
             "batch_chars": options.batch_chars,
             "context_chars": options.context_chars,
             "max_elements": options.max_batch_elements,
+            "max_output_tokens": options.max_output_tokens,
             "rules": rules,
             "glossary": glossary,
             "model": os.getenv("OPENAI_MODEL")
@@ -440,7 +441,17 @@ def translate_stage(state: PipelineState) -> PipelineState:
         request_limit = min(
             request_limit, max(1, options.context_chars - len(rules) - 2_000)
         )
-    for batch in batches(pending, request_limit, options.max_batch_elements):
+    pending_batches = (
+        llm_batches(
+            pending,
+            request_limit,
+            options.max_batch_elements,
+            options.max_output_tokens,
+        )
+        if options.translator == TranslationBackend.LLM
+        else batches(pending, request_limit, options.max_batch_elements)
+    )
+    for batch in pending_batches:
         results = _translate_with_fallback(
             backend,
             batch,

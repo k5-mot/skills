@@ -41,6 +41,7 @@ class PipelineOptions(FrozenModel):
     context_chars: int = Field(default=50_000, ge=1)
     batch_chars: int = Field(default=20_000, ge=1)
     max_batch_elements: int = Field(default=0, ge=0)
+    max_output_tokens: int = Field(default=16_384, ge=256)
     request_timeout_seconds: float = Field(default=1_800, ge=1)
     max_retries: int = Field(default=5, ge=0)
     retry_initial_seconds: float = Field(default=1, ge=0)

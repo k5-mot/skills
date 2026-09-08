@@ -27,7 +27,7 @@ from ..io import (
     text_of,
     write_json,
 )
-from ..llm import image_messages, structured_model
+from ..llm import estimate_output_tokens, image_messages, structured_model
 
 
 class StructurePatch(BaseModel):
@@ -387,7 +387,10 @@ def _request_with_fallback(
 
 
 def _payload_batches(
-    payload: dict[str, list[dict[str, Any]]], rules: str, limit: int
+    payload: dict[str, list[dict[str, Any]]],
+    rules: str,
+    limit: int,
+    max_output_tokens: int,
 ) -> list[dict[str, list[dict[str, Any]]]]:
     """Structure payloadをcontext文字数以内の要素境界で分割する。
 
@@ -395,6 +398,7 @@ def _payload_batches(
         payload: 1ページ分のtextsとcells。
         rules: promptへ含める外部ルール。
         limit: request文字数上限。
+        max_output_tokens: patch応答の推定token数上限。
 
     Returns:
         順序を維持したpayload配列。
@@ -410,10 +414,21 @@ def _payload_batches(
                 "cells": list(current["cells"]),
             }
             candidate[group].append(item)
-            if sum(
-                len(json.dumps(value, ensure_ascii=False))
-                for value in candidate.values()
-            ) > budget and any(current.values()):
+            input_too_large = (
+                sum(
+                    len(json.dumps(value, ensure_ascii=False))
+                    for value in candidate.values()
+                )
+                > budget
+            )
+            element_count = sum(len(value) for value in candidate.values())
+            output_too_large = (
+                estimate_output_tokens(
+                    0, element_count, expansion=1, per_element_tokens=96
+                )
+                > max_output_tokens
+            )
+            if (input_too_large or output_too_large) and any(current.values()):
                 batches.append(current)
                 current = {"texts": [], "cells": []}
             current[group].append(item)
@@ -437,10 +452,11 @@ def structure_stage(state: PipelineState) -> PipelineState:
     input_hash = hash_file(paths.normalized_json)
     config_hash = hash_json(
         {
-            "version": 2,
+            "version": 3,
             "skip": options.skip_vlm,
             "rules": rules,
             "context_chars": options.context_chars,
+            "max_output_tokens": options.max_output_tokens,
             "model": None if options.skip_vlm else os.getenv("OPENAI_MODEL"),
         }
     )
@@ -482,7 +498,12 @@ def structure_stage(state: PipelineState) -> PipelineState:
                 ]
             all_payloads.extend(
                 (page, batch)
-                for batch in _payload_batches(payload, rules, options.context_chars)
+                for batch in _payload_batches(
+                    payload,
+                    rules,
+                    options.context_chars,
+                    min(4_096, options.max_output_tokens),
+                )
                 if any(batch.values())
             )
     total = len(completed) + sum(
