@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -49,16 +50,16 @@ def _settings() -> Any:
     )
 
 
-def _snapshot() -> dict[str, Any]:
-    """親、leaf、除外対象を含む LiveSync snapshot を返す。
+def _documents() -> list[dict[str, Any]]:
+    """親、leaf、除外対象を含む LiveSync document を返す。
 
     Args:
         なし。
 
     Returns:
-        `_all_docs` 互換 JSON。
+        LiveSync document 配列。
     """
-    documents = [
+    return [
         {
             "_id": "note",
             "type": "plain",
@@ -70,11 +71,10 @@ def _snapshot() -> dict[str, Any]:
         {"_id": "hidden", "type": "plain", "path": ".obsidian/x.md", "children": []},
         {"_id": "internal", "type": "plain", "path": "ix:config.md", "children": []},
     ]
-    return {"rows": [{"doc": document} for document in documents]}
 
 
-def test_search_restores_leaf_order_and_uses_only_get() -> None:
-    """検索は leaf 順を保ち、CouchDB へ GET 以外を送らない。
+def test_search_restores_leaf_order_and_uses_only_read_queries() -> None:
+    """検索は leaf 順を保ち、読み取り専用 endpoint だけを使う。
 
     Args:
         なし。
@@ -91,13 +91,41 @@ def test_search_restores_leaf_order_and_uses_only_get() -> None:
             request: HTTPX から受け取った request。
 
         Returns:
-            `_all_docs` の test 応答。
+            `_find` または `_all_docs` の test 応答。
 
         Side Effects:
             request を検証用配列へ追加する。
         """
         requests.append(request)
-        return httpx.Response(200, json=_snapshot())
+        documents = _documents()
+        body = json.loads(request.content)
+        if request.url.path.endswith("/_find"):
+            selector = body["selector"]
+            if selector.get("type", {}).get("$eq") == "plain":
+                return httpx.Response(
+                    200,
+                    json={
+                        "docs": [
+                            document
+                            for document in documents
+                            if document["type"] == "plain"
+                        ]
+                    },
+                )
+            pattern = selector["data"]["$regex"]
+            leaf_id = "b" if "first" in pattern else "a"
+            return httpx.Response(200, json={"docs": [{"_id": leaf_id}]})
+        child_ids = set(body["keys"])
+        return httpx.Response(
+            200,
+            json={
+                "rows": [
+                    {"doc": document}
+                    for document in documents
+                    if document["_id"] in child_ids
+                ]
+            },
+        )
 
     reader = MODULE.CouchDbReader(_settings(), transport=httpx.MockTransport(handler))
     try:
@@ -108,8 +136,11 @@ def test_search_restores_leaf_order_and_uses_only_get() -> None:
 
     assert result["count"] == 1
     assert note["content"] == "first second"
-    assert all(request.method == "GET" for request in requests)
-    assert requests[0].url.path == "/obsidian/_all_docs"
+    assert all(request.method == "POST" for request in requests)
+    assert {request.url.path for request in requests} == {
+        "/obsidian/_find",
+        "/obsidian/_all_docs",
+    }
     assert requests[0].headers["authorization"].startswith("Basic ")
 
 
@@ -130,9 +161,12 @@ def test_hidden_and_internal_paths_are_excluded() -> None:
             request: HTTPX request。
 
         Returns:
-            `_all_docs` の test 応答。
+            `_find` の test 応答。
         """
-        return httpx.Response(200, json=_snapshot())
+        documents = [
+            document for document in _documents() if document["type"] == "plain"
+        ]
+        return httpx.Response(200, json={"docs": documents})
 
     reader = MODULE.CouchDbReader(_settings(), transport=httpx.MockTransport(handler))
     try:

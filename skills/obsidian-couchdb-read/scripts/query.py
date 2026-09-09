@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -43,7 +44,7 @@ class Note(BaseModel):
 
 
 class CouchDbReader:
-    """GET リクエストだけを使う LiveSync ノート読取クライアント。"""
+    """CouchDB の読み取り専用 endpoint だけを使う LiveSync client。"""
 
     def __init__(
         self,
@@ -73,7 +74,7 @@ class CouchDbReader:
             timeout=settings.timeout_seconds,
             transport=transport,
         )
-        self._notes: list[Note] | None = None
+        self._parents: list[dict[str, Any]] | None = None
 
     def close(self) -> None:
         """保持している HTTP client を閉じる。
@@ -126,7 +127,9 @@ class CouchDbReader:
             RuntimeError: snapshot の取得または復元に失敗した場合。
         """
         matches = [
-            note.path for note in self._load_notes() if note.path.startswith(prefix)
+            parent["path"]
+            for parent in self._load_parents()
+            if parent["path"].startswith(prefix)
         ]
         return {"ok": True, "count": len(matches), "paths": matches[:limit]}
 
@@ -153,12 +156,28 @@ class CouchDbReader:
         if len(normalized) > 200:
             raise ValueError("query must not exceed 200 characters")
         tokens = normalized.casefold().split()
+        leaf_ids = {token: self._matching_leaf_ids(token) for token in tokens}
+        parents: list[dict[str, Any]] = []
+        for parent in self._load_parents():
+            path_text = parent["path"].casefold()
+            children = set(parent["children"])
+            if not all(
+                token in path_text or children.intersection(leaf_ids[token])
+                for token in tokens
+            ):
+                continue
+            parents.append(parent)
+        parents.sort(
+            key=lambda parent: (
+                not all(token in parent["path"].casefold() for token in tokens),
+                parent["path"],
+            )
+        )
         results: list[dict[str, str]] = []
-        for note in self._load_notes():
+        for parent in parents[:limit]:
+            note = self._restore(parent)
             path_text = note.path.casefold()
             content_text = note.content.casefold()
-            if not all(token in path_text or token in content_text for token in tokens):
-                continue
             matched_in = (
                 "path" if all(token in path_text for token in tokens) else "content"
             )
@@ -171,10 +190,7 @@ class CouchDbReader:
                     ),
                 }
             )
-        results.sort(
-            key=lambda result: (result["matched_in"] != "path", result["path"])
-        )
-        return {"ok": True, "count": len(results), "results": results[:limit]}
+        return {"ok": True, "count": len(parents), "results": results}
 
     def read(self, path: str, max_chars: int = 100_000) -> dict[str, Any]:
         """path が完全一致するノートを取得する。
@@ -190,9 +206,13 @@ class CouchDbReader:
             LookupError: 指定 path のノートが存在しない場合。
             RuntimeError: snapshot の取得または復元に失敗した場合。
         """
-        note = next((item for item in self._load_notes() if item.path == path), None)
-        if note is None:
+        parent = next(
+            (item for item in self._load_parents() if item["path"] == path),
+            None,
+        )
+        if parent is None:
             raise LookupError(f"note not found: {path}")
+        note = self._restore(parent)
         return {
             "ok": True,
             "path": note.path,
@@ -240,65 +260,134 @@ class CouchDbReader:
         """
         return f"/{quote(self._settings.database, safe='')}"
 
-    def _load_notes(self) -> list[Note]:
-        """LiveSync snapshot を一度だけ取得し Markdown ノートを復元する。
+    def _post_query(self, endpoint: str, body: dict[str, Any]) -> dict[str, Any]:
+        """許可済み読み取り専用 endpoint へ POST query を送る。
+
+        Args:
+            endpoint: `_find` または `_all_docs` の固定 endpoint 名。
+            body: CouchDB の query body。
+
+        Returns:
+            JSON object として検証した応答。
+
+        Raises:
+            ValueError: endpoint が allowlist 外の場合。
+            RuntimeError: HTTP 応答または JSON 形式が不正な場合。
+        """
+        if endpoint not in {"_find", "_all_docs"}:
+            raise ValueError(f"read-only CouchDB endpoint is not allowed: {endpoint}")
+        path = f"{self._database_path()}/{endpoint}"
+        params = {"include_docs": "true"} if endpoint == "_all_docs" else None
+        try:
+            response = self._client.post(
+                f"{self._settings.base_url}{path}",
+                params=params,
+                json=body,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RuntimeError(f"CouchDB read query failed for {path}: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"CouchDB response is not an object: {path}")
+        return payload
+
+    def _find_documents(
+        self,
+        selector: dict[str, Any],
+        fields: list[str],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Mango の読み取り専用 query で document metadata を取得する。
+
+        Args:
+            selector: CouchDB Mango selector。
+            fields: 応答へ含める field allowlist。
+            limit: 取得する最大 document 数。
+
+        Returns:
+            object として検証した document 配列。
+
+        Raises:
+            RuntimeError: `_find` 応答の構造が不正な場合。
+        """
+        payload = self._post_query(
+            "_find",
+            {"selector": selector, "fields": fields, "limit": limit},
+        )
+        documents = payload.get("docs")
+        if not isinstance(documents, list) or not all(
+            isinstance(item, dict) for item in documents
+        ):
+            raise RuntimeError("CouchDB `_find` response has no valid docs array")
+        return documents
+
+    def _load_parents(self) -> list[dict[str, Any]]:
+        """LiveSync の Markdown 親文書 metadata を一度だけ取得する。
 
         Args:
             なし。
 
         Returns:
-            path 順の復元済みノート。
+            path 順の親文書 metadata。
 
         Raises:
-            RuntimeError: rows、親文書、leaf 参照が不正な場合。
+            RuntimeError: query 応答、親文書、件数上限が不正な場合。
         """
-        if self._notes is not None:
-            return self._notes
-        payload = self._get_json(
-            f"{self._database_path()}/_all_docs",
-            {"include_docs": "true"},
+        if self._parents is not None:
+            return self._parents
+        documents = self._find_documents(
+            {"type": {"$eq": "plain"}},
+            ["_id", "type", "path", "children", "deleted"],
+            self._settings.max_notes + 1,
         )
-        rows = payload.get("rows")
-        if not isinstance(rows, list):
-            raise RuntimeError("CouchDB `_all_docs` response has no rows array")
-        documents = self._document_map(rows)
         parents = [
-            document
-            for document in documents.values()
-            if self._is_visible_parent(document)
+            document for document in documents if self._is_visible_parent(document)
         ]
         if len(parents) > self._settings.max_notes:
             raise RuntimeError(
                 f"visible note count exceeds limit: {len(parents)}/{self._settings.max_notes}"
             )
-        self._notes = sorted(
-            (self._restore(parent, documents) for parent in parents),
-            key=lambda note: note.path,
-        )
-        return self._notes
+        for parent in parents:
+            if not isinstance(parent.get("path"), str) or not isinstance(
+                parent.get("children"), list
+            ):
+                raise RuntimeError(
+                    "LiveSync parent has no valid path or children array"
+                )
+            if not all(isinstance(child_id, str) for child_id in parent["children"]):
+                raise RuntimeError("LiveSync parent has an invalid child ID")
+        self._parents = sorted(parents, key=lambda parent: parent["path"])
+        return self._parents
 
-    @staticmethod
-    def _document_map(rows: list[Any]) -> dict[str, dict[str, Any]]:
-        """`_all_docs` rows を document ID の辞書へ変換する。
+    def _matching_leaf_ids(self, token: str) -> set[str]:
+        """本文 token に一致する leaf ID を server 側 scan で取得する。
 
         Args:
-            rows: CouchDB の未検証 row 配列。
+            token: 大小文字を正規化済みの一つの検索語。
 
         Returns:
-            `_id` を key とする document 辞書。
+            token を data に含む leaf document ID の集合。
 
         Raises:
-            RuntimeError: row または document の構造が不正な場合。
+            RuntimeError: `_find` 応答が不正、または安全上限へ達した場合。
         """
-        documents: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            if not isinstance(row, dict) or not isinstance(row.get("doc"), dict):
-                raise RuntimeError("CouchDB `_all_docs` row has no document object")
-            document = row["doc"]
-            document_id = document.get("_id")
-            if isinstance(document_id, str) and document_id:
-                documents[document_id] = document
-        return documents
+        limit = 50_000
+        documents = self._find_documents(
+            {
+                "type": {"$eq": "leaf"},
+                "data": {"$regex": f"(?i){re.escape(token)}"},
+            },
+            ["_id"],
+            limit,
+        )
+        if len(documents) >= limit:
+            raise RuntimeError(f"leaf match count reached safety limit: {limit}")
+        return {
+            document_id
+            for document in documents
+            if isinstance((document_id := document.get("_id")), str)
+        }
 
     @staticmethod
     def _is_visible_parent(document: dict[str, Any]) -> bool:
@@ -319,13 +408,11 @@ class CouchDbReader:
             return False
         return not any(part.startswith(".") for part in path.split("/"))
 
-    @staticmethod
-    def _restore(parent: dict[str, Any], documents: dict[str, dict[str, Any]]) -> Note:
+    def _restore(self, parent: dict[str, Any]) -> Note:
         """親文書の children 順に leaf 本文を連結する。
 
         Args:
             parent: 復元対象の LiveSync 親文書。
-            documents: ID から全 document を引く辞書。
 
         Returns:
             復元済み Markdown ノート。
@@ -340,9 +427,22 @@ class CouchDbReader:
             raise RuntimeError("LiveSync parent has no valid _id or path")
         if not isinstance(children, list):
             raise RuntimeError(f"LiveSync parent has no children array: {parent_id}")
+        if not all(isinstance(child_id, str) for child_id in children):
+            raise RuntimeError(f"LiveSync parent has an invalid child ID: {parent_id}")
+        payload = self._post_query("_all_docs", {"keys": children})
+        rows = payload.get("rows")
+        if not isinstance(rows, list):
+            raise RuntimeError("CouchDB `_all_docs` response has no rows array")
+        documents = {
+            document["_id"]: document
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance((document := row.get("doc")), dict)
+            and isinstance(document.get("_id"), str)
+        }
         chunks: list[str] = []
         for child_id in children:
-            child = documents.get(child_id) if isinstance(child_id, str) else None
+            child = documents.get(child_id)
             if (
                 not child
                 or child.get("type") != "leaf"

@@ -29,7 +29,7 @@ uv run python skills/obsidian-couchdb-read/scripts/query.py read "folder/note.md
 
 ## 制約
 
-- CouchDB への通信は `GET` だけに固定されている。更新・作成・削除・Mango query は実装しない。
+- CouchDB への操作は `GET` と、読み取り専用 endpoint `_find`・`_all_docs` への `POST` だけに固定されている。更新・作成・削除 endpoint は実装しない。
 - `type=plain` の非削除 Markdown 親文書だけを対象とし、`children` 順に `type=leaf` の `data` を連結する。
 - hidden path と `ix:` prefix は除外する。
 - `OBSIDIAN_COUCHDB_DOMAIN`、`OBSIDIAN_COUCHDB_USER`、`OBSIDIAN_COUCHDB_PASSWORD` をプロンプト、回答、ログへ含めない。
