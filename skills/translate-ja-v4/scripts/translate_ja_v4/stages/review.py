@@ -12,7 +12,7 @@ from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from qdrant_client import QdrantClient
 from typing_extensions import TypedDict
 
@@ -48,6 +48,20 @@ class ReviewResponse(BaseModel):
     """Review agentのstructured output schema。"""
 
     reviews: list[ReviewItem] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_root_array(cls, value: Any) -> Any:
+        """modelが返したroot配列を正規Review objectへ変換する。
+
+        Args:
+            value: Pydantic検証前のReview応答。
+
+        Returns:
+            root配列をreviews fieldへ包んだ値。それ以外は元の値。
+        """
+
+        return {"reviews": value} if isinstance(value, list) else value
 
 
 class ReviewBatchState(TypedDict, total=False):

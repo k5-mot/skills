@@ -60,6 +60,7 @@ from translate_ja_v4.stages.parse import (
     _validate_document,
 )
 from translate_ja_v4.stages.review import (
+    ReviewItem,
     ReviewResponse,
     _review_graph,
     _run_with_fallback,
@@ -1276,6 +1277,21 @@ def test_review_graph_adjudicates_only_disputes(
     )
     assert result["final"]["same"]["text"] == "同じ"
     assert ("adjudicator", 1) in seen
+
+
+def test_review_response_normalizes_root_array() -> None:
+    """Reviewerのroot配列応答を正規schemaへ変換することを確認する。
+
+    Returns:
+        なし。
+    """
+
+    response = ReviewResponse.model_validate(
+        [{"id": "#/texts/62", "reviewed_text": "訳文", "reason": "理由"}]
+    )
+    assert response.reviews == [
+        ReviewItem(id="#/texts/62", reviewed_text="訳文", reason="理由")
+    ]
 
 
 def test_review_fallback_halves_failed_graph() -> None:
