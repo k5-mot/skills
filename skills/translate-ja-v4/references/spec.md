@@ -59,7 +59,7 @@ ParseStageはversion文字列を完全固定せず、`schema_name=DoclingDocumen
 
 span schemaは `id`、`text`、`bbox`、`font`、`size`、`weight` とする。bboxは `BOTTOMLEFT` に統一し、sizeはPDF text objectのfont sizeへ変換matrixのscaleを掛けた実効値とする。Structure payloadへはDocling要素のbboxと15%以上重なる同一ページspanだけを含める。
 
-LibreTranslateはv1.9.6互換 `/translate` の配列入力を使う。送信対象は翻訳対象要素のtextだけとし、URL、path、command option、inline code、identifierを衝突しないplaceholderで保護して応答後に復元する。OpenAI互換APIは `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` を使い、Pydantic structured outputで検証する。
+LibreTranslateはv1.9.6互換 `/translate` の配列入力を使う。送信対象は翻訳対象要素のtextだけとし、URL、path、command option、inline code、identifierをID付きの翻訳禁止HTML spanで保護する。`format=html` の応答から属性順に依存せずIDを照合し、保護断片とHTML entityをplain textへ復元する。OpenAI互換APIは `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` を使い、Pydantic structured outputで検証する。
 
 `LANGFUSE_PUBLIC_KEY` と `LANGFUSE_SECRET_KEY` が両方ある場合、Langfuse v3以降のLangChain `CallbackHandler` を有効にする。run名は `translate-ja-v4.<stage-or-agent>` とし、Structure、Translate、Fidelity Reviewer、Terminology Reviewer、Adjudicatorを区別する。CLI終了時にeventをflushする。両keyが未設定なら外部送信せず、片方だけなら設定errorにする。endpointと環境はLangfuse標準の `LANGFUSE_BASE_URL`、`LANGFUSE_TRACING_ENVIRONMENT` に従う。従来版の `LANGFUSE_OTEL_HOST` は互換入力としてbase URLへ変換し、SDKが既定Cloudへ誤送信しないようにする。
 

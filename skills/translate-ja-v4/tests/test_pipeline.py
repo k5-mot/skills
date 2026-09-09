@@ -1145,9 +1145,11 @@ def test_libre_translator_sends_only_protected_text(
     )
 
     assert set(sent) <= {"q", "source", "target", "format", "api_key"}
+    assert sent["format"] == "html"
     assert len(sent["q"]) == 1
-    assert "https://example.com/a" not in sent["q"][0]
-    assert "./bin/tool" not in sent["q"][0]
+    assert ">https://example.com/a</span>" in sent["q"][0]
+    assert ">./bin/tool</span>" in sent["q"][0]
+    assert 'translate="no"' in sent["q"][0]
     assert result["#/texts/0"] == f"訳:{source}"
 
 
@@ -1160,9 +1162,27 @@ def test_protected_text_rejects_changed_placeholder() -> None:
 
     value, protected = _protect_text("Use API at /opt/tool.")
     assert protected
-    assert "API" not in value
-    with pytest.raises(ValueError, match="changed protected placeholder"):
+    assert ">API</span>" in value
+    with pytest.raises(ValueError, match="changed protected span"):
         _restore_text("placeholder was removed", protected)
+
+
+def test_protected_text_accepts_reordered_html_attributes() -> None:
+    """LibreTranslateによるspan属性順の変更後も保護断片を復元する。
+
+    Returns:
+        なし。
+    """
+
+    source = "Use API at https://example.com?a=1&b=2."
+    _value, protected = _protect_text(source)
+    translated = (
+        'APIを使う <span data-translate-ja="1" translate="no">changed</span>'
+        ' 場所 <span data-translate-ja="0" translate="no">changed</span>。'
+    )
+    assert _restore_text(translated, protected) == (
+        "APIを使う https://example.com?a=1&b=2. 場所 API。"
+    )
 
 
 def test_review_graph_adjudicates_only_disputes(

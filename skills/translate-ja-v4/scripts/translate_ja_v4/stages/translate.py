@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import html
 import json
 import os
 import re
@@ -53,58 +54,62 @@ PROTECTED_PATTERN = re.compile(
 
 
 def _protect_text(value: str) -> tuple[str, list[tuple[str, str]]]:
-    """機械翻訳で保持すべき断片を衝突しないplaceholderへ置換する。
+    """機械翻訳で保持すべき断片を翻訳禁止HTMLへ置換する。
 
     Args:
         value: LibreTranslateへ送る原文。
 
     Returns:
-        保護済み文字列とplaceholder・原文断片の対応表。
+        保護済みHTMLとspan ID・原文断片の対応表。
     """
 
-    prefix = "ZXQKEEP"
-    while prefix in value:
-        prefix += "X"
     protected: list[tuple[str, str]] = []
+    parts: list[str] = []
+    offset = 0
 
-    def replace(match: re.Match[str]) -> str:
-        """一致断片を一意なplaceholderへ変換する。
-
-        Args:
-            match: 保護対象の正規表現match。
-
-        Returns:
-            LibreTranslateが翻訳しにくいASCII placeholder。
-        """
-
-        placeholder = f"{prefix}{len(protected):06d}QXZ"
-        protected.append((placeholder, match.group(0)))
-        return placeholder
-
-    return PROTECTED_PATTERN.sub(replace, value), protected
+    for match in PROTECTED_PATTERN.finditer(value):
+        parts.append(html.escape(value[offset : match.start()]))
+        span_id = str(len(protected))
+        original = match.group(0)
+        parts.append(
+            f'<span translate="no" data-translate-ja="{span_id}">'
+            f"{html.escape(original)}</span>"
+        )
+        protected.append((span_id, original))
+        offset = match.end()
+    parts.append(html.escape(value[offset:]))
+    return "".join(parts), protected
 
 
 def _restore_text(value: str, protected: list[tuple[str, str]]) -> str:
-    """LibreTranslate応答のplaceholderを原文断片へ戻す。
+    """LibreTranslate応答の翻訳禁止spanを原文断片へ戻す。
 
     Args:
         value: LibreTranslateから返された訳文。
-        protected: `_protect_text` が作った対応表。
+        protected: `_protect_text` が作ったspan ID対応表。
 
     Returns:
-        URL、path、identifierを復元した訳文。
+        HTML entityと保護断片を復元したplain text訳文。
 
     Raises:
-        ValueError: placeholderが欠落または重複している場合。
+        ValueError: 翻訳禁止spanが欠落または重複している場合。
     """
 
     restored = value
-    for placeholder, original in protected:
-        if restored.count(placeholder) != 1:
-            raise ValueError(
-                f"LibreTranslate changed protected placeholder={placeholder}"
-            )
-        restored = restored.replace(placeholder, original)
+    markers: list[tuple[str, str]] = []
+    for span_id, original in protected:
+        pattern = re.compile(
+            rf"<span\b(?=[^>]*\bdata-translate-ja\s*=\s*['\"]{re.escape(span_id)}['\"])[^>]*>.*?</span>",
+            re.IGNORECASE | re.DOTALL,
+        )
+        marker = f"\ue000{span_id}\ue001"
+        restored, count = pattern.subn(marker, restored)
+        if count != 1:
+            raise ValueError(f"LibreTranslate changed protected span id={span_id}")
+        markers.append((marker, original))
+    restored = html.unescape(restored)
+    for marker, original in markers:
+        restored = restored.replace(marker, original)
     return restored
 
 
@@ -274,7 +279,7 @@ class LibreTranslator(Translator):
             "q": [value for value, _ in protected],
             "source": "en",
             "target": "ja",
-            "format": "text",
+            "format": "html",
         }
         if os.getenv("LIBRETRANSLATE_API_KEY"):
             payload["api_key"] = os.environ["LIBRETRANSLATE_API_KEY"]
@@ -389,7 +394,7 @@ def translate_stage(state: PipelineState) -> PipelineState:
     input_hash = hash_file(paths.cleaned_json)
     config_hash = hash_json(
         {
-            "version": 2,
+            "version": 3,
             "backend": options.translator,
             "batch_chars": options.batch_chars,
             "context_chars": options.context_chars,
