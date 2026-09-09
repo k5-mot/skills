@@ -148,7 +148,10 @@ def flush_langfuse() -> None:
         credential設定時だけLangfuse endpointへ未送信eventを送る。
     """
 
-    if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
+    if (
+        not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"))
+        or _langfuse_client.cache_info().currsize == 0
+    ):
         return
     try:
         public_key = os.environ["LANGFUSE_PUBLIC_KEY"]

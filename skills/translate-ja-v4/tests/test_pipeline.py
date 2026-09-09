@@ -39,6 +39,7 @@ from translate_ja_v4.llm import (
     _mask_trace_media,
     _prepare_langfuse_base_url,
     estimate_output_tokens,
+    flush_langfuse,
     llm_batches,
 )
 from translate_ja_v4.stages.clean import clean
@@ -394,6 +395,43 @@ def test_langfuse_masks_media_without_hiding_text() -> None:
         "text": "inspect this page",
         "image_url": {"url": "<media omitted from trace>"},
     }
+
+
+def test_langfuse_flush_skips_uninitialized_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """全StageのResume時に未初期化clientをflushしないことを確認する。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        なし。
+    """
+
+    import translate_ja_v4.llm as module
+
+    def fail_get_client(**_kwargs: Any) -> None:
+        """未初期化clientへのアクセスをtest失敗として扱う。
+
+        Args:
+            **_kwargs: Langfuse client取得引数。
+
+        Returns:
+            この関数は正常終了しない。
+
+        Raises:
+            AssertionError: 関数が呼ばれた場合。
+        """
+
+        raise AssertionError("get_client must not be called")
+
+    module._langfuse_client.cache_clear()
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "public")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "secret")
+    monkeypatch.setattr(module, "get_client", fail_get_client)
+
+    flush_langfuse()
 
 
 def test_translation_targets_include_text_caption_and_cell() -> None:

@@ -35,7 +35,7 @@ uv run python /home/penguin/.codex/skills/.system/skill-creator/scripts/quick_va
 - Docx: pandoc引数、水平線、図表SEQ、目次・図目次・表目次、field自動更新、連続見出し余白のOOXML補正を確認する。
 - manifest: hash一致だけをResumeし、設定変更時は再実行する。
 - logging: 本文は英語で、ANSI escapeがlevel名だけを囲む。
-- Langfuse: credential未設定ではcallbackを作らず、両key設定時だけStage・agent名付きcallbackを追加し、片側設定を拒否する。旧 `LANGFUSE_OTEL_HOST` とOTEL endpoint pathを標準base URLへ正規化し、不正URLを外部送信前に拒否する。既定maskがbase64 mediaだけを除外し、text traceを保持する。
+- Langfuse: credential未設定ではcallbackを作らず、両key設定時だけStage・agent名付きcallbackを追加し、片側設定を拒否する。旧 `LANGFUSE_OTEL_HOST` とOTEL endpoint pathを標準base URLへ正規化し、不正URLを外部送信前に拒否する。既定maskがbase64 mediaだけを除外し、text traceを保持する。全StageのResume時は未初期化clientをflushしない。
 - ingest: 対応file収集、PDF/Word/text抽出、chunk overlap、安定ID、metadata、dry-run、Qdrant upsert、明示時だけの旧revision削除を確認する。
 
 外部APIを使うunit testは必ずfakeまたはmonkeypatchを使い、実接続しない。
