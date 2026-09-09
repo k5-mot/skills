@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,13 @@ from translate_ja_v4.io import (
     stage_cached,
     write_json,
 )
-from translate_ja_v4.llm import _langfuse_config, estimate_output_tokens, llm_batches
+from translate_ja_v4.llm import (
+    _langfuse_config,
+    _mask_trace_media,
+    _prepare_langfuse_base_url,
+    estimate_output_tokens,
+    llm_batches,
+)
 from translate_ja_v4.stages.clean import clean
 from translate_ja_v4.stages.docx import _enhance_word, _fix_heading_spacing
 from translate_ja_v4.stages.markdown import (
@@ -292,13 +299,26 @@ def test_langfuse_callback_is_optional_and_named(
     class FakeHandler:
         """外部送信を行わないtest用Langfuse handler。"""
 
+        def __init__(self, **_kwargs: Any) -> None:
+            """任意のCallbackHandler引数を受け入れる。
+
+            Args:
+                **_kwargs: testでは利用しないLangfuse設定。
+
+            Returns:
+                なし。
+            """
+
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "public")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "secret")
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "http://langfuse.example:3000")
+    monkeypatch.setattr(module, "_langfuse_client", lambda *_args: None)
     monkeypatch.setattr(module, "CallbackHandler", FakeHandler)
     config = _langfuse_config("structure")
     assert config["run_name"] == "translate-ja-v4.structure"
     assert config["tags"] == ["translate-ja-v4", "structure"]
     assert isinstance(config["callbacks"][0], FakeHandler)
+    assert os.environ["LANGFUSE_MEDIA_UPLOAD_ENABLED"] == "false"
 
 
 def test_langfuse_rejects_partial_credentials(
@@ -317,6 +337,62 @@ def test_langfuse_rejects_partial_credentials(
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
     with pytest.raises(RuntimeError, match="must be set together"):
         _langfuse_config("translate")
+
+
+def test_langfuse_normalizes_legacy_self_hosted_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """旧OTEL host名とendpoint pathをSDK標準base URLへ変換する。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        なし。
+    """
+
+    monkeypatch.delenv("LANGFUSE_BASE_URL", raising=False)
+    monkeypatch.delenv("LANGFUSE_HOST", raising=False)
+    monkeypatch.setenv(
+        "LANGFUSE_OTEL_HOST", "http://langfuse.example:3000/api/public/otel"
+    )
+
+    assert _prepare_langfuse_base_url() == "http://langfuse.example:3000"
+    assert os.environ["LANGFUSE_BASE_URL"] == "http://langfuse.example:3000"
+
+
+def test_langfuse_rejects_invalid_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """相対形式のLangfuse接続先をcallback生成前に拒否する。
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture。
+
+    Returns:
+        なし。
+    """
+
+    monkeypatch.delenv("LANGFUSE_BASE_URL", raising=False)
+    monkeypatch.delenv("LANGFUSE_HOST", raising=False)
+    monkeypatch.setenv("LANGFUSE_OTEL_HOST", "langfuse:3000")
+    with pytest.raises(RuntimeError, match="absolute HTTP"):
+        _prepare_langfuse_base_url()
+
+
+def test_langfuse_masks_media_without_hiding_text() -> None:
+    """既定trace maskがbase64 mediaだけを除外することを確認する。
+
+    Returns:
+        なし。
+    """
+
+    value = {
+        "text": "inspect this page",
+        "image_url": {"url": "data:image/png;base64,AAAA"},
+    }
+    assert _mask_trace_media(data=value) == {
+        "text": "inspect this page",
+        "image_url": {"url": "<media omitted from trace>"},
+    }
 
 
 def test_translation_targets_include_text_caption_and_cell() -> None:

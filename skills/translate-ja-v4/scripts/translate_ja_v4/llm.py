@@ -5,15 +5,17 @@ from __future__ import annotations
 import base64
 import mimetypes
 import os
+from functools import lru_cache
 from math import ceil
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
+from urllib.parse import urlparse
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
-from langfuse import get_client
+from langfuse import Langfuse, get_client
 from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel
 
@@ -21,6 +23,88 @@ from .config import PipelineOptions
 from .io import LOGGER
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
+
+
+def _mask_trace_media(*, data: Any, **_kwargs: Any) -> Any:
+    """Langfuse traceからbase64 mediaだけを再帰的に除外する。
+
+    Args:
+        data: Langfuseが記録しようとする入力、出力、metadata。
+        **_kwargs: Langfuse mask callbackの将来互換引数。
+
+    Returns:
+        media data URIを固定markerへ置換したJSON互換値。
+    """
+
+    if isinstance(data, str) and data.startswith("data:") and ";base64," in data:
+        return "<media omitted from trace>"
+    if isinstance(data, list):
+        return [_mask_trace_media(data=item) for item in data]
+    if isinstance(data, tuple):
+        return tuple(_mask_trace_media(data=item) for item in data)
+    if isinstance(data, dict):
+        return {key: _mask_trace_media(data=value) for key, value in data.items()}
+    return data
+
+
+@lru_cache(maxsize=4)
+def _langfuse_client(
+    public_key: str, secret_key: str, base_url: str | None
+) -> Langfuse:
+    """同じ設定のLangfuse clientをprocess内で再利用する。
+
+    Args:
+        public_key: Langfuse project public key。
+        secret_key: Langfuse project secret key。
+        base_url: Cloudまたはself-hosted base URL。
+
+    Returns:
+        LangChain callbackが参照するLangfuse client。
+
+    Side Effects:
+        OpenTelemetry exporterとbackground workerを初期化する。
+    """
+
+    return Langfuse(
+        public_key=public_key,
+        secret_key=secret_key,
+        base_url=base_url,
+        mask=_mask_trace_media,
+    )
+
+
+def _prepare_langfuse_base_url() -> str | None:
+    """Langfuse接続先を検証し、旧環境変数を標準名へ正規化する。
+
+    Returns:
+        正規化したbase URL。接続先が未設定ならNone。
+
+    Raises:
+        RuntimeError: URLがHTTP(S)の絶対URLでない場合。
+
+    Side Effects:
+        `LANGFUSE_BASE_URL` 未設定時にprocess環境へ正規化値を設定する。
+    """
+
+    candidates = (
+        ("LANGFUSE_BASE_URL", os.getenv("LANGFUSE_BASE_URL")),
+        ("LANGFUSE_HOST", os.getenv("LANGFUSE_HOST")),
+        ("LANGFUSE_OTEL_HOST", os.getenv("LANGFUSE_OTEL_HOST")),
+    )
+    source, value = next(((key, item) for key, item in candidates if item), ("", None))
+    if value is None:
+        return None
+    normalized = value.strip().rstrip("/")
+    suffix = "/api/public/otel"
+    if normalized.endswith(suffix):
+        normalized = normalized[: -len(suffix)]
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError(f"{source} must be an absolute HTTP(S) URL")
+    if not os.getenv("LANGFUSE_BASE_URL"):
+        os.environ["LANGFUSE_BASE_URL"] = normalized
+        LOGGER.info("Using %s as LANGFUSE_BASE_URL", source)
+    return normalized
 
 
 def _langfuse_config(trace_name: str) -> RunnableConfig:
@@ -47,7 +131,10 @@ def _langfuse_config(trace_name: str) -> RunnableConfig:
         "tags": ["translate-ja-v4", trace_name],
     }
     if public_key and secret_key:
-        config["callbacks"] = [CallbackHandler()]
+        base_url = _prepare_langfuse_base_url()
+        os.environ["LANGFUSE_MEDIA_UPLOAD_ENABLED"] = "false"
+        _langfuse_client(public_key, secret_key, base_url)
+        config["callbacks"] = [CallbackHandler(public_key=public_key)]
     return config
 
 
@@ -64,7 +151,9 @@ def flush_langfuse() -> None:
     if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
         return
     try:
-        get_client().flush()
+        public_key = os.environ["LANGFUSE_PUBLIC_KEY"]
+        _prepare_langfuse_base_url()
+        get_client(public_key=public_key).flush()
     except Exception as error:
         LOGGER.warning("Failed to flush Langfuse traces error=%s", error)
 
