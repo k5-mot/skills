@@ -29,4 +29,5 @@ extra-paths = [
     "skills/translate-ja-v2/scripts",
     "skills/translate-ja-v3/scripts",
     "skills/translate-ja-v4/scripts",
+    "skills/review-enja/scripts",
 ]

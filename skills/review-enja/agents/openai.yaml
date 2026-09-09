@@ -1,0 +1,4 @@
+interface:
+  display_name: "English–Japanese Review"
+  short_description: "英語PDFと日本語PDFを複数Agentで対訳レビュー"
+  default_prompt: "Use $review-enja to review a Japanese translation PDF against its English source PDF."

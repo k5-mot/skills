@@ -1,0 +1,3 @@
+english-short,english-long,japanse-short,japanese-long,kind,description,note,reference
+API,Application Programming Interface,API,アプリケーションプログラミングインターフェース,technical term,Interface used by software,Keep the abbreviation when it appears in the source.,Internal engineering glossary
+VLM,Vision Language Model,VLM,視覚言語モデル,technical term,Model that processes text and images,Keep the abbreviation in headings.,Internal AI glossary
