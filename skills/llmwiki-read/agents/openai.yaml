@@ -1,7 +1,7 @@
 interface:
   display_name: "LLMwiki Read"
-  short_description: "LLMwikiの根拠・ページ・状態を読み取り専用で取得"
-  default_prompt: "Use $llmwiki-read to find grounded evidence in LLMwiki without changing wiki state."
+  short_description: "LLMwiki Viewerを検索して根拠ページを読み取り"
+  default_prompt: "Use $llmwiki-read to search the LLMwiki Viewer and read the relevant pages without changing wiki state."
 
 policy:
   allow_implicit_invocation: true
