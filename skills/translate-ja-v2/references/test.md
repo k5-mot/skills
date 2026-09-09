@@ -93,7 +93,7 @@ python /home/penguin/.codex/skills/.system/skill-creator/scripts/quick_validate.
 - `SKILL.md` のfrontmatterに `name` と `description` だけがある。
 - `references/` 直下に `template-format.md`、`workflow.md`、`spec.md`、`test.md` だけがある。
 - `SKILL.md` の参照リンクがすべて存在する。
-- `README.md` の章がタイトル、簡単な説明、Quick Start、Author、Licenseに限られる。
+- `README.md` はタイトル、簡単な説明、Quick Startを中心とし、AuthorとLicenseを含まない。
 
 ## 6. 全ステージ統合テスト
 

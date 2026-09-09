@@ -1,6 +1,6 @@
 ---
 name: devcontainer-dev
-description: devcontainer構成の設計、レビュー、改善提案、ひな型作成を支援する。Use when Codex needs to inspect or author .devcontainer/devcontainer.json, postCreateCommand scripts, .gitignore entries for devcontainer artifacts, VS Code devcontainer customizations, or monorepo-ready development containers for Python/uv/FastAPI/Ruff/ty/pytest and TypeScript/React/Zod/Vite+/Oxlint/Oxfmt/tsgo/Vitest stacks.
+description: devcontainer構成の設計、レビュー、改善提案、ひな型作成を支援する。Use when Codex needs to inspect, create, or edit .devcontainer/devcontainer.json, postCreateCommand scripts, .gitignore entries for devcontainer artifacts, VS Code devcontainer customizations, or monorepo-ready development containers for Python/uv/FastAPI/Ruff/ty/pytest and TypeScript/React/Zod/Vite+/Oxlint/Oxfmt/tsgo/Vitest stacks.
 ---
 
 # Devcontainer Dev

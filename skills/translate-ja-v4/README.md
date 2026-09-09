@@ -84,11 +84,3 @@ uv run python skills/translate-ja-v4/scripts/ingest_qdrant.py \
 ```
 
 同じ入力は安定IDでupsertされます。更新前の余剰chunkも削除する場合だけ `--replace-source` を追加します。外部APIを呼ばず抽出結果を確認するには `--dry-run` を使います。
-
-## 👤 Author
-
-k5-mot
-
-## 📜 License
-
-MIT

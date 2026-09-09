@@ -1,6 +1,6 @@
 ---
 name: md-dev
-description: Markdown文書、README、開発ドキュメント、スキル文書を作成・更新・レビューするときの標準手順。Use when Codex writes or edits Markdown files, especially root README files, Quick Start sections, documentation structure, headings, links, tables, code fences, author/license sections, and consistent markdown style.
+description: Markdown文書、README、開発ドキュメント、スキル文書を作成・更新・レビューするときの標準手順。Use when Codex writes or edits Markdown files, especially root README files, Quick Start sections, documentation structure, headings, links, tables, code fences, and consistent markdown style.
 ---
 
 # 📝 Markdown Dev
@@ -29,10 +29,6 @@ Markdown 文書を書く・直す・レビューするときは、この Skill �
 2. タイトル直下の簡単な説明。
 3. `## 🚀 Quick Start`
 4. `## 🧰 Tech Stack`
-5. `## 👤 Author`
-6. `## 📜 License`
-
-ユーザーから License の指定がない場合は MIT と書く。
 
 ## 🚀 Quick Start
 
@@ -68,4 +64,4 @@ uv run pytest
 - 見出しだけ読んでも文書の流れが分かるか。
 - 長い段落が続く場合、箇条書きか短い小見出しに分けられるか。
 - Tech Stack の各技術名に公式リファレンス、公式 docs、または GitHub へのリンクが付いているか。
-- ライセンス、Author、外部サービスの前提が抜けていないか。
+- 外部サービスの前提が抜けていないか。

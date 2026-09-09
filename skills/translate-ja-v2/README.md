@@ -97,11 +97,3 @@ ReviewはFidelity ReviewerとTerminology Reviewerを並列実行し、不一致�
 LLMを使うTranslate・Reviewでは、一時的なAPI障害やタイムアウトが通常の再試行後も続く場合、失敗したバッチを二分して再実行します。入力容量超過、空応答、不正JSON、ID不一致でも二分し、必要なら1要素まで縮小します。例えば8要素なら `8 → 4 + 4 → 2 + 2 …` と分割します。1要素でもAPI障害が続けば未完了のまま停止し、認証・設定エラーは分割せず停止します。Reviewの単一要素の生成不全では既存仕様どおり原訳を保持します。縮小は失敗したバッチだけに適用し、後続バッチの上限は変更しません。LibreTranslateとStructureにはこの二分フォールバックを適用しません。
 
 同じコマンドを再実行すると、`manifest.json` と成果物hashを検証して続きからResumeします。詳細は [workflow.md](references/workflow.md)、実装仕様は [spec.md](references/spec.md)、検証手順は [test.md](references/test.md)、DOTX仕様は [template-format.md](references/template-format.md) を参照してください。
-
-## 👤 Author
-
-k5-mot
-
-## 📜 License
-
-MIT
