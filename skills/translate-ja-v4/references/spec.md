@@ -53,7 +53,7 @@ flowchart TD
 
 ### PDF対訳レビューCLI
 
-`scripts/translate_ja_v4/review_docx.py` は英語原文PDFと日本語翻訳PDFを入力し、既存のParse・Normalize・Alignmentと `translate_ja_v4.stages.review.review_stage()` を再利用する。ReviewStage用adapter JSONと完全なReview結果に加え、変更案、原文欠落、訳文追加だけを `review.findings.json` と `review.md` へ出力する。入力PDFおよび翻訳PDFは更新しない。
+`scripts/review_docx.py` は英語原文PDFと日本語翻訳PDFを入力し、既存のParse・Normalize・Alignmentと `translate_ja_v4.stages.review.review_stage()` を再利用する。実装本体は `translate_ja_v4/review_docx.py` に置き、公開scriptはCLI起動だけを担当する。ReviewStage用adapter JSONと完全なReview結果に加え、変更案、原文欠落、訳文追加だけを `review.findings.json` と `review.md` へ出力する。入力PDFおよび翻訳PDFは更新しない。
 
 対訳Alignmentは `review-enja` の実装を再利用するため、同Skillを `translate-ja-v4` と同じ `skills/` 配下に置く。CLIと出力契約は [公開利用仕様](../../../docs/translate-ja-v4-review-docx.md) を参照する。
 

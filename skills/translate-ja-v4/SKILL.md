@@ -47,7 +47,7 @@ uv run python skills/translate-ja-v4/scripts/ingest_qdrant.py \
 英語原文PDFと日本語翻訳PDFを編集せずレビューし、指摘事項だけを列挙するときは次を実行する。
 
 ```bash
-uv run python skills/translate-ja-v4/scripts/translate_ja_v4/review_docx.py \
+uv run python skills/translate-ja-v4/scripts/review_docx.py \
   --source ./inputs/source-en.pdf \
   --translation ./inputs/translation-ja.pdf \
   --output-dir ./outputs/pdf-review \

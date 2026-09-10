@@ -1,11 +1,11 @@
 # translate-ja-v4 PDF対訳レビュー
 
-`translate_ja_v4/review_docx.py` は英語原文PDFと日本語翻訳PDFを比較し、翻訳を編集せず指摘事項をJSONとMarkdownへ列挙する。
+`scripts/review_docx.py` は英語原文PDFと日本語翻訳PDFを比較し、翻訳を編集せず指摘事項をJSONとMarkdownへ列挙する。
 
 ## 実行
 
 ```bash
-uv run python skills/translate-ja-v4/scripts/translate_ja_v4/review_docx.py \
+uv run python skills/translate-ja-v4/scripts/review_docx.py \
   --source ./inputs/source-en.pdf \
   --translation ./inputs/translation-ja.pdf \
   --output-dir ./outputs/pdf-review \
