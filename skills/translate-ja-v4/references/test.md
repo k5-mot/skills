@@ -71,6 +71,12 @@ uv run python skills/translate-ja-v4/scripts/run_pipeline.py \
 
 同じコマンドをもう一度実行し、各StageがINFOでResumeを報告することを確認する。次に途中成果物を複製した専用test出力で、manifestのStructure/Translate/Reviewを `running` にして一部completed情報を除き、未完了要素だけが呼ばれることをfake call counterで確認する。
 
+## PDF対訳レビュー検証
+
+`tests/test_review_docx.py` ではAlignmentからv4 ReviewStage入力への変換、修正・欠落・追加の指摘抽出、v4 ReviewStageの直接呼出し、入力PDFの非変更を確認する。
+
+実サービス検証では同内容の英語PDFと日本語翻訳PDFを指定し、`document.aligned.json`、`document.reviewed.json`、`review.findings.json`、`review.md` が生成されることを確認する。実行前後の両入力PDFのSHA-256が一致しなければ失敗とする。
+
 ## 手動Word確認
 
 Microsoft Wordでdocxを開き、fieldを更新する。A4・余白、見出し、表、図、コード、水平線、ページ番号、ヘッダー/フッター、連続見出し間隔、目次・図目次・表目次、外部参照警告の有無を確認する。詳細な期待値は [template-format.md](template-format.md) に従う。

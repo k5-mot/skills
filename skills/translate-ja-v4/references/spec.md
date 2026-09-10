@@ -51,6 +51,12 @@ flowchart TD
 
 `--translator default` はLibreTranslate、`--translator llm` はLangChain ChatOpenAIを使う。StructureとReviewはtranslator設定に関係なくOpenAI互換APIを使う。ただし `--skip-vlm`、`--skip-review` で省略できる。
 
+### PDF対訳レビューCLI
+
+`scripts/translate_ja_v4/review_docx.py` は英語原文PDFと日本語翻訳PDFを入力し、既存のParse・Normalize・Alignmentと `translate_ja_v4.stages.review.review_stage()` を再利用する。ReviewStage用adapter JSONと完全なReview結果に加え、変更案、原文欠落、訳文追加だけを `review.findings.json` と `review.md` へ出力する。入力PDFおよび翻訳PDFは更新しない。
+
+対訳Alignmentは `review-enja` の実装を再利用するため、同Skillを `translate-ja-v4` と同じ `skills/` 配下に置く。CLIと出力契約は [公開利用仕様](../../../docs/translate-ja-v4-review-docx.md) を参照する。
+
 ## 外部サービス契約
 
 Docling Serveには `include_page_images=false`、`images_scale=1.0` を送り、page imageを返させない。PDFは `pdf_chunk_pages` 単位で直列変換し、collection ref、ページ番号、artifact URIをローカルで再採番・連結する。全ページPNGとPDF text spanはpypdfium2でローカル生成する。

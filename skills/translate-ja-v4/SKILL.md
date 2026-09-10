@@ -44,6 +44,17 @@ uv run python skills/translate-ja-v4/scripts/ingest_qdrant.py \
   --collection domain-documents
 ```
 
+英語原文PDFと日本語翻訳PDFを編集せずレビューし、指摘事項だけを列挙するときは次を実行する。
+
+```bash
+uv run python skills/translate-ja-v4/scripts/translate_ja_v4/review_docx.py \
+  --source ./inputs/source-en.pdf \
+  --translation ./inputs/translation-ja.pdf \
+  --output-dir ./outputs/pdf-review \
+  --glossary ./skills/translate-ja-v4/examples/glossary.csv \
+  --review-rules ./skills/translate-ja-v4/examples/review-rules.md
+```
+
 ## 実装規則
 
 1. `run_pipeline.py` はCLIだけを扱い、Stage順序は `translate_ja_v4/graph.py` に置く。
