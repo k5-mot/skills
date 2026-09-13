@@ -6,7 +6,7 @@ import logging
 import os
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar, cast
 
 from langfuse import LangfuseMedia, get_client, observe
 
@@ -82,7 +82,7 @@ def media(path: Path) -> LangfuseMedia:
         遅延uploadされるLangfuseMedia。
     """
 
-    return LangfuseMedia(file_path=str(path))
+    return LangfuseMedia(file_path=str(path), content_type=cast(Any, "image/png"))
 
 
 def flush_safely() -> None:

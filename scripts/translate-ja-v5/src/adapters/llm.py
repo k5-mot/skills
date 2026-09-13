@@ -178,7 +178,11 @@ def structured_chat(
             raise ContextLengthError(str(error)) from error
         raise
     value = response.choices[0].message.content
-    parsed = json.loads(value or "null")
+    json_text = (value or "null").strip()
+    lines = json_text.splitlines()
+    if lines and lines[0].casefold() in {"```", "```json"} and lines[-1] == "```":
+        json_text = "\n".join(lines[1:-1])
+    parsed = json.loads(json_text)
     if not isinstance(parsed, dict):
         raise ValueError("LLM response must be a JSON object")
     update_current(output=parsed)

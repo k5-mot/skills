@@ -91,14 +91,19 @@ def test_retry_call_does_not_retry_other_4xx() -> None:
     assert attempts == 1
 
 
-def test_structured_chat_uses_json_schema_and_accepts_missing_usage(
-    monkeypatch: pytest.MonkeyPatch, settings: Settings
+@pytest.mark.parametrize(
+    "content",
+    ['{"value":"ok"}', '```json\n{"value":"ok"}\n```'],
+)
+def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings, content: str
 ) -> None:
-    """Chat Completions requestがJSON Schemaだけを使いusage不要なことを確認する。
+    """Chat CompletionsがJSON Schemaを使い、local modelのJSON表現を許容する。
 
     Args:
         monkeypatch: OpenAI clientを差し替えるfixture。
         settings: 共通Settings fixture。
+        content: local modelが返すJSON文字列。
 
     Returns:
         なし。
@@ -121,9 +126,7 @@ def test_structured_chat_uses_json_schema_and_accepts_missing_usage(
 
             captured.update(kwargs)
             return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(message=SimpleNamespace(content='{"value":"ok"}'))
-                ]
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
             )
 
     fake = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
@@ -134,6 +137,28 @@ def test_structured_chat_uses_json_schema_and_accepts_missing_usage(
     assert result == {"value": "ok"}
     assert captured["response_format"]["type"] == "json_schema"
     assert "tools" not in captured
+
+
+def test_langfuse_media_passes_image_content_type(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """LangfuseMediaへfile pathとMIME typeを両方渡すことを確認する。
+
+    Args:
+        monkeypatch: LangfuseMediaを差し替えるfixture。
+        tmp_path: 画像fileを置く一時directory。
+
+    Returns:
+        なし。
+    """
+
+    image = tmp_path / "page.png"
+    image.write_bytes(b"png")
+    monkeypatch.setattr(langfuse_adapter, "LangfuseMedia", dict)
+    assert langfuse_adapter.media(image) == {
+        "file_path": str(image),
+        "content_type": "image/png",
+    }
 
 
 def test_libretranslate_preserves_protected_fragments(
