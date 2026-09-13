@@ -141,10 +141,10 @@ def structured_chat(
     }
     if image_path is not None:
         trace_input["image"] = media(image_path)
-    update_current(input=trace_input)
     content: str | list[dict[str, Any]] = user
     if image_path is not None:
         content = [{"type": "text", "text": user}, _image_message(image_path)]
+    system_prompt = system
 
     def invoke() -> Any:
         """一回のChat Completions requestを送る。
@@ -158,7 +158,7 @@ def structured_chat(
             messages=cast(
                 Any,
                 [
-                    {"role": "system", "content": system},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": content},
                 ],
             ),
@@ -170,23 +170,46 @@ def structured_chat(
             temperature=0,
         )
 
-    try:
-        response = retry_call(invoke)
-    except BaseException as error:
-        message = str(error).casefold()
-        if _status_code(error) == 400 and ("context" in message or "token" in message):
-            raise ContextLengthError(str(error)) from error
-        raise
-    value = response.choices[0].message.content
-    json_text = (value or "null").strip()
-    lines = json_text.splitlines()
-    if lines and lines[0].casefold() in {"```", "```json"} and lines[-1] == "```":
-        json_text = "\n".join(lines[1:-1])
-    parsed = json.loads(json_text)
-    if not isinstance(parsed, dict):
-        raise ValueError("LLM response must be a JSON object")
-    update_current(output=parsed)
-    return parsed
+    for format_attempt in range(2):
+        update_current(input={**trace_input, "system": system_prompt})
+        try:
+            response = retry_call(invoke)
+        except BaseException as error:
+            message = str(error).casefold()
+            if _status_code(error) == 400 and (
+                "context" in message or "token" in message
+            ):
+                raise ContextLengthError(str(error)) from error
+            raise
+        value = response.choices[0].message.content
+        try:
+            json_text = (value or "null").strip()
+            lines = json_text.splitlines()
+            if (
+                lines
+                and lines[0].casefold() in {"```", "```json"}
+                and lines[-1] == "```"
+            ):
+                json_text = "\n".join(lines[1:-1])
+            parsed = json.loads(json_text)
+            if not isinstance(parsed, dict):
+                raise ValueError("LLM response must be a JSON object")
+            missing = [key for key in schema.get("required", []) if key not in parsed]
+            if missing:
+                raise ValueError(f"LLM response lacks required keys: {missing}")
+        except ValueError as error:
+            if format_attempt:
+                raise ValueError("LLM did not return the required JSON object") from error
+            system_prompt = (
+                f"{system}\n\n説明文やMarkdownを含めず、次のJSON Schemaに一致する"
+                f"JSON objectだけを返してください:\n"
+                f"{json.dumps(schema, ensure_ascii=False)}"
+            )
+            update_current(output={"invalid_response": value})
+            continue
+        update_current(output=parsed)
+        return parsed
+    raise RuntimeError("structured response loop ended unexpectedly")
 
 
 @observed("llm-embeddings", capture_input=False)

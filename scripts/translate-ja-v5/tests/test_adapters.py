@@ -92,24 +92,39 @@ def test_retry_call_does_not_retry_other_4xx() -> None:
 
 
 @pytest.mark.parametrize(
-    "content",
-    ['{"value":"ok"}', '```json\n{"value":"ok"}\n```'],
+    ("responses", "schema"),
+    [
+        (['{"value":"ok"}'], {"type": "object"}),
+        (['```json\n{"value":"ok"}\n```'], {"type": "object"}),
+        (
+            ["指摘事項はありません。", '{"value":"ok"}'],
+            {"type": "object"},
+        ),
+        (
+            ["```json\n{}\n```", '{"value":"ok"}'],
+            {"type": "object", "required": ["value"]},
+        ),
+    ],
 )
 def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
-    monkeypatch: pytest.MonkeyPatch, settings: Settings, content: str
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+    responses: list[str],
+    schema: dict[str, Any],
 ) -> None:
     """Chat CompletionsがJSON Schemaを使い、local modelのJSON表現を許容する。
 
     Args:
         monkeypatch: OpenAI clientを差し替えるfixture。
         settings: 共通Settings fixture。
-        content: local modelが返すJSON文字列。
+        responses: local modelが順に返す応答文字列。
+        schema: 要求するJSON Schema。
 
     Returns:
         なし。
     """
 
-    captured: dict[str, Any] = {}
+    calls: list[dict[str, Any]] = []
 
     class Completions:
         """Chat Completionsのtest double。"""
@@ -124,7 +139,8 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
                 usageを持たない模擬response。
             """
 
-            captured.update(kwargs)
+            content = responses[len(calls)]
+            calls.append(kwargs)
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
             )
@@ -132,11 +148,14 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
     fake = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
     monkeypatch.setattr(llm, "_client", lambda _settings: fake)
     result = llm.structured_chat(
-        settings, "model", "system", "user", "answer", {"type": "object"}
+        settings, "model", "system", "user", "answer", schema
     )
     assert result == {"value": "ok"}
-    assert captured["response_format"]["type"] == "json_schema"
-    assert "tools" not in captured
+    assert len(calls) == len(responses)
+    assert calls[-1]["response_format"]["type"] == "json_schema"
+    assert "tools" not in calls[-1]
+    if len(responses) > 1:
+        assert "JSON Schema" in calls[-1]["messages"][0]["content"]
 
 
 def test_langfuse_media_passes_image_content_type(
