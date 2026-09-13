@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any, Literal, cast
 
 from langgraph.graph import END, START, StateGraph
@@ -45,6 +46,7 @@ FINDINGS_SCHEMA: dict[str, Any] = {
     "properties": {
         "findings": {
             "type": "array",
+            "maxItems": 8,
             "items": {
                 "type": "object",
                 "properties": {
@@ -117,6 +119,9 @@ def build_review_graph(settings: Settings) -> Any:
 
     if not settings.review_model:
         raise ValueError("OPENAI_REVIEW_MODEL is required")
+    assessment_settings = replace(
+        settings, output_tokens=min(settings.output_tokens, 2_048)
+    )
 
     def checker(state: ReviewState) -> dict[str, Any]:
         """決定的invariant違反をfindingへ変換する。
@@ -149,9 +154,9 @@ def build_review_graph(settings: Settings) -> Any:
         """
 
         response = structured_chat(
-            settings,
-            settings.review_model or "",
-            "忠実性Criticです。訳文は変更せず、意味、欠落、追加、否定、条件、比較、因果関係の問題だけを指摘してください。",
+            assessment_settings,
+            assessment_settings.review_model or "",
+            "忠実性Criticです。訳文は変更せず、意味、欠落、追加、否定、条件、比較、因果関係の問題を最大8件、簡潔に指摘してください。",
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n訳文:\n{state['candidate']}",
             "fidelity_findings",
             FINDINGS_SCHEMA,
@@ -173,9 +178,9 @@ def build_review_graph(settings: Settings) -> Any:
 
         evidence = search(settings, state["source"]) if settings.qdrant_enabled else []
         response = structured_chat(
-            settings,
-            settings.review_model or "",
-            "Japanese Criticです。訳文は変更せず、用語、一貫性、自然さを指摘してください。参照がある場合はsourceを含む根拠をevidenceへ必ず示してください。",
+            assessment_settings,
+            assessment_settings.review_model or "",
+            "Japanese Criticです。訳文は変更せず、用語、一貫性、自然さを最大8件、簡潔に指摘してください。参照がある場合はsourceを含む根拠をevidenceへ必ず示してください。",
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n訳文:\n{state['candidate']}\n\n参照:\n{json.dumps(evidence, ensure_ascii=False)}",
             "japanese_findings",
             FINDINGS_SCHEMA,
@@ -199,7 +204,7 @@ def build_review_graph(settings: Settings) -> Any:
             settings,
             settings.review_model or "",
             "Reviserです。指摘箇所だけを必要最小限に修正し、原文にない情報を追加しないでください。",
-            f"原文:\n{state['source']}\n\n元訳:\n{state['original']}\n\n候補訳:\n{state['candidate']}\n\n指摘:\n{json.dumps(state.get('findings', []), ensure_ascii=False)}\n\n根拠:\n{json.dumps(state.get('evidence', []), ensure_ascii=False)}",
+            f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n元訳:\n{state['original']}\n\n候補訳:\n{state['candidate']}\n\n指摘:\n{json.dumps(state.get('findings', []), ensure_ascii=False)}\n\n根拠:\n{json.dumps(state.get('evidence', []), ensure_ascii=False)}",
             "revision",
             REVISION_SCHEMA,
         )
@@ -219,9 +224,9 @@ def build_review_graph(settings: Settings) -> Any:
         """
 
         response = structured_chat(
-            settings,
-            settings.review_model or "",
-            "Verifierです。重大な誤訳、欠落、追加、未解決指摘が一つでもあればapproved=falseにしてください。",
+            assessment_settings,
+            assessment_settings.review_model or "",
+            "Verifierです。現在の候補訳を原文と直接比較してください。既存指摘は確認項目であり、存在するだけでは不合格にしません。現在も残る重大な誤訳、欠落、追加だけを最大8件返し、一つでもあればapproved=false、全て解消済みならapproved=trueにしてください。",
             f"原文:\n{state['source']}\n\n元訳:\n{state['original']}\n\n候補訳:\n{state['candidate']}\n\n既存指摘:\n{json.dumps(state.get('findings', []), ensure_ascii=False)}\n\n参照根拠:\n{json.dumps(state.get('evidence', []), ensure_ascii=False)}",
             "verification",
             VERIFICATION_SCHEMA,
@@ -332,5 +337,9 @@ def run_review(
     )
     update_current(output=outcome.model_dump())
     if not outcome.approved:
-        raise RuntimeError("Verifier rejected the translation twice")
+        details = "; ".join(
+            f"{item.category}: {item.message[:160]}" for item in outcome.findings[-3:]
+        )
+        suffix = f" ({details})" if details else ""
+        raise RuntimeError(f"Verifier rejected the translation twice{suffix}")
     return outcome

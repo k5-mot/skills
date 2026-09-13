@@ -311,6 +311,67 @@ def test_review_rejects_after_second_verifier(
         review.run_review("Source", "訳文", "rules", settings)
 
 
+def test_review_limits_assessment_output_but_not_revision(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """CriticとVerifierだけ出力上限を絞りReviserの長文枠を保つ。
+
+    Args:
+        monkeypatch: LLM呼出しを差し替えるfixture。
+        settings: 共通Settings fixture。
+
+    Returns:
+        なし。
+    """
+
+    limits: dict[str, int] = {}
+    prompts: dict[str, str] = {}
+
+    def chat(
+        call_settings: Settings,
+        _model: str,
+        _system: str,
+        user: str,
+        schema_name: str,
+        _schema: dict[str, Any],
+        _image: object = None,
+    ) -> dict[str, Any]:
+        """各Review nodeの出力上限とpromptを記録する。
+
+        Args:
+            call_settings: nodeへ渡された設定。
+            _model: 未使用model。
+            _system: 未使用system prompt。
+            user: 記録するuser prompt。
+            schema_name: node識別名。
+            _schema: 未使用schema。
+            _image: 未使用画像。
+
+        Returns:
+            修正後に合格する模擬応答。
+        """
+
+        limits[schema_name] = call_settings.output_tokens
+        prompts[schema_name] = user
+        if schema_name == "fidelity_findings":
+            return {"findings": [_finding()]}
+        if schema_name == "japanese_findings":
+            return {"findings": []}
+        if schema_name == "revision":
+            return {"text": "修正版"}
+        return {"approved": True, "findings": []}
+
+    monkeypatch.setattr(review, "structured_chat", chat)
+    review.run_review("Source", "訳文", "固有ルール", settings)
+    assert limits == {
+        "fidelity_findings": 2_048,
+        "japanese_findings": 2_048,
+        "revision": settings.output_tokens,
+        "verification": 2_048,
+    }
+    assert "固有ルール" in prompts["revision"]
+
+
 def test_japanese_critic_propagates_rag_evidence(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> None:

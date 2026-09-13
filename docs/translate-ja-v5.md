@@ -134,7 +134,7 @@ uv run python scripts/translate-ja-v5/translate.py review \
     └── reviewed/
 ```
 
-Reviewは決定的検査、Fidelity Critic、Japanese Critic、Reviser、Verifierを直列実行します。Verifierが不合格にした場合は一度だけ再修正し、再び不合格なら処理を失敗させます。Qdrantが設定されていればJapanese Criticが参照本文とsource metadataを検索し、根拠をReviserとVerifierにも渡します。
+Reviewは決定的検査、Fidelity Critic、Japanese Critic、Reviser、Verifierを直列実行します。CriticとVerifierの指摘応答は最大8件かつ2,048 tokenに制限し、Reviserには通常の`LLM_OUTPUT_TOKENS`を使います。Verifierが不合格にした場合は一度だけ再修正し、再び不合格なら処理を失敗させます。失敗messageには末尾3件までの指摘理由を含めます。Qdrantが設定されていればJapanese Criticが参照本文とsource metadataを検索し、根拠をReviserとVerifierにも渡します。
 
 ## Review参照文書の登録
 
