@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.processing.quality import read_glossary
+from src.processing.quality import deterministic_findings, protected_fragments, read_glossary
 
 
 def test_glossary_accepts_source_target_and_optional_notes(tmp_path: Path) -> None:
@@ -51,3 +51,17 @@ def test_glossary_rejects_invalid_schema_values_and_duplicates(
     path.write_text(content, encoding="utf-8")
     with pytest.raises(ValueError):
         read_glossary(path)
+
+
+def test_uppercase_heading_is_translatable_and_unchanged_english_is_rejected() -> None:
+    """全大文字見出しを保護せず未翻訳のままなら指摘する。
+
+    Returns:
+        なし。
+    """
+
+    source = "U.S. DEFENSE INTERESTS IN THE ARCTIC"
+    assert protected_fragments(source) == ["U.S"]
+    assert "untranslated" in {
+        item.category for item in deterministic_findings(source, source, [])
+    }

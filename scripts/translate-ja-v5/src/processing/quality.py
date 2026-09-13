@@ -18,7 +18,6 @@ PROTECTED_RE = re.compile(
     r"|\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b"
     r"|\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b"
     r"|\b[a-z]+(?:[A-Z][A-Za-z0-9]*)+\b"
-    r"|\b[A-Z][A-Z0-9]{1,}\b"
 )
 NUMBER_UNIT_RE = re.compile(
     r"(?<!\w)[+-]?\d[\d,.]*(?:\s?(?:%|ms|s|MB|GB|KB|V|A|Hz|°C))?"
@@ -153,6 +152,17 @@ def deterministic_findings(
         )
     if source.strip() and not target.strip():
         findings.append(Finding(category="omission", message="訳文が空である"))
+    elif (
+        source.strip() == target.strip()
+        and len(re.findall(r"\b[A-Za-z][A-Za-z'-]*\b", source)) >= 3
+    ):
+        findings.append(
+            Finding(
+                category="untranslated",
+                severity="major",
+                message="複数語の英語原文が翻訳されていない",
+            )
+        )
     elif len(source.strip()) >= 80 and len(target.strip()) < len(source.strip()) * 0.15:
         findings.append(
             Finding(
