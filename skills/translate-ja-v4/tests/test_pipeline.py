@@ -319,7 +319,9 @@ def test_langfuse_callback_is_optional_and_named(
     config = _langfuse_config("structure")
     assert config["run_name"] == "translate-ja-v4.structure"
     assert config["tags"] == ["translate-ja-v4", "structure"]
-    assert isinstance(config["callbacks"][0], FakeHandler)
+    callbacks = config["callbacks"]
+    assert isinstance(callbacks, list)
+    assert isinstance(callbacks[0], FakeHandler)
     assert os.environ["LANGFUSE_MEDIA_UPLOAD_ENABLED"] == "false"
 
 
