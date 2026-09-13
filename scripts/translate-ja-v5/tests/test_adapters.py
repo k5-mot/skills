@@ -115,6 +115,7 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
     settings: Settings,
     responses: list[str],
     schema: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Chat CompletionsがJSON Schemaを使い、local modelのJSON表現を許容する。
 
@@ -123,6 +124,7 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
         settings: 共通Settings fixture。
         responses: local modelが順に返す応答文字列。
         schema: 要求するJSON Schema。
+        capsys: 標準出力を検証するfixture。
 
     Returns:
         なし。
@@ -159,6 +161,10 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
     assert calls[-1]["response_format"]["type"] == "json_schema"
     assert "tools" not in calls[-1]
     assert "JSON Schema" in calls[-1]["messages"][0]["content"]
+    output = capsys.readouterr().out
+    assert "LLM: answer attempt 1/2 started" in output
+    assert f"LLM: answer attempt {len(responses)}/2 success" in output
+    assert output.count("invalid response") == len(responses) - 1
 
 
 def test_langfuse_media_passes_image_content_type(

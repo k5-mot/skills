@@ -289,6 +289,10 @@ def run_translation(
                         else None
                     )
                     if structured is None:
+                        print(
+                            f"Structure: page {number}/{page_count} started",
+                            flush=True,
+                        )
                         page_state["structure"] = "pending"
                         page_state["translate"] = "pending"
                         page_state["review"] = "pending"
@@ -306,6 +310,10 @@ def run_translation(
                         )
                         page_state["structure"] = "done"
                         atomic_write_json(state_path, state)
+                        print(
+                            f"Structure: page {number}/{page_count} success",
+                            flush=True,
+                        )
                     translated_path = _page_path(work / "translated", number)
                     translated_page = (
                         _load_page(translated_path)
@@ -313,6 +321,10 @@ def run_translation(
                         else None
                     )
                     if translated_page is None:
+                        print(
+                            f"Translate: page {number}/{page_count} started",
+                            flush=True,
+                        )
                         page_state["translate"] = "pending"
                         page_state["review"] = "pending"
                         atomic_write_json(state_path, state)
@@ -337,6 +349,10 @@ def run_translation(
                         )
                         page_state["translate"] = "done"
                         atomic_write_json(state_path, state)
+                        print(
+                            f"Translate: page {number}/{page_count} success",
+                            flush=True,
+                        )
                     reviewed_path = _page_path(work / "reviewed", number)
                     reviewed_page = (
                         _load_page(reviewed_path)
@@ -344,6 +360,9 @@ def run_translation(
                         else None
                     )
                     if reviewed_page is None:
+                        print(
+                            f"Review: page {number}/{page_count} started", flush=True
+                        )
                         page_state["review"] = "pending"
                         atomic_write_json(state_path, state)
                         reviewed_page = _review_page(
@@ -355,6 +374,9 @@ def run_translation(
                         )
                         page_state["review"] = "done"
                         atomic_write_json(state_path, state)
+                        print(
+                            f"Review: page {number}/{page_count} success", flush=True
+                        )
                     completed.append(reviewed_page)
                 except BaseException as error:
                     active = next(

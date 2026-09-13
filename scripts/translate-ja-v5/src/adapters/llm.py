@@ -175,6 +175,8 @@ def structured_chat(
         )
 
     for format_attempt in range(2):
+        attempt_label = f" attempt {format_attempt + 1}/2"
+        print(f"LLM: {schema_name}{attempt_label} started", flush=True)
         update_current(input={**trace_input, "system": system_prompt})
         try:
             response = retry_call(invoke)
@@ -204,10 +206,12 @@ def structured_chat(
         except ValueError as error:
             if format_attempt:
                 raise ValueError("LLM did not return the required JSON object") from error
+            print(f"LLM: {schema_name}{attempt_label} invalid response", flush=True)
             system_prompt += "\n前の応答は不正でした。必須キーを含むJSON objectだけを再出力してください。"
             update_current(output={"invalid_response": value})
             continue
         update_current(output=parsed)
+        print(f"LLM: {schema_name}{attempt_label} success", flush=True)
         return parsed
     raise RuntimeError("structured response loop ended unexpectedly")
 
