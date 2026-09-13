@@ -152,7 +152,10 @@ def convert_pdf(
             return response
 
         status_response = retry_call(poll)
-        status = str(status_response.json().get("status", "")).casefold()
+        status_payload = status_response.json()
+        status = str(
+            status_payload.get("task_status") or status_payload.get("status", "")
+        ).casefold()
         if status in {"success", "succeeded", "completed"}:
 
             def download() -> httpx.Response:

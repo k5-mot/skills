@@ -320,14 +320,16 @@ def test_docling_extracts_one_json_and_safe_assets(tmp_path: Path) -> None:
     assert not (tmp_path / "escape.txt").exists()
 
 
-def test_docling_retries_poll_http_status_before_processing_response(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("status_field", ["task_status", "status"])
+def test_docling_accepts_status_fields_after_poll_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status_field: str
 ) -> None:
-    """pollの一時HTTP errorをresponse利用前に共通契約で再試行する。
+    """poll再試行後に新旧Doclingのstatus fieldで完了できることを確認する。
 
     Args:
         monkeypatch: HTTP呼出しと待機を差し替えるfixture。
         tmp_path: pytest一時directory。
+        status_field: Docling versionごとの完了status field名。
 
     Returns:
         なし。
@@ -403,7 +405,7 @@ def test_docling_retries_poll_http_status_before_processing_response(
         nonlocal polls
         if "/status/" in url:
             polls += 1
-            return Response({"status": "completed"}, status=503 if polls == 1 else 200)
+            return Response({status_field: "success"}, status=503 if polls == 1 else 200)
         return Response(content=stream.getvalue())
 
     actual_retry = docling.retry_call
@@ -418,6 +420,11 @@ def test_docling_retries_poll_http_status_before_processing_response(
         lambda *_args, **_kwargs: Response({"task_id": "task"}),
     )
     monkeypatch.setattr(docling.httpx, "get", get)
+    monkeypatch.setattr(
+        docling.time,
+        "sleep",
+        lambda _delay: pytest.fail("successful task must not be polled again"),
+    )
     result = docling.convert_pdf(
         source,
         tmp_path / "parsed.json",
