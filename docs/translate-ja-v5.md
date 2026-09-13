@@ -19,7 +19,7 @@ uv sync --all-groups
 - JSON Schema structured outputと画像messageに対応するvLLM model
 - `--list-of-figures`、`--list-of-tables`、`docx+native_numbering`に対応するPandoc
 
-想定modelはQwen/Gemma系ですが、model名は固定していません。Word入力は初版対象外です。JSON Schema応答はJSON objectのほか、local modelが返す外側の`json`code fenceも受理します。非JSONまたは必須キー不足の応答は、Schemaを明記した修正promptで一度だけ再生成します。
+想定modelはQwen/Gemma系ですが、model名は固定していません。Word入力は初版対象外です。JSON Schemaをsystem promptにも明記し、JSON objectのほか、local modelが返す外側の`json`code fenceも受理します。先頭JSON後の追加説明は出力に使用しません。非JSONまたは必須キー不足の応答は修正promptで一度だけ再生成します。
 
 ## 環境変数
 

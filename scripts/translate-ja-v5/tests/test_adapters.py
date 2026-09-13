@@ -104,6 +104,10 @@ def test_retry_call_does_not_retry_other_4xx() -> None:
             ["```json\n{}\n```", '{"value":"ok"}'],
             {"type": "object", "required": ["value"]},
         ),
+        (
+            ['{"value":"ok"}\n\nこれは追加説明です。'],
+            {"type": "object"},
+        ),
     ],
 )
 def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
@@ -154,8 +158,7 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
     assert len(calls) == len(responses)
     assert calls[-1]["response_format"]["type"] == "json_schema"
     assert "tools" not in calls[-1]
-    if len(responses) > 1:
-        assert "JSON Schema" in calls[-1]["messages"][0]["content"]
+    assert "JSON Schema" in calls[-1]["messages"][0]["content"]
 
 
 def test_langfuse_media_passes_image_content_type(

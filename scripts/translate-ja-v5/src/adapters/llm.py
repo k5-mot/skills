@@ -144,7 +144,11 @@ def structured_chat(
     content: str | list[dict[str, Any]] = user
     if image_path is not None:
         content = [{"type": "text", "text": user}, _image_message(image_path)]
-    system_prompt = system
+    system_prompt = (
+        f"{system}\n\n説明文やMarkdownを含めず、次のJSON Schemaに一致する"
+        f"JSON objectだけを返してください:\n"
+        f"{json.dumps(schema, ensure_ascii=False)}"
+    )
 
     def invoke() -> Any:
         """一回のChat Completions requestを送る。
@@ -191,7 +195,7 @@ def structured_chat(
                 and lines[-1] == "```"
             ):
                 json_text = "\n".join(lines[1:-1])
-            parsed = json.loads(json_text)
+            parsed, _ = json.JSONDecoder().raw_decode(json_text)
             if not isinstance(parsed, dict):
                 raise ValueError("LLM response must be a JSON object")
             missing = [key for key in schema.get("required", []) if key not in parsed]
@@ -200,11 +204,7 @@ def structured_chat(
         except ValueError as error:
             if format_attempt:
                 raise ValueError("LLM did not return the required JSON object") from error
-            system_prompt = (
-                f"{system}\n\n説明文やMarkdownを含めず、次のJSON Schemaに一致する"
-                f"JSON objectだけを返してください:\n"
-                f"{json.dumps(schema, ensure_ascii=False)}"
-            )
+            system_prompt += "\n前の応答は不正でした。必須キーを含むJSON objectだけを再出力してください。"
             update_current(output={"invalid_response": value})
             continue
         update_current(output=parsed)
