@@ -210,7 +210,7 @@ def _openai_translate_chunk(
             response = structured_chat(
                 settings,
                 settings.translation_model,
-                "英語を正確な日本語へ翻訳してください。JSONには対象IDだけを一度ずつ含め、__V5_PROTECTED_n__形式の文字列を一字も変更・削除しないでください。",
+                "英語を正確な日本語へ翻訳してください。各IDのtextだけを独立して訳し、文が途中でも補完せず、内容を別IDへ移動・統合しないでください。JSONには対象IDだけを一度ずつ含め、__V5_PROTECTED_n__形式の文字列を一字も変更・削除しないでください。",
                 prompt,
                 "translations",
                 TRANSLATION_SCHEMA,
@@ -254,7 +254,8 @@ def _openai_translate_chunk(
             )
             prompt += (
                 "\n\n前回の応答は翻訳契約に違反しました。全対象ID、空でない訳文、"
-                "入力中の全__V5_PROTECTED_n__文字列を完全に保持して再出力してください。"
+                "入力中の全__V5_PROTECTED_n__文字列を完全に保持し、各IDの内容を"
+                "他のIDへ移動・統合せずに再出力してください。"
             )
     raise RuntimeError("translation contract response loop ended unexpectedly") from last_error
 

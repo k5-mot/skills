@@ -57,7 +57,6 @@ def test_translate_page_uses_neighbor_context_and_rejects_foreign_ids(
     """
 
     prompts: list[str] = []
-
     def chat(
         _settings: Settings,
         _model: str,
@@ -146,7 +145,7 @@ def test_structure_clamps_heading_level_jumps(
         Args:
             _settings: 未使用設定。
             _model: 未使用model。
-            _system: 未使用system prompt。
+            system: 記録するsystem prompt。
             user: Structure prompt。
             _name: 未使用schema名。
             _schema: 未使用schema。
@@ -302,11 +301,12 @@ def test_openai_translation_regenerates_removed_protected_fragment(
     """
 
     prompts: list[str] = []
+    systems: list[str] = []
 
     def chat(
         _settings: Settings,
         _model: str,
-        _system: str,
+        system: str,
         user: str,
         _name: str,
         _schema: dict[str, Any],
@@ -317,7 +317,7 @@ def test_openai_translation_regenerates_removed_protected_fragment(
         Args:
             _settings: 未使用設定。
             _model: 未使用model。
-            _system: 未使用system prompt。
+            system: 記録するsystem prompt。
             user: 記録するprompt。
             _name: 未使用schema名。
             _schema: 未使用schema。
@@ -328,6 +328,7 @@ def test_openai_translation_regenerates_removed_protected_fragment(
         """
 
         prompts.append(user)
+        systems.append(system)
         text = "参照" if len(prompts) == 1 else "参照 __V5_PROTECTED_0__"
         return {"translations": [{"id": "i2-0", "text": text}]}
 
@@ -345,6 +346,7 @@ def test_openai_translation_regenerates_removed_protected_fragment(
     assert result.blocks[0].translated[0].text == "参照 https://example.com"
     assert len(prompts) == 2
     assert "前回の応答は翻訳契約に違反" in prompts[1]
+    assert "内容を別IDへ移動・統合しない" in systems[0]
     assert "contract invalid" in capsys.readouterr().out
 
 
