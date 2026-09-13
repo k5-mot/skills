@@ -129,7 +129,12 @@ def _review_page(
                     pairs.append((item.id, source_by_id[item.id], item.text))
     reviewed: dict[str, str] = {}
     for item_id, source, target in pairs:
-        reviewed[item_id] = run_review(source, target, rules, settings, glossary).text
+        try:
+            reviewed[item_id] = run_review(
+                source, target, rules, settings, glossary
+            ).text
+        except RuntimeError as error:
+            raise RuntimeError(f"Review failed for {item_id}: {error}") from error
     result = apply_layer(page, reviewed, "reviewed")
     update_current(output=result.model_dump())
     return result

@@ -326,11 +326,12 @@ def test_review_limits_assessment_output_but_not_revision(
 
     limits: dict[str, int] = {}
     prompts: dict[str, str] = {}
+    systems: dict[str, str] = {}
 
     def chat(
         call_settings: Settings,
         _model: str,
-        _system: str,
+        system: str,
         user: str,
         schema_name: str,
         _schema: dict[str, Any],
@@ -341,7 +342,7 @@ def test_review_limits_assessment_output_but_not_revision(
         Args:
             call_settings: nodeへ渡された設定。
             _model: 未使用model。
-            _system: 未使用system prompt。
+            system: 記録するsystem prompt。
             user: 記録するuser prompt。
             schema_name: node識別名。
             _schema: 未使用schema。
@@ -353,6 +354,7 @@ def test_review_limits_assessment_output_but_not_revision(
 
         limits[schema_name] = call_settings.output_tokens
         prompts[schema_name] = user
+        systems[schema_name] = system
         if schema_name == "fidelity_findings":
             return {"findings": [_finding()]}
         if schema_name == "japanese_findings":
@@ -370,6 +372,7 @@ def test_review_limits_assessment_output_but_not_revision(
         "verification": 2_048,
     }
     assert "固有ルール" in prompts["revision"]
+    assert "原文自体が文の断片" in systems["japanese_findings"]
 
 
 def test_japanese_critic_propagates_rag_evidence(

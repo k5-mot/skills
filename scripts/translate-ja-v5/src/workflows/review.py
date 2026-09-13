@@ -180,7 +180,7 @@ def build_review_graph(settings: Settings) -> Any:
         response = structured_chat(
             assessment_settings,
             assessment_settings.review_model or "",
-            "Japanese Criticです。訳文は変更せず、用語、一貫性、自然さを最大8件、簡潔に指摘してください。参照がある場合はsourceを含む根拠をevidenceへ必ず示してください。",
+            "Japanese Criticです。訳文は変更せず、用語、一貫性、自然さを最大8件、簡潔に指摘してください。原文自体が文の断片なら、訳文が断片であることだけを問題にしないでください。参照がある場合はsourceを含む根拠をevidenceへ必ず示してください。",
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n訳文:\n{state['candidate']}\n\n参照:\n{json.dumps(evidence, ensure_ascii=False)}",
             "japanese_findings",
             FINDINGS_SCHEMA,
