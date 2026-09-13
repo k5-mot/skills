@@ -18,6 +18,7 @@ dependencies = [
     "langgraph>=1.2.11",
     "langgraph-checkpoint-sqlite>=3.1.1",
     "langfuse>=3,<5",
+    "qdrant-client>=1.16.0,<2",
 ]
 
 [dependency-groups]
@@ -30,4 +31,5 @@ extra-paths = [
     "skills/translate-ja-v3/scripts",
     "skills/translate-ja-v4/scripts",
     "skills/review-enja/scripts",
+    "scripts/translate-ja-v5",
 ]

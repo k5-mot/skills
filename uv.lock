@@ -24,6 +24,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pypdfium2" },
     { name = "python-dotenv" },
+    { name = "qdrant-client" },
     { name = "typer" },
 ]
 
@@ -48,6 +49,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pypdfium2", specifier = ">=5.13.0,<6" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "qdrant-client", specifier = ">=1.16.0,<2" },
     { name = "typer", specifier = ">=0.20.0" },
 ]
 

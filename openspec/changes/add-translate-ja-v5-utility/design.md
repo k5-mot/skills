@@ -51,10 +51,12 @@ scripts/translate-ja-v5/
 │   ├── workflows/
 │   │   ├── translate.py
 │   │   ├── review.py
+│   │   ├── compare.py
 │   │   └── register.py
 │   ├── processing/
 │   │   ├── normalize.py
 │   │   ├── structure.py
+│   │   ├── translation.py
 │   │   ├── quality.py
 │   │   └── render.py
 │   └── adapters/
@@ -103,7 +105,7 @@ python scripts/translate-ja-v5/translate.py register \
 
 翻訳の上位工程は`parse → normalize → structure → translate → review → markdown → docx`という直線的なartifact処理である。この全体をLangGraph checkpointへ載せると、checkpointと成果物manifestのどちらが正本かを決める追加設計が必要になる。v5では`.work/state.json`だけを正本とし、各artifactを一時ファイルへ完全に書いた後、`os.replace`でartifact、最後にstateの順でatomic更新する。stateが完了を示してもartifactが存在しないかJSONとして読めない場合は、その単位を未完了へ戻す。個別artifactのhash台帳は作らない。
 
-同一出力先の排他は`.work/run.lock`へのOS advisory lockをnon-blockingで取得して実現する。PIDを正本にするlock file方式と異なり、異常終了後のstale lock掃除を必要としない。`--dry-run`は状態を読むだけでlock fileも含め一切書き込まない。
+同一出力先の排他は`.work/` directory自身へのOS advisory lockをnon-blockingで取得して実現する。PIDを正本にするlock file方式と異なり、余分な成果物や異常終了後のstale lock掃除を必要としない。`--dry-run`は状態を読むだけで一切書き込まない。
 
 Reviewは「指摘の有無」「Verifier合否」「一度だけの差戻し」という実際の分岐とloopを持つため、ここだけLangGraphを使用する。LangGraph checkpointは使用せず、graph入出力をページ単位artifactとしてstateから管理する。この境界により、graphはReviewロジックを可視化し、stateはprocessをまたぐResumeを担当する。
 

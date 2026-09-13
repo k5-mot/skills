@@ -1,0 +1,53 @@
+"""v5用語集の最小契約を検証する。"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from src.processing.quality import read_glossary
+
+
+def test_glossary_accepts_source_target_and_optional_notes(tmp_path: Path) -> None:
+    """二必須列と任意notes列をUTF-8で読めることを確認する。
+
+    Args:
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    path = tmp_path / "glossary.csv"
+    path.write_text(
+        "source,target,notes\nAPI,APIインターフェース,指定訳\n", encoding="utf-8"
+    )
+    assert read_glossary(path)[0].target == "APIインターフェース"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "english,japanese\nAPI,API\n",
+        "source,target\nAPI,\n",
+        "source,target\nAPI,一\napi,二\n",
+    ],
+)
+def test_glossary_rejects_invalid_schema_values_and_duplicates(
+    content: str, tmp_path: Path
+) -> None:
+    """必須列不足、空値、大小文字違い重複を拒否することを確認する。
+
+    Args:
+        content: 不正なCSV本文。
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    path = tmp_path / "glossary.csv"
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(ValueError):
+        read_glossary(path)
