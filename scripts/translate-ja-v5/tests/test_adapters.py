@@ -322,13 +322,17 @@ def test_docling_extracts_one_json_and_safe_assets(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("status_field", ["task_status", "status"])
 def test_docling_accepts_status_fields_after_poll_retry(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status_field: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    status_field: str,
 ) -> None:
-    """poll再試行後に新旧Doclingのstatus fieldで完了できることを確認する。
+    """新旧Doclingのstatusを受理し、状態変化だけ表示する。
 
     Args:
         monkeypatch: HTTP呼出しと待機を差し替えるfixture。
         tmp_path: pytest一時directory。
+        capsys: 標準出力を収集するfixture。
         status_field: Docling versionごとの完了status field名。
 
     Returns:
@@ -405,7 +409,11 @@ def test_docling_accepts_status_fields_after_poll_retry(
         nonlocal polls
         if "/status/" in url:
             polls += 1
-            return Response({status_field: "success"}, status=503 if polls == 1 else 200)
+            statuses = ["queued", "queued", "queued", "started", "success"]
+            return Response(
+                {status_field: statuses[polls - 1]},
+                status=503 if polls == 1 else 200,
+            )
         return Response(content=stream.getvalue())
 
     actual_retry = docling.retry_call
@@ -420,11 +428,7 @@ def test_docling_accepts_status_fields_after_poll_retry(
         lambda *_args, **_kwargs: Response({"task_id": "task"}),
     )
     monkeypatch.setattr(docling.httpx, "get", get)
-    monkeypatch.setattr(
-        docling.time,
-        "sleep",
-        lambda _delay: pytest.fail("successful task must not be polled again"),
-    )
+    monkeypatch.setattr(docling.time, "sleep", lambda _delay: None)
     result = docling.convert_pdf(
         source,
         tmp_path / "parsed.json",
@@ -432,7 +436,10 @@ def test_docling_accepts_status_fields_after_poll_retry(
         "http://docling",
     )
     assert result["schema_name"] == "DoclingDocument"
-    assert polls == 2
+    assert polls == 5
+    assert capsys.readouterr().out == (
+        "Docling: queued\nDocling: started\nDocling: success\n"
+    )
 
 
 def test_langfuse_failure_is_only_warning(

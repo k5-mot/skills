@@ -134,6 +134,7 @@ def convert_pdf(
     if not task_id:
         raise RuntimeError("Docling response has no task_id")
     deadline = time.monotonic() + 21_600
+    last_status = ""
     while time.monotonic() < deadline:
 
         def poll() -> httpx.Response:
@@ -156,6 +157,9 @@ def convert_pdf(
         status = str(
             status_payload.get("task_status") or status_payload.get("status", "")
         ).casefold()
+        if status and status != last_status:
+            print(f"Docling: {status}", flush=True)
+            last_status = status
         if status in {"success", "succeeded", "completed"}:
 
             def download() -> httpx.Response:
