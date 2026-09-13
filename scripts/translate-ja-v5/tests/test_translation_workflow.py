@@ -287,6 +287,67 @@ def test_openai_translation_preserves_protected_fragments(
     )
 
 
+def test_openai_translation_regenerates_removed_protected_fragment(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """保護文字列を落とした構造化訳を理由付きで一度再生成する。
+
+    Args:
+        monkeypatch: LLM呼出しを差し替えるfixture。
+        settings: 共通Settings fixture。
+        capsys: 標準出力を検証するfixture。
+
+    Returns:
+        なし。
+    """
+
+    prompts: list[str] = []
+
+    def chat(
+        _settings: Settings,
+        _model: str,
+        _system: str,
+        user: str,
+        _name: str,
+        _schema: dict[str, Any],
+        _image: object = None,
+    ) -> dict[str, Any]:
+        """初回だけplaceholderを削除した訳を返す。
+
+        Args:
+            _settings: 未使用設定。
+            _model: 未使用model。
+            _system: 未使用system prompt。
+            user: 記録するprompt。
+            _name: 未使用schema名。
+            _schema: 未使用schema。
+            _image: 未使用画像。
+
+        Returns:
+            初回は契約違反、二回目は正常な翻訳応答。
+        """
+
+        prompts.append(user)
+        text = "参照" if len(prompts) == 1 else "参照 __V5_PROTECTED_0__"
+        return {"translations": [{"id": "i2-0", "text": text}]}
+
+    monkeypatch.setattr(page_translation, "structured_chat", chat)
+    result = workflow.translate_page(
+        _page(2, ["See https://example.com"]),
+        "",
+        "",
+        "rules",
+        [],
+        settings,
+        "openai",
+    )
+    assert result.blocks[0].translated is not None
+    assert result.blocks[0].translated[0].text == "参照 https://example.com"
+    assert len(prompts) == 2
+    assert "前回の応答は翻訳契約に違反" in prompts[1]
+    assert "contract invalid" in capsys.readouterr().out
+
+
 def test_libretranslate_backend_changes_only_translation(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> None:

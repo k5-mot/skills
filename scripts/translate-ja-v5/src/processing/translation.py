@@ -200,42 +200,63 @@ def _openai_translate_chunk(
         raise ValueError("OPENAI_TRANSLATION_MODEL is required")
     prepared = {item_id: protect_text(text) for item_id, text in units}
     protected_units = [(item_id, prepared[item_id][0]) for item_id, _text in units]
-    try:
-        response = structured_chat(
-            settings,
-            settings.translation_model,
-            "英語を正確な日本語へ翻訳してください。JSONには対象IDだけを一度ずつ含め、コード、URL、パス、識別子を変更しないでください。",
-            _translation_prompt(rules, glossary, protected_units, previous, following),
-            "translations",
-            TRANSLATION_SCHEMA,
-        )
-    except ContextLengthError:
-        if not allow_bisect or len(units) < 2:
-            raise
-        middle = len(units) // 2
-        return {
-            **_openai_translate_chunk(
-                settings, units[:middle], rules, glossary, previous, "", False
-            ),
-            **_openai_translate_chunk(
-                settings, units[middle:], rules, glossary, "", following, False
-            ),
-        }
-    values = response.get("translations")
-    if not isinstance(values, list):
-        raise ValueError("translation response must contain translations")
-    mapping = {
-        str(item.get("id")): str(item.get("text", "")).strip()
-        for item in values
-        if isinstance(item, dict)
-    }
     expected = {item_id for item_id, _text in units}
-    if set(mapping) != expected or any(not text for text in mapping.values()):
-        raise ValueError("translation response IDs must exactly match non-empty inputs")
-    return {
-        item_id: restore_text(text, prepared[item_id][1])
-        for item_id, text in mapping.items()
-    }
+    prompt = _translation_prompt(
+        rules, glossary, protected_units, previous, following
+    )
+    last_error: ValueError | None = None
+    for contract_attempt in range(2):
+        try:
+            response = structured_chat(
+                settings,
+                settings.translation_model,
+                "英語を正確な日本語へ翻訳してください。JSONには対象IDだけを一度ずつ含め、__V5_PROTECTED_n__形式の文字列を一字も変更・削除しないでください。",
+                prompt,
+                "translations",
+                TRANSLATION_SCHEMA,
+            )
+        except ContextLengthError:
+            if not allow_bisect or len(units) < 2:
+                raise
+            middle = len(units) // 2
+            return {
+                **_openai_translate_chunk(
+                    settings, units[:middle], rules, glossary, previous, "", False
+                ),
+                **_openai_translate_chunk(
+                    settings, units[middle:], rules, glossary, "", following, False
+                ),
+            }
+        try:
+            values = response.get("translations")
+            if not isinstance(values, list):
+                raise ValueError("translation response must contain translations")
+            mapping = {
+                str(item.get("id")): str(item.get("text", "")).strip()
+                for item in values
+                if isinstance(item, dict)
+            }
+            if set(mapping) != expected or any(not text for text in mapping.values()):
+                raise ValueError(
+                    "translation response IDs must exactly match non-empty inputs"
+                )
+            return {
+                item_id: restore_text(text, prepared[item_id][1])
+                for item_id, text in mapping.items()
+            }
+        except ValueError as error:
+            last_error = error
+            if contract_attempt:
+                raise
+            print(
+                f"LLM: translations contract invalid ({error}); regenerating",
+                flush=True,
+            )
+            prompt += (
+                "\n\n前回の応答は翻訳契約に違反しました。全対象ID、空でない訳文、"
+                "入力中の全__V5_PROTECTED_n__文字列を完全に保持して再出力してください。"
+            )
+    raise RuntimeError("translation contract response loop ended unexpectedly") from last_error
 
 
 @observed("translate-page", capture_input=False)
