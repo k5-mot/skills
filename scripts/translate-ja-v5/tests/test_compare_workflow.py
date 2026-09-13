@@ -48,11 +48,40 @@ def test_compare_review_writes_report_and_reuses_units(
     source.write_bytes(b"source")
     destination.write_bytes(b"destination")
     output = tmp_path / "review.md"
-    monkeypatch.setattr(
-        compare,
-        "pdf_pages_text",
-        lambda path: ["SEC 100"] if path == source else ["SEC 100 訳"],
-    )
+    extraction_calls: list[Path] = []
+    alignment_calls = 0
+    original_align = compare.align_pages
+
+    def extract(path: Path) -> list[str]:
+        """PDF抽出呼出しを記録してpage本文を返す。
+
+        Args:
+            path: sourceまたはdestination PDF。
+
+        Returns:
+            対応する一ページの本文。
+        """
+
+        extraction_calls.append(path)
+        return ["SEC 100"] if path == source else ["SEC 100 訳"]
+
+    def align(source_pages: list[str], destination_pages: list[str]) -> list[dict]:
+        """対応付け呼出しを記録して本来の処理へ委譲する。
+
+        Args:
+            source_pages: source本文列。
+            destination_pages: destination本文列。
+
+        Returns:
+            対応付け結果。
+        """
+
+        nonlocal alignment_calls
+        alignment_calls += 1
+        return original_align(source_pages, destination_pages)
+
+    monkeypatch.setattr(compare, "pdf_pages_text", extract)
+    monkeypatch.setattr(compare, "align_pages", align)
     calls = 0
 
     def review_text(
@@ -82,7 +111,59 @@ def test_compare_review_writes_report_and_reuses_units(
     assert "指摘なし" in output.read_text(encoding="utf-8")
     assert compare.run_compare_review(source, destination, output, settings) == output
     assert calls == 1
+    assert extraction_calls == [source, destination]
+    assert alignment_calls == 1
     assert (tmp_path / ".work-review" / "aligned.json").exists()
+
+
+def test_compare_review_rebuilds_corrupt_cached_extraction(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings, tmp_path: Path
+) -> None:
+    """破損した抽出artifactだけを再生成してReviewを継続することを確認する。
+
+    Args:
+        monkeypatch: PDF抽出とReviewを差し替えるfixture。
+        settings: 共通Settings fixture。
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    source = tmp_path / "source.pdf"
+    destination = tmp_path / "destination.pdf"
+    source.write_bytes(b"source")
+    destination.write_bytes(b"destination")
+    calls: list[Path] = []
+
+    def extract(path: Path) -> list[str]:
+        """抽出対象を記録して固定本文を返す。
+
+        Args:
+            path: 抽出するPDF。
+
+        Returns:
+            一ページの固定本文。
+        """
+
+        calls.append(path)
+        return ["SEC 100"]
+
+    monkeypatch.setattr(compare, "pdf_pages_text", extract)
+    monkeypatch.setattr(
+        compare,
+        "run_review",
+        lambda source, target, rules, settings: ReviewOutcome(
+            approved=True, text=target
+        ),
+    )
+    output = tmp_path / "review.md"
+    compare.run_compare_review(source, destination, output, settings)
+    (tmp_path / ".work-review" / "source" / "pages.json").write_text(
+        "broken", encoding="utf-8"
+    )
+    compare.run_compare_review(source, destination, output, settings)
+    assert calls == [source, destination, source]
 
 
 def test_compare_review_rejects_changed_input_without_force(

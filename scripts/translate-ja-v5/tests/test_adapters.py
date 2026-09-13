@@ -241,6 +241,10 @@ def test_create_docx_uses_fixed_arguments(
         """
 
         calls.append(args)
+        temporary = Path(args[args.index("--output") + 1])
+        with zipfile.ZipFile(temporary, "w") as archive:
+            archive.writestr("[Content_Types].xml", "types")
+            archive.writestr("word/document.xml", "document")
         return SimpleNamespace(stdout="")
 
     monkeypatch.setattr(pandoc.subprocess, "run", run)
@@ -250,6 +254,49 @@ def test_create_docx_uses_fixed_arguments(
     command = calls[0]
     assert "--list-of-figures" in command and "--list-of-tables" in command
     assert "docx+native_numbering" in command and "--reference-doc" in command
+    assert Path(command[command.index("--output") + 1]) != tmp_path / "out.docx"
+    assert zipfile.is_zipfile(tmp_path / "out.docx")
+
+
+def test_create_docx_failure_preserves_previous_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pandoc失敗時に既存DOCXとdirectoryを変更しないことを確認する。
+
+    Args:
+        monkeypatch: Pandoc実行を差し替えるfixture。
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    output = tmp_path / "out.docx"
+    output.write_bytes(b"previous")
+    monkeypatch.setattr(pandoc, "check_pandoc", lambda: None)
+
+    def fail(args: list[str], **_kwargs: Any) -> None:
+        """一時出力へ不完全内容を書いてPandoc失敗を模擬する。
+
+        Args:
+            args: command引数。
+            _kwargs: subprocess option。
+
+        Returns:
+            なし。
+
+        Raises:
+            CalledProcessError: 常に送出する。
+        """
+
+        Path(args[args.index("--output") + 1]).write_bytes(b"partial")
+        raise pandoc.subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(pandoc.subprocess, "run", fail)
+    with pytest.raises(pandoc.subprocess.CalledProcessError):
+        pandoc.create_docx(tmp_path / "in.md", output, tmp_path / "template.docx")
+    assert output.read_bytes() == b"previous"
+    assert list(tmp_path.iterdir()) == [output]
 
 
 def test_docling_extracts_one_json_and_safe_assets(tmp_path: Path) -> None:
@@ -271,6 +318,114 @@ def test_docling_extracts_one_json_and_safe_assets(tmp_path: Path) -> None:
     assert value["schema_name"] == "DoclingDocument"
     assert (tmp_path / "assets" / "image.png").read_bytes() == b"png"
     assert not (tmp_path / "escape.txt").exists()
+
+
+def test_docling_retries_poll_http_status_before_processing_response(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """pollの一時HTTP errorをresponse利用前に共通契約で再試行する。
+
+    Args:
+        monkeypatch: HTTP呼出しと待機を差し替えるfixture。
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"pdf")
+    stream = BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr(
+            "document.json",
+            '{"schema_name":"DoclingDocument","pages":{"1":{}}}',
+        )
+    polls = 0
+
+    class Response:
+        """Docling API responseのtest double。"""
+
+        def __init__(
+            self,
+            body: dict[str, str] | None = None,
+            content: bytes = b"",
+            status: int = 200,
+        ) -> None:
+            """JSON、binary、statusを保持する。
+
+            Args:
+                body: JSON応答。
+                content: ZIP応答。
+                status: HTTP status。
+
+            Returns:
+                なし。
+            """
+
+            self.body = body or {}
+            self.content = content
+            self.status = status
+
+        def raise_for_status(self) -> None:
+            """一時statusならtest用HTTP例外を送出する。
+
+            Returns:
+                なし。
+
+            Raises:
+                StatusError: statusが成功でない場合。
+            """
+
+            if self.status >= 400:
+                raise StatusError(self.status)
+
+        def json(self) -> dict[str, str]:
+            """保持したJSON応答を返す。
+
+            Returns:
+                JSON object。
+            """
+
+            return self.body
+
+    def get(url: str, **_kwargs: Any) -> Response:
+        """初回pollだけ503にし、その後は完了結果を返す。
+
+        Args:
+            url: Docling endpoint URL。
+            _kwargs: 未使用HTTP引数。
+
+        Returns:
+            endpointに対応するresponse。
+        """
+
+        nonlocal polls
+        if "/status/" in url:
+            polls += 1
+            return Response({"status": "completed"}, status=503 if polls == 1 else 200)
+        return Response(content=stream.getvalue())
+
+    actual_retry = docling.retry_call
+    monkeypatch.setattr(
+        docling,
+        "retry_call",
+        lambda call: actual_retry(call, lambda _delay: None),
+    )
+    monkeypatch.setattr(
+        docling.httpx,
+        "post",
+        lambda *_args, **_kwargs: Response({"task_id": "task"}),
+    )
+    monkeypatch.setattr(docling.httpx, "get", get)
+    result = docling.convert_pdf(
+        source,
+        tmp_path / "parsed.json",
+        tmp_path / "assets",
+        "http://docling",
+    )
+    assert result["schema_name"] == "DoclingDocument"
+    assert polls == 2
 
 
 def test_langfuse_failure_is_only_warning(

@@ -9,7 +9,16 @@ from pathlib import Path
 from pydantic import BaseModel
 
 PROTECTED_RE = re.compile(
-    r"https?://\S+|(?:[A-Za-z]:\\|/)[\w./\\-]+|--?[a-z][\w-]*|`[^`]+`|\b[A-Z][A-Z0-9_]{2,}\b"
+    r"`[^`\n]+`"
+    r"|https?://[^\s<>()]+"
+    r"|www\.[^\s<>()]+"
+    r"|(?<!\w)[A-Za-z]:\\[^\s]+"
+    r"|(?<!\w)(?:\.\.?/|~/|/)[A-Za-z0-9_.~+@%/-]+"
+    r"|(?<!\w)--?[A-Za-z][A-Za-z0-9-]*"
+    r"|\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b"
+    r"|\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b"
+    r"|\b[a-z]+(?:[A-Z][A-Za-z0-9]*)+\b"
+    r"|\b[A-Z][A-Z0-9]{1,}\b"
 )
 NUMBER_UNIT_RE = re.compile(
     r"(?<!\w)[+-]?\d[\d,.]*(?:\s?(?:%|ms|s|MB|GB|KB|V|A|Hz|°C))?"

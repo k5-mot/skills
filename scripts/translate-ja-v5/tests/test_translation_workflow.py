@@ -10,6 +10,7 @@ import pytest
 from src.adapters.llm import ContextLengthError
 from src.config import Settings
 from src.model import Block, Inline, Page
+from src.processing import structure as page_structure
 from src.processing import translation as page_translation
 from src.state import atomic_write_json, load_json
 from src.workflows import review as review_workflow
@@ -102,6 +103,69 @@ def test_translate_page_uses_neighbor_context_and_rejects_foreign_ids(
         )
 
 
+def test_structure_clamps_heading_level_jumps(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings, tmp_path: Path
+) -> None:
+    """Structure modelの見出しlevelを先頭と直前から一段以内へ丸める。
+
+    Args:
+        monkeypatch: Structure LLMを差し替えるfixture。
+        settings: 共通Settings fixture。
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    page = Page(
+        number=2,
+        blocks=[
+            Block(
+                id=f"heading-{index}",
+                order=index,
+                kind="heading",
+                level=level,
+                bbox=(1.0, 2.0, 3.0, 4.0),
+                source=[Inline(id=f"inline-{index}", text="Heading")],
+            )
+            for index, level in enumerate((4, 6, 2))
+        ],
+    )
+
+    def chat(
+        _settings: Settings,
+        _model: str,
+        _system: str,
+        user: str,
+        _name: str,
+        _schema: dict[str, Any],
+        _image: object = None,
+    ) -> dict[str, list]:
+        """座標を含むStructure promptへ空patchを返す。
+
+        Args:
+            _settings: 未使用設定。
+            _model: 未使用model。
+            _system: 未使用system prompt。
+            user: Structure prompt。
+            _name: 未使用schema名。
+            _schema: 未使用schema。
+            _image: 未使用画像。
+
+        Returns:
+            空patch応答。
+        """
+
+        assert '"bbox": [1.0, 2.0, 3.0, 4.0]' in user
+        return {"patches": []}
+
+    monkeypatch.setattr(page_structure, "structured_chat", chat)
+    result = page_structure.structure_page(
+        page, tmp_path / "page.png", "rules", settings
+    )
+    assert [block.level for block in result.blocks] == [1, 2, 2]
+
+
 def test_context_overflow_bisects_only_once(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> None:
@@ -159,6 +223,70 @@ def test_context_overflow_bisects_only_once(
     ]
 
 
+def test_openai_translation_preserves_protected_fragments(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """OpenAI経路でもURLとoptionをplaceholderで保護することを確認する。
+
+    Args:
+        monkeypatch: LLM呼出しを差し替えるfixture。
+        settings: 共通Settings fixture。
+
+    Returns:
+        なし。
+    """
+
+    def chat(
+        _settings: Settings,
+        _model: str,
+        _system: str,
+        user: str,
+        _name: str,
+        _schema: dict[str, Any],
+        _image: object = None,
+    ) -> dict[str, Any]:
+        """placeholderを保持した翻訳応答を返す。
+
+        Args:
+            _settings: 未使用設定。
+            _model: 未使用model。
+            _system: 未使用system prompt。
+            user: 保護済み翻訳prompt。
+            _name: 未使用schema名。
+            _schema: 未使用schema。
+            _image: 未使用画像。
+
+        Returns:
+            placeholderを含む翻訳応答。
+        """
+
+        assert "https://example.com" not in user
+        assert "--force" not in user
+        return {
+            "translations": [
+                {
+                    "id": "i2-0",
+                    "text": "参照 __V5_PROTECTED_0__ と __V5_PROTECTED_1__",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(page_translation, "structured_chat", chat)
+    result = workflow.translate_page(
+        _page(2, ["See https://example.com and --force"]),
+        "",
+        "",
+        "rules",
+        [],
+        settings,
+        "openai",
+    )
+    assert result.blocks[0].translated is not None
+    assert result.blocks[0].translated[0].text == (
+        "参照 https://example.com と --force"
+    )
+
+
 def test_libretranslate_backend_changes_only_translation(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> None:
@@ -195,40 +323,54 @@ def test_libretranslate_backend_changes_only_translation(
     ] == ["訳:First", "訳:Second"]
 
 
-def _raw_document() -> dict[str, Any]:
-    """表紙と翻訳2ページを持つ最小Docling documentを返す。
+def _raw_document(long_page: bool = False) -> dict[str, Any]:
+    """表紙と翻訳2ページを持つDocling documentを返す。
+
+    Args:
+        long_page: 三ページ目を500要素の長大ページにするか。
 
     Returns:
         三ページのDocling JSON。
     """
 
+    texts = [
+        {
+            "self_ref": "#/texts/0",
+            "label": "title",
+            "text": "Cover",
+            "prov": [{"page_no": 1}],
+        },
+        {
+            "self_ref": "#/texts/1",
+            "label": "paragraph",
+            "text": "Page two",
+            "prov": [{"page_no": 2}],
+        },
+    ]
+    page_three = (
+        [f"Long {index} " + "x" * 100 for index in range(500)]
+        if long_page
+        else ["Page three"]
+    )
+    texts.extend(
+        {
+            "self_ref": f"#/texts/{index + 2}",
+            "label": "paragraph",
+            "text": text,
+            "prov": [{"page_no": 3}],
+        }
+        for index, text in enumerate(page_three)
+    )
     return {
         "schema_name": "DoclingDocument",
         "version": "1",
         "pages": {"1": {}, "2": {}, "3": {}},
-        "body": {"children": [{"$ref": f"#/texts/{index}"} for index in range(3)]},
+        "body": {
+            "children": [{"$ref": f"#/texts/{index}"} for index in range(len(texts))]
+        },
         "furniture": {"children": []},
         "groups": [],
-        "texts": [
-            {
-                "self_ref": "#/texts/0",
-                "label": "title",
-                "text": "Cover",
-                "prov": [{"page_no": 1}],
-            },
-            {
-                "self_ref": "#/texts/1",
-                "label": "paragraph",
-                "text": "Page two",
-                "prov": [{"page_no": 2}],
-            },
-            {
-                "self_ref": "#/texts/2",
-                "label": "paragraph",
-                "text": "Page three",
-                "prov": [{"page_no": 3}],
-            },
-        ],
+        "texts": texts,
         "tables": [],
         "pictures": [],
         "key_value_items": [],
@@ -236,10 +378,10 @@ def _raw_document() -> dict[str, Any]:
     }
 
 
-def test_translation_resumes_after_failed_page(
+def test_fifty_thousand_token_workflow_resumes_after_long_page_review_failure(
     monkeypatch: pytest.MonkeyPatch, settings: Settings, tmp_path: Path
 ) -> None:
-    """途中Review失敗後に完了ページを再利用し未完了ページから再開する。
+    """50,000 token長大ページのReview中断後に完了ページを再利用する。
 
     Args:
         monkeypatch: 外部adapterをlocal fakeへ差し替えるfixture。
@@ -252,9 +394,10 @@ def test_translation_resumes_after_failed_page(
 
     source = tmp_path / "source.pdf"
     source.write_bytes(b"pdf")
-    raw = _raw_document()
+    raw = _raw_document(long_page=True)
     structure_calls: list[int] = []
     translation_calls: list[str] = []
+    request_sizes: list[int] = []
     review_calls: list[str] = []
     fail_once = True
     monkeypatch.setattr(workflow, "check_pandoc", lambda: None)
@@ -325,15 +468,14 @@ def test_translation_resumes_after_failed_page(
             対象ページの翻訳。
         """
 
-        item_id = (
-            "#/texts/1/inline/0"
-            if "#/texts/1/inline/0" in user
-            else "#/texts/2/inline/0"
-        )
-        translation_calls.append(item_id)
+        import re
+
+        item_ids = re.findall(r'"id": "(\#/texts/\d+/inline/0)"', user)
+        request_sizes.append(len(user))
+        translation_calls.append(item_ids[0])
         return {
             "translations": [
-                {"id": item_id, "text": "二ページ" if "/1/" in item_id else "三ページ"}
+                {"id": item_id, "text": f"訳-{item_id}"} for item_id in item_ids
             ]
         }
 
@@ -359,7 +501,7 @@ def test_translation_resumes_after_failed_page(
 
         nonlocal fail_once
         review_calls.append(source_text)
-        if source_text == "Page three" and fail_once:
+        if source_text.startswith("Long 0 ") and fail_once:
             fail_once = False
             raise RuntimeError("Verifier rejected")
         return ReviewOutcome(approved=True, text=target)
@@ -424,17 +566,30 @@ def test_translation_resumes_after_failed_page(
     state = load_json(state_path)
     assert state["pages"]["2"]["review"] == "done"
     assert state["pages"]["3"]["review"] == "failed"
+    calls_before_resume = list(translation_calls)
     result = workflow.run_translation(source, tmp_path / "output", settings)
     assert result == tmp_path / "output" / "source" / "document.ja.docx"
     assert structure_calls == [2, 3]
-    assert len(translation_calls) == 2
-    assert review_calls == ["Page two", "Page three", "Page three"]
+    assert len(calls_before_resume) >= 3
+    assert translation_calls == calls_before_resume
+    assert all(size < settings.context_tokens for size in request_sizes)
+    assert review_calls.count("Page two") == 1
+    assert sum(value.startswith("Long 0 ") for value in review_calls) == 2
+    assert sum(value.startswith("Long ") for value in review_calls) == 501
     reviewed_page_two = (
         tmp_path / "output" / "source" / ".work" / "reviewed" / "page_000002.json"
     )
     reviewed_page_two.unlink()
     workflow.run_translation(source, tmp_path / "output", settings)
     assert review_calls[-1] == "Page two"
+    translated_page_three = (
+        tmp_path / "output" / "source" / ".work" / "translated" / "page_000003.json"
+    )
+    translated_page_three.write_text("broken", encoding="utf-8")
+    translation_count = len(translation_calls)
+    workflow.run_translation(source, tmp_path / "output", settings)
+    assert len(translation_calls) > translation_count
+    assert review_calls[-1].startswith("Long 499 ")
     work_entries = {
         path.name for path in (tmp_path / "output" / "source" / ".work").iterdir()
     }

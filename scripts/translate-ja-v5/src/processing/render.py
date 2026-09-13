@@ -188,7 +188,7 @@ def render_block(block: Block) -> str:
         return _render_table(block)
     if block.kind == "figure":
         caption = render_inlines(_caption_current(block))
-        return f"![{_escape(block.alt_text or '')}]({_escape(block.asset_path or '')})\n\n{caption}"
+        return f"![{caption or _escape(block.alt_text or '')}]({_escape(block.asset_path or '')})"
     if block.kind == "footnote":
         anchor = _anchor(block.id)
         return f"[^{anchor}]\n\n[^{anchor}]: {text}"

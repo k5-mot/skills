@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 from src.adapters.docling import convert_pdf
 from src.adapters.langfuse import flush_safely, observed, update_current
@@ -134,17 +135,55 @@ def _review_page(
     return result
 
 
-def _load_page(path: Path) -> Page:
-    """ページ別JSONをPage modelとして読む。
+def _load_page(path: Path) -> Page | None:
+    """ページ別JSONを再利用できる場合だけPageとして読む。
 
     Args:
         path: 読み込むJSON。
 
     Returns:
-        検証済みPage。
+        検証済みPage。欠損または破損時はNone。
     """
 
-    return Page.model_validate(load_json(path))
+    try:
+        value = load_json(path)
+        return Page.model_validate(value) if value is not None else None
+    except (OSError, ValueError):
+        return None
+
+
+def _load_document(path: Path) -> Document | None:
+    """正規化済みJSONを再利用できる場合だけDocumentとして読む。
+
+    Args:
+        path: 読み込むJSON。
+
+    Returns:
+        検証済みDocument。欠損または破損時はNone。
+    """
+
+    try:
+        value = load_json(path)
+        return Document.model_validate(value) if value is not None else None
+    except (OSError, ValueError):
+        return None
+
+
+def _load_parsed(path: Path) -> dict[str, Any] | None:
+    """Docling JSONを再利用できる場合だけobjectとして読む。
+
+    Args:
+        path: 読み込むJSON。
+
+    Returns:
+        Docling object。欠損または破損時はNone。
+    """
+
+    try:
+        value = load_json(path)
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 @observed("translate-workflow", capture_input=False)
@@ -207,7 +246,12 @@ def run_translation(
         atomic_write_json(state_path, state)
         try:
             parsed_path = work / "parsed.json"
-            if state["stages"]["parse"] != "done" or not parsed_path.exists():
+            parsed = (
+                _load_parsed(parsed_path)
+                if state["stages"]["parse"] == "done"
+                else None
+            )
+            if parsed is None:
                 parsed = convert_pdf(
                     source,
                     parsed_path,
@@ -217,18 +261,19 @@ def run_translation(
                 )
                 state["stages"]["parse"] = "done"
                 atomic_write_json(state_path, state)
-            else:
-                parsed = load_json(parsed_path)
             normalized_path = work / "normalized.json"
-            if state["stages"]["normalize"] != "done" or not normalized_path.exists():
+            document = (
+                _load_document(normalized_path)
+                if state["stages"]["normalize"] == "done"
+                else None
+            )
+            if document is None:
                 document = normalize_docling(parsed)
                 atomic_write_text(
                     normalized_path, document.model_dump_json(indent=2) + "\n"
                 )
                 state["stages"]["normalize"] = "done"
                 atomic_write_json(state_path, state)
-            else:
-                document = Document.model_validate(load_json(normalized_path))
             source_pages = {page.number: page for page in document.pages}
             structure_rules = read_rules(settings, "structure")
             translation_rules = read_rules(settings, "translation")
@@ -238,9 +283,16 @@ def run_translation(
                 page_state = state["pages"][str(number)]
                 try:
                     structured_path = _page_path(work / "structured", number)
-                    if page_state["structure"] == "done" and structured_path.exists():
-                        structured = _load_page(structured_path)
-                    else:
+                    structured = (
+                        _load_page(structured_path)
+                        if page_state["structure"] == "done"
+                        else None
+                    )
+                    if structured is None:
+                        page_state["structure"] = "pending"
+                        page_state["translate"] = "pending"
+                        page_state["review"] = "pending"
+                        atomic_write_json(state_path, state)
                         image = render_page(
                             source,
                             number,
@@ -255,9 +307,15 @@ def run_translation(
                         page_state["structure"] = "done"
                         atomic_write_json(state_path, state)
                     translated_path = _page_path(work / "translated", number)
-                    if page_state["translate"] == "done" and translated_path.exists():
-                        translated_page = _load_page(translated_path)
-                    else:
+                    translated_page = (
+                        _load_page(translated_path)
+                        if page_state["translate"] == "done"
+                        else None
+                    )
+                    if translated_page is None:
+                        page_state["translate"] = "pending"
+                        page_state["review"] = "pending"
+                        atomic_write_json(state_path, state)
                         translated_page = translate_page(
                             structured,
                             page_text(
@@ -280,9 +338,14 @@ def run_translation(
                         page_state["translate"] = "done"
                         atomic_write_json(state_path, state)
                     reviewed_path = _page_path(work / "reviewed", number)
-                    if page_state["review"] == "done" and reviewed_path.exists():
-                        reviewed_page = _load_page(reviewed_path)
-                    else:
+                    reviewed_page = (
+                        _load_page(reviewed_path)
+                        if page_state["review"] == "done"
+                        else None
+                    )
+                    if reviewed_page is None:
+                        page_state["review"] = "pending"
+                        atomic_write_json(state_path, state)
                         reviewed_page = _review_page(
                             translated_page, review_rules, settings, glossary
                         )

@@ -162,6 +162,144 @@ def test_normalize_preserves_order_and_geometry() -> None:
     assert page.blocks[3].asset_path == "structured/assets/pic.png"
 
 
+def test_normalize_preserves_nested_lists_links_and_formatting() -> None:
+    """ListGroup階層とTextItemのlinkおよび装飾を保持することを確認する。
+
+    Returns:
+        なし。
+    """
+
+    document = _docling_document()
+    document["body"] = {"children": [{"$ref": "#/groups/0"}]}
+    document["groups"] = [
+        {
+            "self_ref": "#/groups/0",
+            "label": "ordered_list",
+            "children": [{"$ref": "#/texts/0"}],
+        },
+        {
+            "self_ref": "#/groups/1",
+            "label": "list",
+            "children": [{"$ref": "#/texts/1"}],
+        },
+    ]
+    document["texts"] = [
+        {
+            "self_ref": "#/texts/0",
+            "label": "list_item",
+            "text": "Parent",
+            "formatting": {"bold": True, "italic": True, "script": "super"},
+            "hyperlink": "https://example.com",
+            "children": [{"$ref": "#/groups/1"}],
+            "prov": [{"page_no": 1}],
+        },
+        {
+            "self_ref": "#/texts/1",
+            "label": "list_item",
+            "text": "Child",
+            "prov": [{"page_no": 1}],
+        },
+    ]
+    document["tables"] = []
+    document["pictures"] = []
+
+    blocks = normalize_docling(document).pages[0].blocks
+    assert [(block.level, block.ordered) for block in blocks] == [(1, True), (2, False)]
+    assert blocks[0].source[0].kind == "link"
+    assert blocks[0].source[0].href == "https://example.com"
+    assert blocks[0].source[0].marks == ["strong", "emphasis", "superscript"]
+
+
+def test_normalize_resolves_docling_caption_references_without_duplicates() -> None:
+    """現行Doclingのcaptions参照を図題へ内包し本文へ重複させないことを確認する。
+
+    Returns:
+        なし。
+    """
+
+    document = _docling_document()
+    document["body"] = {
+        "children": [
+            {"$ref": "#/pictures/0"},
+            {"$ref": "#/texts/0"},
+        ]
+    }
+    document["texts"] = [
+        {
+            "self_ref": "#/texts/0",
+            "label": "caption",
+            "text": "Current caption",
+            "formatting": {"italic": True},
+            "prov": [{"page_no": 1}],
+        }
+    ]
+    document["pictures"][0].pop("caption")
+    document["pictures"][0]["captions"] = [{"$ref": "#/texts/0"}]
+    document["tables"] = []
+
+    blocks = normalize_docling(document).pages[0].blocks
+    assert len(blocks) == 1
+    assert blocks[0].kind == "figure"
+    assert blocks[0].caption[0].text == "Current caption"
+    assert blocks[0].caption[0].marks == ["emphasis"]
+
+
+def test_normalize_removes_source_indexes_and_picture_child_text() -> None:
+    """再生成する目次pageと図内の重複textを本文から除くことを確認する。
+
+    Returns:
+        なし。
+    """
+
+    document = _docling_document()
+    document["pages"]["2"] = {}
+    document["texts"] = [
+        {
+            "self_ref": "#/texts/0",
+            "label": "section_header",
+            "text": "Table of Contents",
+            "prov": [{"page_no": 1}],
+        },
+        {
+            "self_ref": "#/texts/1",
+            "label": "paragraph",
+            "text": "Index entry",
+            "prov": [{"page_no": 1}],
+        },
+        {
+            "self_ref": "#/texts/2",
+            "label": "text",
+            "text": "Text detected inside image",
+            "parent": {"$ref": "#/pictures/0"},
+            "prov": [{"page_no": 2}],
+        },
+        {
+            "self_ref": "#/texts/3",
+            "label": "paragraph",
+            "text": "Body",
+            "prov": [{"page_no": 2}],
+        },
+    ]
+    document["pictures"][0]["prov"] = [{"page_no": 2}]
+    document["body"] = {
+        "children": [
+            {"$ref": "#/texts/0"},
+            {"$ref": "#/texts/1"},
+            {"$ref": "#/pictures/0"},
+            {"$ref": "#/texts/2"},
+            {"$ref": "#/texts/3"},
+        ]
+    }
+
+    normalized = normalize_docling(document)
+    assert normalized.pages[0].blocks == []
+    assert [block.kind for block in normalized.pages[1].blocks] == [
+        "figure",
+        "paragraph",
+    ]
+    assert normalized.pages[1].blocks[1].source[0].text == "Body"
+
+
 def test_normalize_rejects_content_bearing_unknown_leaf() -> None:
     """内容を持つ未知labelがref付きで失敗することを確認する。
 

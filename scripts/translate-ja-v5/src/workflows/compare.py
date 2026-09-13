@@ -23,6 +23,61 @@ from src.workflows.review import ReviewOutcome, run_review
 ANCHOR_RE = re.compile(r"https?://\S+|\b\d[\d.,]*\b|\b[A-Z][A-Z0-9_-]{2,}\b")
 
 
+def _load_string_list(path: Path) -> list[str] | None:
+    """再利用可能な文字列配列artifactを安全に読む。
+
+    Args:
+        path: JSON artifact。
+
+    Returns:
+        検証済み文字列配列。欠損または破損時はNone。
+    """
+
+    try:
+        value = load_json(path)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    return value
+
+
+def _load_dict_list(path: Path) -> list[dict[str, Any]] | None:
+    """再利用可能なobject配列artifactを安全に読む。
+
+    Args:
+        path: JSON artifact。
+
+    Returns:
+        検証済みobject配列。欠損または破損時はNone。
+    """
+
+    try:
+        value = load_json(path)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        return None
+    return cast(list[dict[str, Any]], value)
+
+
+def _load_dict(path: Path) -> dict[str, Any] | None:
+    """再利用可能なobject artifactを安全に読む。
+
+    Args:
+        path: JSON artifact。
+
+    Returns:
+        object。欠損または破損時はNone。
+    """
+
+    try:
+        value = load_json(path)
+    except (OSError, ValueError):
+        return None
+    return cast(dict[str, Any], value) if isinstance(value, dict) else None
+
+
 def _anchors(text: str) -> set[str]:
     """言語をまたいで残りやすい対応付けanchorを抽出する。
 
@@ -209,14 +264,21 @@ def run_compare_review(
                 "last_error": None,
             }
         work.mkdir(parents=True, exist_ok=True)
-        source_pages = pdf_pages_text(source)
-        destination_pages = pdf_pages_text(destination)
-        (work / "source").mkdir(exist_ok=True)
-        (work / "destination").mkdir(exist_ok=True)
-        atomic_write_json(work / "source" / "pages.json", source_pages)
-        atomic_write_json(work / "destination" / "pages.json", destination_pages)
-        alignments = align_pages(source_pages, destination_pages)
-        atomic_write_json(work / "aligned.json", alignments)
+        source_path = work / "source" / "pages.json"
+        destination_path = work / "destination" / "pages.json"
+        source_pages = None if force else _load_string_list(source_path)
+        destination_pages = None if force else _load_string_list(destination_path)
+        if source_pages is None:
+            source_pages = pdf_pages_text(source)
+            atomic_write_json(source_path, source_pages)
+        if destination_pages is None:
+            destination_pages = pdf_pages_text(destination)
+            atomic_write_json(destination_path, destination_pages)
+        aligned_path = work / "aligned.json"
+        alignments = None if force else _load_dict_list(aligned_path)
+        if alignments is None:
+            alignments = align_pages(source_pages, destination_pages)
+            atomic_write_json(aligned_path, alignments)
         units_state = cast(dict[str, str], state["units"])
         for item in alignments:
             units_state.setdefault(item["id"], "pending")
@@ -233,8 +295,13 @@ def run_compare_review(
         try:
             for item in alignments:
                 result_path = work / "reviewed" / f"{item['id']}.json"
-                if units_state[item["id"]] == "done" and result_path.exists():
-                    result = load_json(result_path)
+                result = (
+                    _load_dict(result_path)
+                    if units_state[item["id"]] == "done"
+                    else None
+                )
+                if result is not None:
+                    pass
                 elif item["status"] in {"missing", "extra"}:
                     category = "omission" if item["status"] == "missing" else "addition"
                     finding = Finding(

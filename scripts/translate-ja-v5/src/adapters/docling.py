@@ -135,20 +135,42 @@ def convert_pdf(
         raise RuntimeError("Docling response has no task_id")
     deadline = time.monotonic() + 21_600
     while time.monotonic() < deadline:
-        status_response = retry_call(
-            lambda: httpx.get(
-                f"{url}/v1/status/poll/{task_id}", headers=_headers(api_key), timeout=60
+
+        def poll() -> httpx.Response:
+            """Docling task状態を一度取得する。
+
+            Returns:
+                成功statusのHTTP response。
+            """
+
+            response = httpx.get(
+                f"{url}/v1/status/poll/{task_id}",
+                headers=_headers(api_key),
+                timeout=60,
             )
-        )
-        status_response.raise_for_status()
+            response.raise_for_status()
+            return response
+
+        status_response = retry_call(poll)
         status = str(status_response.json().get("status", "")).casefold()
         if status in {"success", "succeeded", "completed"}:
-            result = retry_call(
-                lambda: httpx.get(
-                    f"{url}/v1/result/{task_id}", headers=_headers(api_key), timeout=300
+
+            def download() -> httpx.Response:
+                """完了したDocling resultを一度取得する。
+
+                Returns:
+                    成功statusのZIP response。
+                """
+
+                response = httpx.get(
+                    f"{url}/v1/result/{task_id}",
+                    headers=_headers(api_key),
+                    timeout=300,
                 )
-            )
-            result.raise_for_status()
+                response.raise_for_status()
+                return response
+
+            result = retry_call(download)
             document = _extract_result(result.content, artifacts)
             atomic_write_json(output_json, document)
             return document

@@ -6,7 +6,7 @@ from typing import Any
 
 from qdrant_client import QdrantClient, models
 
-from src.adapters.llm import embeddings
+from src.adapters.llm import embeddings, retry_call
 from src.config import Settings
 
 
@@ -37,14 +37,18 @@ def search(settings: Settings, query: str, limit: int = 5) -> list[dict[str, Any
         text、source metadata、scoreを持つ結果列。
     """
 
-    if not settings.qdrant_collection:
+    collection = settings.qdrant_collection
+    if not collection:
         return []
     vector = embeddings(settings, [query])[0]
-    response = _client(settings).query_points(
-        collection_name=settings.qdrant_collection,
-        query=vector,
-        limit=limit,
-        with_payload=True,
+    client = _client(settings)
+    response = retry_call(
+        lambda: client.query_points(
+            collection_name=collection,
+            query=vector,
+            limit=limit,
+            with_payload=True,
+        )
     )
     return [
         {
@@ -75,16 +79,21 @@ def replace_revision(
         RuntimeError: upsert後に全pointを取得できない場合。
     """
 
-    if not settings.qdrant_collection:
+    collection = settings.qdrant_collection
+    if not collection:
         raise ValueError("QDRANT_COLLECTION is required")
     client = _client(settings)
-    client.upsert(collection_name=settings.qdrant_collection, points=points, wait=True)
+    retry_call(
+        lambda: client.upsert(collection_name=collection, points=points, wait=True)
+    )
     ids = [point.id for point in points]
-    found = client.retrieve(
-        collection_name=settings.qdrant_collection,
-        ids=ids,
-        with_payload=False,
-        with_vectors=False,
+    found = retry_call(
+        lambda: client.retrieve(
+            collection_name=collection,
+            ids=ids,
+            with_payload=False,
+            with_vectors=False,
+        )
     )
     if {str(item.id) for item in found} != {str(item) for item in ids}:
         raise RuntimeError("Qdrant did not persist every new revision point")
@@ -97,8 +106,10 @@ def replace_revision(
             ),
         ]
     )
-    client.delete(
-        collection_name=settings.qdrant_collection,
-        points_selector=old_filter,
-        wait=True,
+    retry_call(
+        lambda: client.delete(
+            collection_name=collection,
+            points_selector=old_filter,
+            wait=True,
+        )
     )

@@ -1,0 +1,98 @@
+{
+  "v4_detected": [
+    "omission",
+    "addition",
+    "meaning",
+    "negation",
+    "comparison",
+    "condition",
+    "number",
+    "unit",
+    "url",
+    "path",
+    "identifier",
+    "glossary",
+    "causality"
+  ],
+  "cases": [
+    {
+      "category": "omission",
+      "finding": "omission",
+      "source": "This deliberately long source sentence contains enough important explanatory material to make a severely shortened translation an obvious omission.",
+      "target": "短い"
+    },
+    {
+      "category": "addition",
+      "finding": "addition",
+      "source": "Short",
+      "target": "原文に存在しない説明を大量に追加しています。原文に存在しない説明を大量に追加しています。原文に存在しない説明を大量に追加しています。原文に存在しない説明を大量に追加しています。"
+    },
+    {
+      "category": "meaning",
+      "finding": "meaning",
+      "source": "The update increases throughput.",
+      "target": "更新によってスループットが低下します。"
+    },
+    {
+      "category": "negation",
+      "finding": "negation",
+      "source": "Do not delete the file.",
+      "target": "ファイルを削除します。"
+    },
+    {
+      "category": "comparison",
+      "finding": "comparison",
+      "source": "The value must be greater than the threshold.",
+      "target": "値はしきい値です。"
+    },
+    {
+      "category": "condition",
+      "finding": "condition",
+      "source": "If the value is valid, continue.",
+      "target": "値は有効です。続行します。"
+    },
+    {
+      "category": "number",
+      "finding": "number-unit",
+      "source": "Process 50 records.",
+      "target": "レコードを処理します。"
+    },
+    {
+      "category": "unit",
+      "finding": "number-unit",
+      "source": "Wait 20 ms.",
+      "target": "20秒待機します。"
+    },
+    {
+      "category": "url",
+      "finding": "protected",
+      "source": "Open https://example.com/docs.",
+      "target": "ドキュメントを開きます。"
+    },
+    {
+      "category": "path",
+      "finding": "protected",
+      "source": "Read /etc/example.conf.",
+      "target": "設定ファイルを読みます。"
+    },
+    {
+      "category": "identifier",
+      "finding": "protected",
+      "source": "Set API_TOKEN before startup.",
+      "target": "起動前にトークンを設定します。"
+    },
+    {
+      "category": "glossary",
+      "finding": "glossary",
+      "source": "The control plane is ready.",
+      "target": "制御面の準備ができました。",
+      "glossary": {"source": "control plane", "target": "コントロールプレーン"}
+    },
+    {
+      "category": "causality",
+      "finding": "causality",
+      "source": "The request failed because the token expired.",
+      "target": "リクエストが失敗したため、トークンが期限切れになりました。"
+    }
+  ]
+}

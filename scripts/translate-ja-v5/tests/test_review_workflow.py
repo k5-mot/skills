@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -79,6 +81,79 @@ def test_deterministic_checker_covers_accuracy_baseline(
     assert category in {
         item.category for item in deterministic_findings(source, target, [])
     }
+
+
+def test_accuracy_regression_is_no_worse_than_retained_v4_baseline(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """全critical種別を検出し、保持したv4基準集合を下回らないことを確認する。
+
+    Args:
+        monkeypatch: 意味判定を行うlocal CriticへLLMを差し替えるfixture。
+        settings: 共通Settings fixture。
+
+    Returns:
+        なし。
+    """
+
+    fixture_path = Path(__file__).parent / "fixtures" / "accuracy-v4-baseline.json"
+    baseline = json.loads(fixture_path.read_text(encoding="utf-8"))
+    detected: set[str] = set()
+    semantic_category = ""
+
+    def chat(
+        _settings: Settings,
+        _model: str,
+        _system: str,
+        _user: str,
+        schema_name: str,
+        _schema: dict[str, Any],
+        _image: object = None,
+    ) -> dict[str, Any]:
+        """意味・因果誤りを模擬Criticで検出して修正を承認する。
+
+        Args:
+            _settings: 未使用設定。
+            _model: 未使用model。
+            _system: 未使用system prompt。
+            _user: 未使用user prompt。
+            schema_name: Review node名。
+            _schema: 未使用schema。
+            _image: 未使用画像。
+
+        Returns:
+            node schemaに対応するlocal応答。
+        """
+
+        if schema_name == "fidelity_findings":
+            return {"findings": [_finding(semantic_category)]}
+        if schema_name == "japanese_findings":
+            return {"findings": []}
+        if schema_name == "revision":
+            return {"text": "修正済み訳文"}
+        return {"approved": True, "findings": []}
+
+    monkeypatch.setattr(review, "structured_chat", chat)
+    for case in baseline["cases"]:
+        glossary = (
+            [GlossaryEntry.model_validate(case["glossary"])]
+            if "glossary" in case
+            else []
+        )
+        findings = deterministic_findings(case["source"], case["target"], glossary)
+        if any(item.category == case["finding"] for item in findings):
+            detected.add(case["category"])
+            continue
+        semantic_category = case["finding"]
+        outcome = review.run_review(
+            case["source"], case["target"], "rules", settings, glossary
+        )
+        if any(item.category == case["finding"] for item in outcome.findings):
+            detected.add(case["category"])
+
+    required = {case["category"] for case in baseline["cases"]}
+    assert required == set(baseline["v4_detected"])
+    assert detected >= set(baseline["v4_detected"])
 
 
 def test_review_no_findings_goes_directly_to_verifier(

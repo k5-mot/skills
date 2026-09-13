@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -90,3 +92,50 @@ def test_real_pandoc_creates_openable_structured_docx(tmp_path: Path) -> None:
         assert "word/styles.xml" in names
         assert len([name for name in names if name.startswith("word/media/")]) >= 2
         assert all(value in xml for value in ("見出し", "表題", "図題", "脚注"))
+
+
+def test_translated_caption_is_the_semantic_pandoc_figure_caption(
+    tmp_path: Path,
+) -> None:
+    """翻訳済み図題が独立段落でなくPandoc Figureのcaptionになることを確認する。
+
+    Args:
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    if shutil.which("pandoc") is None:
+        pytest.skip("pandoc is not installed")
+    figure = tmp_path / "figure.png"
+    Image.new("RGB", (20, 10), "blue").save(figure)
+    document = Document(
+        pages=[
+            Page(
+                number=2,
+                blocks=[
+                    Block(
+                        id="figure",
+                        order=0,
+                        kind="figure",
+                        asset_path="figure.png",
+                        alt_text="Original caption",
+                        reviewed_caption=[Inline(id="caption", text="翻訳済み図題")],
+                    )
+                ],
+            )
+        ]
+    )
+    markdown = render_document(document)
+    result = subprocess.run(
+        ["pandoc", "--from", "markdown", "--to", "json"],
+        input=markdown,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    ast = json.loads(result.stdout)
+    assert [block["t"] for block in ast["blocks"]] == ["Figure"]
+    assert "翻訳済み図題" in result.stdout
+    assert "Original caption" not in result.stdout

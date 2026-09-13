@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterator, cast
 
-from src.model import Block, BlockKind, Document, Inline, InlineKind, Page, TableCell
+from src.model import (
+    Block,
+    BlockKind,
+    Document,
+    Inline,
+    InlineKind,
+    InlineMark,
+    Page,
+    TableCell,
+    inline_text,
+)
 
 COLLECTIONS = ("texts", "tables", "pictures", "key_value_items", "form_items", "groups")
 SKIPPED_LABELS = {"page_header", "page_footer", "document_index"}
+INDEX_TITLE_RE = re.compile(
+    r"^(?:table of contents|contents|list of figures|list of tables|目次|図目次|表目次)$",
+    re.IGNORECASE,
+)
 TEXT_KINDS = {
     "title": "heading",
     "section_header": "heading",
@@ -51,7 +66,12 @@ def _resolve(document: dict[str, Any], ref: str) -> dict[str, Any]:
     return value
 
 
-def _walk_refs(document: dict[str, Any], value: Any) -> Iterator[dict[str, Any]]:
+def _walk_refs(
+    document: dict[str, Any],
+    value: Any,
+    list_level: int = 0,
+    ordered: bool | None = None,
+) -> Iterator[tuple[dict[str, Any], int, bool | None]]:
     """tree内refを文書順に展開する。
 
     Args:
@@ -59,12 +79,12 @@ def _walk_refs(document: dict[str, Any], value: Any) -> Iterator[dict[str, Any]]
         value: tree nodeまたは値。
 
     Yields:
-        groupを除く参照先要素。
+        groupを除く参照先要素、親list階層、順序付きlistかどうかの組。
     """
 
     if isinstance(value, list):
         for child in value:
-            yield from _walk_refs(document, child)
+            yield from _walk_refs(document, child, list_level, ordered)
         return
     if not isinstance(value, dict):
         return
@@ -72,12 +92,20 @@ def _walk_refs(document: dict[str, Any], value: Any) -> Iterator[dict[str, Any]]
     target = _resolve(document, ref) if isinstance(ref, str) else value
     label = str(target.get("label", ""))
     children = target.get("children", [])
-    if label == "group" or (children and not _visible_content(target)):
-        yield from _walk_refs(document, children)
+    if children and not _visible_content(target):
+        nested_level = (
+            list_level + 1 if label in {"list", "ordered_list"} else list_level
+        )
+        nested_ordered = (
+            label == "ordered_list" if label in {"list", "ordered_list"} else ordered
+        )
+        yield from _walk_refs(document, children, nested_level, nested_ordered)
     elif isinstance(ref, str):
-        yield target
+        yield target, list_level, ordered
+        if children:
+            yield from _walk_refs(document, children, list_level, ordered)
     else:
-        yield from _walk_refs(document, children)
+        yield from _walk_refs(document, children, list_level, ordered)
 
 
 def _visible_content(item: dict[str, Any]) -> bool:
@@ -149,7 +177,11 @@ def _bbox(item: dict[str, Any]) -> tuple[float, float, float, float] | None:
 
 
 def _inline(
-    ref: str, text: str, kind: InlineKind = "text", href: str | None = None
+    ref: str,
+    text: str,
+    kind: InlineKind = "text",
+    href: str | None = None,
+    marks: list[InlineMark] | None = None,
 ) -> list[Inline]:
     """Docling文字列を一つのInline列へ変換する。
 
@@ -158,6 +190,7 @@ def _inline(
         text: 可視文字列。
         kind: Inline種別。
         href: link URL。
+        marks: Inline装飾。
 
     Returns:
         空文字なら空、それ以外は一要素のInline列。
@@ -165,7 +198,180 @@ def _inline(
 
     if not text:
         return []
-    return [Inline(id=f"{ref}/inline/0", text=text, kind=kind, href=href)]
+    return [
+        Inline(
+            id=f"{ref}/inline/0",
+            text=text,
+            kind=kind,
+            href=href,
+            marks=marks or [],
+        )
+    ]
+
+
+def _inline_from_item(
+    item: dict[str, Any], ref: str, text: str, kind: InlineKind
+) -> list[Inline]:
+    """Docling TextItemのlinkと装飾をInlineへ移す。
+
+    Args:
+        item: Docling TextItem。
+        ref: 安定IDのprefix。
+        text: 可視文字列。
+        kind: 基本Inline種別。
+
+    Returns:
+        hyperlinkとFormattingを保持したInline列。
+    """
+
+    formatting = item.get("formatting")
+    marks: list[InlineMark] = []
+    if isinstance(formatting, dict):
+        mark_fields: tuple[tuple[str, InlineMark], ...] = (
+            ("bold", "strong"),
+            ("italic", "emphasis"),
+            ("strikethrough", "strikethrough"),
+            ("underline", "underline"),
+        )
+        marks.extend(mark for field, mark in mark_fields if formatting.get(field))
+        script = formatting.get("script")
+        if script == "sub":
+            marks.append("subscript")
+        elif script == "super":
+            marks.append("superscript")
+    hyperlink = item.get("hyperlink")
+    href = str(hyperlink) if hyperlink is not None else None
+    inline_kind: InlineKind = "link" if href and kind == "text" else kind
+    return _inline(ref, text, inline_kind, href, marks)
+
+
+def _caption_inlines(
+    document: dict[str, Any], item: dict[str, Any], ref: str
+) -> list[Inline]:
+    """Doclingの新旧caption表現をInline列へ変換する。
+
+    Args:
+        document: ref解決元のDocling document。
+        item: TableItemまたはPictureItem。
+        ref: caption IDのprefix。
+
+    Returns:
+        参照先の装飾も保持したcaption Inline列。
+    """
+
+    raw = item.get("captions")
+    if not raw:
+        raw = item.get("caption") or item.get("title") or []
+    values = raw if isinstance(raw, list) else [raw]
+    result: list[Inline] = []
+    for index, value in enumerate(values):
+        caption_item: dict[str, Any] | None = None
+        if isinstance(value, dict):
+            nested_ref = value.get("$ref")
+            caption_item = (
+                _resolve(document, nested_ref) if isinstance(nested_ref, str) else value
+            )
+        if caption_item is not None:
+            text = str(caption_item.get("text") or "")
+            result.extend(
+                _inline_from_item(caption_item, f"{ref}/caption/{index}", text, "text")
+            )
+        elif isinstance(value, str):
+            result.extend(_inline(f"{ref}/caption/{index}", value))
+    return result
+
+
+def _owned_caption_refs(document: dict[str, Any]) -> set[str]:
+    """図表Blockへ内包するcaption TextItemのrefを集める。
+
+    Args:
+        document: Docling document。
+
+    Returns:
+        standalone本文として重複出力しないcaption ref集合。
+    """
+
+    refs: set[str] = set()
+    for collection in ("tables", "pictures"):
+        for item in document.get(collection, []):
+            if not isinstance(item, dict):
+                continue
+            raw = item.get("captions") or item.get("caption") or []
+            values = raw if isinstance(raw, list) else [raw]
+            refs.update(
+                str(value["$ref"])
+                for value in values
+                if isinstance(value, dict) and isinstance(value.get("$ref"), str)
+            )
+    return refs
+
+
+def _index_pages(document: dict[str, Any]) -> set[int]:
+    """元文書の目次類として本文から除くページを特定する。
+
+    Args:
+        document: Docling document。
+
+    Returns:
+        document index labelまたは既知の目次見出しを持つページ番号集合。
+    """
+
+    return {
+        _page_number(item)
+        for collection in COLLECTIONS
+        for item in document.get(collection, [])
+        if isinstance(item, dict)
+        and (
+            item.get("label") == "document_index"
+            or (
+                item.get("label") in {"title", "section_header", "heading", "header"}
+                and INDEX_TITLE_RE.fullmatch(str(item.get("text") or "").strip())
+            )
+        )
+    }
+
+
+def _picture_content_refs(document: dict[str, Any]) -> set[str]:
+    """picture配下でcaptionではない重複textのrefを集める。
+
+    Args:
+        document: Docling document。
+
+    Returns:
+        Figure asset側に任せて本文出力しないtext ref集合。
+    """
+
+    parents: dict[str, str] = {}
+    picture_refs = {
+        str(item.get("self_ref"))
+        for item in document.get("pictures", [])
+        if isinstance(item, dict) and item.get("self_ref")
+    }
+    for collection in COLLECTIONS:
+        for item in document.get(collection, []):
+            if not isinstance(item, dict) or not item.get("self_ref"):
+                continue
+            parent = item.get("parent")
+            if isinstance(parent, dict) and isinstance(parent.get("$ref"), str):
+                parents[str(item["self_ref"])] = str(parent["$ref"])
+    result: set[str] = set()
+    for item in document.get("texts", []):
+        if (
+            not isinstance(item, dict)
+            or item.get("label") == "caption"
+            or not item.get("self_ref")
+        ):
+            continue
+        ref = str(item["self_ref"])
+        parent = parents.get(ref, "")
+        visited: set[str] = set()
+        while parent and parent not in visited:
+            if parent in picture_refs:
+                result.add(ref)
+                break
+            visited.add(parent)
+            parent = parents.get(parent, "")
+    return result
 
 
 def _integer(value: Any, default: int) -> int:
@@ -264,12 +470,21 @@ def _table_cells(item: dict[str, Any], ref: str) -> list[TableCell]:
     return cells
 
 
-def _block(item: dict[str, Any], order: int) -> Block | None:
+def _block(
+    document: dict[str, Any],
+    item: dict[str, Any],
+    order: int,
+    list_level: int = 0,
+    parent_ordered: bool | None = None,
+) -> Block | None:
     """一つのDocling要素をBlockへ変換する。
 
     Args:
+        document: ref解決元のDocling document。
         item: Docling要素。
         order: ページ内の文書順。
+        list_level: 親ListGroupから得た1始まり階層。
+        parent_ordered: 親ListGroupが順序付きかどうか。
 
     Returns:
         対応Block。仕様上除外する要素はNone。
@@ -283,13 +498,12 @@ def _block(item: dict[str, Any], order: int) -> Block | None:
     if label in SKIPPED_LABELS:
         return None
     if label == "table":
-        caption = item.get("caption") or item.get("title") or ""
         return Block(
             id=ref,
             order=order,
             kind="table",
             bbox=_bbox(item),
-            caption=_inline(f"{ref}/caption", str(caption)),
+            caption=_caption_inlines(document, item, ref),
             cells=_table_cells(item, ref),
         )
     if label == "picture":
@@ -300,15 +514,15 @@ def _block(item: dict[str, Any], order: int) -> Block | None:
             raise ValueError(f"picture asset is missing: ref={ref} label={label}")
         relative = uri.removeprefix("artifacts/")
         uri = f"structured/assets/{relative}"
-        caption = item.get("caption") or item.get("text") or ""
+        caption = _caption_inlines(document, item, ref)
         return Block(
             id=ref,
             order=order,
             kind="figure",
             bbox=_bbox(item),
             asset_path=uri,
-            alt_text=str(item.get("alt_text") or caption),
-            caption=_inline(f"{ref}/caption", str(caption)),
+            alt_text=str(item.get("alt_text") or inline_text(caption)),
+            caption=caption,
         )
     kind = TEXT_KINDS.get(label)
     if kind is None:
@@ -332,13 +546,17 @@ def _block(item: dict[str, Any], order: int) -> Block | None:
         order=order,
         kind=cast(BlockKind, kind),
         bbox=_bbox(item),
-        source=_inline(ref, text, inline_kind),
+        source=_inline_from_item(item, ref, text, inline_kind),
         level=int(level)
         if isinstance(level, int)
         else 1
         if kind == "heading"
+        else max(1, list_level)
+        if kind == "list_item"
         else None,
-        ordered=bool(item.get("enumerated")),
+        ordered=bool(item.get("enumerated"))
+        if "enumerated" in item
+        else bool(parent_ordered),
         checked=checked,
         language=str(item.get("language")) if item.get("language") else None,
     )
@@ -376,24 +594,42 @@ def normalize_docling(document: dict[str, Any]) -> Document:
             else None,
         )
     seen: set[str] = set()
+    caption_refs = _owned_caption_refs(document)
+    index_pages = _index_pages(document)
+    picture_content_refs = _picture_content_refs(document)
     ordered_items = list(_walk_refs(document, document.get("body", {})))
     for collection in COLLECTIONS[:-1]:
         values = document.get(collection, [])
         if not isinstance(values, list):
             raise ValueError(f"Docling collection must be a list: {collection}")
-        ordered_items.extend(item for item in values if isinstance(item, dict))
+        ordered_items.extend(
+            (
+                item,
+                1
+                if str(item.get("label", ""))
+                in {"list_item", "checkbox_selected", "checkbox_unselected"}
+                else 0,
+                None,
+            )
+            for item in values
+            if isinstance(item, dict)
+        )
     page_orders: dict[int, int] = {number: 0 for number in pages}
-    for item in ordered_items:
+    for item, list_level, parent_ordered in ordered_items:
         ref = str(item.get("self_ref") or "")
         if ref in seen:
             continue
         seen.add(ref)
+        if ref in caption_refs or ref in picture_content_refs:
+            continue
         number = _page_number(item)
         if number not in pages:
             raise ValueError(
                 f"Docling element references missing page: ref={ref} page={number}"
             )
-        block = _block(item, page_orders[number])
+        if number in index_pages:
+            continue
+        block = _block(document, item, page_orders[number], list_level, parent_ordered)
         if block is not None:
             pages[number].blocks.append(block)
             page_orders[number] += 1

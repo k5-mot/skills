@@ -6,7 +6,7 @@ import json
 from typing import Any, Literal
 
 from src.adapters.langfuse import observed, update_current
-from src.adapters.libretranslate import translate_texts
+from src.adapters.libretranslate import protect_text, restore_text, translate_texts
 from src.adapters.llm import ContextLengthError, structured_chat
 from src.budget import (
     ContextBudget,
@@ -198,12 +198,14 @@ def _openai_translate_chunk(
 
     if not settings.translation_model:
         raise ValueError("OPENAI_TRANSLATION_MODEL is required")
+    prepared = {item_id: protect_text(text) for item_id, text in units}
+    protected_units = [(item_id, prepared[item_id][0]) for item_id, _text in units]
     try:
         response = structured_chat(
             settings,
             settings.translation_model,
             "英語を正確な日本語へ翻訳してください。JSONには対象IDだけを一度ずつ含め、コード、URL、パス、識別子を変更しないでください。",
-            _translation_prompt(rules, glossary, units, previous, following),
+            _translation_prompt(rules, glossary, protected_units, previous, following),
             "translations",
             TRANSLATION_SCHEMA,
         )
@@ -230,7 +232,10 @@ def _openai_translate_chunk(
     expected = {item_id for item_id, _text in units}
     if set(mapping) != expected or any(not text for text in mapping.values()):
         raise ValueError("translation response IDs must exactly match non-empty inputs")
-    return mapping
+    return {
+        item_id: restore_text(text, prepared[item_id][1])
+        for item_id, text in mapping.items()
+    }
 
 
 @observed("translate-page", capture_input=False)

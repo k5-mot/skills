@@ -54,6 +54,29 @@ STRUCTURE_SCHEMA: dict[str, Any] = {
 }
 
 
+def _fix_heading_jumps(page: Page) -> None:
+    """見出し階層が先頭または直前から飛ばないよう決定的に丸める。
+
+    Args:
+        page: Structure patch適用後のページ。
+
+    Returns:
+        なし。
+
+    Side Effects:
+        page内Headingのlevelを文書順に補正する。
+    """
+
+    previous = 0
+    for block in sorted(page.blocks, key=lambda item: item.order):
+        if block.kind != "heading":
+            continue
+        allowed = 1 if previous == 0 else min(previous + 1, 6)
+        level = block.level if block.level is not None else allowed
+        block.level = max(1, min(level, allowed))
+        previous = block.level
+
+
 @observed("structure-page", capture_input=False)
 def structure_page(page: Page, image: Path, rules: str, settings: Settings) -> Page:
     """LLMの限定patchでページ構造を補正する。
@@ -81,6 +104,7 @@ def structure_page(page: Page, image: Path, rules: str, settings: Settings) -> P
             "id": block.id,
             "kind": block.kind,
             "level": block.level,
+            "bbox": block.bbox,
             "text": page_text(Page(number=page.number, blocks=[block]), False),
         }
         for block in page.blocks
@@ -113,5 +137,6 @@ def structure_page(page: Page, image: Path, rules: str, settings: Settings) -> P
             if block.kind != "alert":
                 raise ValueError(f"alert kind on non-alert: {block.id}")
             block.alert_kind = alert_kind
+    _fix_heading_jumps(result)
     update_current(output=result.model_dump())
     return result

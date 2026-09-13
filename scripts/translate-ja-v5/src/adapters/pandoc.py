@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import tempfile
+import zipfile
 from pathlib import Path
 
 import pypdfium2 as pdfium
@@ -57,30 +60,46 @@ def create_docx(markdown: Path, output: Path, template: Path) -> None:
     check_pandoc()
     executable = shutil.which("pandoc") or "pandoc"
     output.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            executable,
-            str(markdown.resolve()),
-            "--from",
-            "markdown",
-            "--to",
-            "docx+native_numbering",
-            "--standalone",
-            "--reference-doc",
-            str(template.resolve()),
-            "--resource-path",
-            str(markdown.parent.resolve()),
-            "--toc",
-            "--toc-depth",
-            "6",
-            "--list-of-figures",
-            "--list-of-tables",
-            "--number-sections",
-            "--output",
-            str(output.resolve()),
-        ],
-        check=True,
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=output.parent, prefix=f".{output.stem}.", suffix=".docx"
     )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        subprocess.run(
+            [
+                executable,
+                str(markdown.resolve()),
+                "--from",
+                "markdown",
+                "--to",
+                "docx+native_numbering",
+                "--standalone",
+                "--reference-doc",
+                str(template.resolve()),
+                "--resource-path",
+                str(markdown.parent.resolve()),
+                "--toc",
+                "--toc-depth",
+                "6",
+                "--list-of-figures",
+                "--list-of-tables",
+                "--number-sections",
+                "--output",
+                str(temporary.resolve()),
+            ],
+            check=True,
+        )
+        try:
+            with zipfile.ZipFile(temporary) as archive:
+                required = {"[Content_Types].xml", "word/document.xml"}
+                if not required.issubset(archive.namelist()) or archive.testzip():
+                    raise RuntimeError("Pandoc generated an invalid DOCX package")
+        except zipfile.BadZipFile as error:
+            raise RuntimeError("Pandoc generated an invalid DOCX package") from error
+        os.replace(temporary, output)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def docx_to_text(path: Path) -> str:

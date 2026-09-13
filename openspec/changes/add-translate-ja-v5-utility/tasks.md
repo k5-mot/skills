@@ -63,7 +63,18 @@
 ## Verification
 
 - `openspec validate add-translate-ja-v5-utility --strict`: pass
-- `uv run pytest -q`: 334 passed（実Pandocを有効化）
+- `PATH=<pypandoc_binary>:$PATH uv run pytest -q`: 345 passed（実Pandocを有効化）
+- `uv run ruff format --check scripts/translate-ja-v5 skills/translate-ja-v4/tests/test_pipeline.py`: pass
 - `uv run ruff check .`: pass
-- `uv run ty check scripts/translate-ja-v5/src scripts/translate-ja-v5/translate.py scripts/translate-ja-v5/tests`: pass
-- `uv run ty check .`: v5外の既存`skills/translate-ja-v4/tests/test_pipeline.py:322`に2 diagnostics
+- `uv run ty check .`: pass
+
+## 9. Verification remediation and compatibility audit
+
+- [x] 9.1 Preserve Docling list-group nesting, text formatting, and hyperlinks during normalization; verify nested lists and marked links survive through Markdown.
+- [x] 9.2 Emit translated figure captions as semantic Pandoc figure captions; verify the native Pandoc AST and list-of-figures source use the Japanese caption.
+- [x] 9.3 Reuse standalone Review extraction and alignment artifacts, and rerun unreadable cached artifacts instead of aborting; verify Resume makes no redundant extraction or alignment calls.
+- [x] 9.4 Apply the shared external-call retry contract to every Qdrant search, upsert, retrieve, and delete call; verify transient and permanent failures follow the common attempt limits.
+- [x] 9.5 Generate the public DOCX through a validated same-directory temporary file and atomic replacement; verify a failed Pandoc run preserves the previous document.
+- [x] 9.6 Replace split acceptance claims with combined 50,000-token interruption/Resume coverage and a retained v4 accuracy baseline containing every named critical defect category.
+- [x] 9.7 Audit v3/v4 public capabilities against v5, fix unintentional quality regressions, and document preserved, replaced, intentionally removed, and deferred behavior.
+- [x] 9.8 Run strict OpenSpec validation plus the complete repository tests, Ruff, and ty checks, and update the verification record with the final results.

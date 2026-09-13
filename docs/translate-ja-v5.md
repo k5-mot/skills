@@ -86,6 +86,8 @@ PDF第1ページは150 DPI相当の表紙画像としてDOCX第1ページへ入�
 
 通常の再実行は`.work/state.json`を読み、完了済みページを再利用します。入力PDFが変わった場合は誤Resumeを避けるためエラーになります。全工程をやり直す場合は`--force`を指定します。
 
+完了状態に対応する内部JSONが欠損または破損している場合は、その成果物と必要な後工程だけを再実行します。比較ReviewのPDF抽出結果と対応付けも再利用されます。
+
 ```bash
 uv run python scripts/translate-ja-v5/translate.py translate \
   --source source.pdf --output-dir output --force
@@ -143,9 +145,13 @@ uv run python scripts/translate-ja-v5/translate.py register --doc-dir references
 
 対応形式はPDF、DOCX、Markdown、UTF-8 textです。directoryは再帰探索され、隠しfileと空fileは無視されます。同じsourceが更新された場合は、新revisionをすべてupsertして取得確認した後、同じsourceの旧revisionだけを削除します。新revision登録に失敗した場合は旧revisionを残します。
 
+Docling Serve、LiteLLM、LibreTranslate、Qdrantへの通信障害、408、429、5xxは最大3回まで指数backoffで再試行します。最終DOCXは一時packageの整合性を確認してからatomic置換するため、Pandoc失敗時に既存DOCXを上書きしません。
+
 ## 制約
 
 - PDFの座標どおりの見た目は再現しません。
 - 章・付録ごとのpage number再開始、章別の動的header/footer、高度なWord相互参照は対象外です。
 - Rules、用語集、Qdrant内容、script変更は自動無効化しません。必要時は`--force`を使用します。
 - Qdrantを設定した状態で検索が失敗した場合、根拠なしReviewへ切り替えず対象処理を失敗させます。
+
+v3/v4から維持した機能、意図的に採用しない機能、未移行機能は[機能差分監査](./translate-ja-v5-compatibility-audit.md)に記録しています。

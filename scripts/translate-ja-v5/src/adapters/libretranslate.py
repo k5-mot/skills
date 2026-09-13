@@ -31,7 +31,7 @@ def protect_text(text: str) -> tuple[str, dict[str, str]]:
 
 
 def restore_text(text: str, mapping: dict[str, str]) -> str:
-    """LibreTranslate応答のplaceholderを原文字列へ戻す。
+    """翻訳backend応答のplaceholderを原文字列へ戻す。
 
     Args:
         text: 翻訳済み文字列。
@@ -47,12 +47,10 @@ def restore_text(text: str, mapping: dict[str, str]) -> str:
     restored = text
     for placeholder, value in mapping.items():
         if placeholder not in restored:
-            raise ValueError(
-                f"LibreTranslate removed protected fragment: {placeholder}"
-            )
+            raise ValueError(f"translation removed protected fragment: {placeholder}")
         restored = restored.replace(placeholder, value)
     if "__V5_PROTECTED_" in restored:
-        raise ValueError("LibreTranslate returned an unknown protected fragment")
+        raise ValueError("translation returned an unknown protected fragment")
     return restored
 
 

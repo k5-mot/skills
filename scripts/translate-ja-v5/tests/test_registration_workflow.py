@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -11,6 +12,20 @@ import pytest
 from src.adapters import qdrant
 from src.config import Settings
 from src.workflows import register
+
+
+class TemporaryQdrantError(RuntimeError):
+    """再試行対象statusを持つQdrant test用例外。"""
+
+    def __init__(self) -> None:
+        """503 statusの一時例外を作る。
+
+        Returns:
+            なし。
+        """
+
+        super().__init__("temporary Qdrant failure")
+        self.status_code = 503
 
 
 def test_collect_files_filters_hidden_empty_and_unsupported(tmp_path: Path) -> None:
@@ -266,6 +281,113 @@ def test_qdrant_deletes_only_after_successful_verification(
     assert calls == ["upsert", "retrieve", "delete"]
 
 
+def test_every_qdrant_operation_uses_shared_retry(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """検索、登録、検証、削除の全呼出しが一時障害を再試行することを確認する。
+
+    Args:
+        monkeypatch: Qdrant clientと待機を差し替えるfixture。
+        settings: 共通Settings fixture。
+
+    Returns:
+        なし。
+    """
+
+    configured = replace(
+        settings, qdrant_url="http://qdrant", qdrant_collection="review"
+    )
+    attempts = {name: 0 for name in ("query", "upsert", "retrieve", "delete")}
+    point = qdrant.models.PointStruct(
+        id="00000000-0000-0000-0000-000000000001", vector=[1.0], payload={}
+    )
+
+    class Client:
+        """各operationを一度だけ失敗させるQdrant test double。"""
+
+        def _temporary_once(self, name: str) -> None:
+            """指定operationの初回だけ一時例外を送出する。
+
+            Args:
+                name: operation名。
+
+            Returns:
+                なし。
+
+            Raises:
+                TemporaryQdrantError: 初回呼出しの場合。
+            """
+
+            attempts[name] += 1
+            if attempts[name] == 1:
+                raise TemporaryQdrantError
+
+        def query_points(self, **_kwargs: Any) -> SimpleNamespace:
+            """検索結果を二回目に返す。
+
+            Args:
+                _kwargs: 未使用Qdrant引数。
+
+            Returns:
+                一点を持つ検索結果。
+            """
+
+            self._temporary_once("query")
+            return SimpleNamespace(
+                points=[SimpleNamespace(payload={"text": "evidence"}, score=1.0)]
+            )
+
+        def upsert(self, **_kwargs: Any) -> None:
+            """二回目にupsertを成功させる。
+
+            Args:
+                _kwargs: 未使用Qdrant引数。
+
+            Returns:
+                なし。
+            """
+
+            self._temporary_once("upsert")
+
+        def retrieve(self, **_kwargs: Any) -> list[SimpleNamespace]:
+            """二回目に登録済みpointを返す。
+
+            Args:
+                _kwargs: 未使用Qdrant引数。
+
+            Returns:
+                登録済みpoint列。
+            """
+
+            self._temporary_once("retrieve")
+            return [SimpleNamespace(id=point.id)]
+
+        def delete(self, **_kwargs: Any) -> None:
+            """二回目に旧revision削除を成功させる。
+
+            Args:
+                _kwargs: 未使用Qdrant引数。
+
+            Returns:
+                なし。
+            """
+
+            self._temporary_once("delete")
+
+    client = Client()
+    actual_retry = qdrant.retry_call
+    monkeypatch.setattr(qdrant, "_client", lambda _settings: client)
+    monkeypatch.setattr(qdrant, "embeddings", lambda _settings, _texts: [[1.0]])
+    monkeypatch.setattr(
+        qdrant,
+        "retry_call",
+        lambda call: actual_retry(call, lambda _delay: None),
+    )
+    assert qdrant.search(configured, "query")[0]["text"] == "evidence"
+    qdrant.replace_revision(configured, [point], "source.md", "new")
+    assert attempts == {name: 2 for name in attempts}
+
+
 def test_qdrant_delete_failure_is_recoverable_and_rerun_converges(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> None:
@@ -350,8 +472,8 @@ def test_qdrant_delete_failure_is_recoverable_and_rerun_converges(
 
             nonlocal delete_attempts
             delete_attempts += 1
-            if delete_attempts == 1:
-                raise RuntimeError("delete failed")
+            if delete_attempts <= 3:
+                raise TemporaryQdrantError
             selector = kwargs["points_selector"].model_dump()
             source = selector["must"][0]["match"]["value"]
             kept_revision = selector["must"][1]["match"]["except_"][0]
@@ -363,8 +485,14 @@ def test_qdrant_delete_failure_is_recoverable_and_rerun_converges(
                     del stored[point_id]
 
     client = Client()
+    actual_retry = qdrant.retry_call
     monkeypatch.setattr(qdrant, "_client", lambda _settings: client)
-    with pytest.raises(RuntimeError, match="delete failed"):
+    monkeypatch.setattr(
+        qdrant,
+        "retry_call",
+        lambda call: actual_retry(call, lambda _delay: None),
+    )
+    with pytest.raises(RuntimeError, match="temporary Qdrant failure"):
         qdrant.replace_revision(configured, [point], "source.md", "new")
     assert {
         value["revision"] for value in stored.values() if value["source"] == "source.md"

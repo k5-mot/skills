@@ -190,7 +190,7 @@ Qdrant未設定は有効なno-RAG構成である。一方、設定済み接続�
 
 ### 9. Resumeの無効化はモデル依存だけを自動化する
 
-`state.json`はschema version、入力SHA-256、backend、使用model名、ページごとの各工程statusとartifact path、最後のerrorを持つ。モデル変更時の無効化は次の固定表で行う。
+`state.json`はschema version、入力SHA-256、backend、使用model名、ページごとの各工程status、最後のerrorを持つ。artifact pathは固定directoryとページ番号から決定的に導出し、stateへ重複保存しない。モデル変更時の無効化は次の固定表で行う。
 
 | 変更 | 再実行範囲 |
 |---|---|
@@ -229,6 +229,8 @@ pandoc document.ja.md
 ```
 
 開始時検査はPandocの存在と上記で利用するoptionおよびwriter extensionに限定する。version表や互換fallbackは持たない。reference docの本文はPandocに取り込まれないため、`template.docx`にはstyle、余白、用紙、header/footer等の設定だけを同梱する。Pandocで直接得られない章別page numbering等は非目標とする。
+
+Pandocは最終pathへ直接書かず、同じdirectoryの一時DOCXへ出力する。必須package entryとZIP CRCを検証してから`os.replace`で公開DOCXを置換し、失敗時は以前の成果物を保持する。
 
 ### 12. Qdrantのrevision置換
 

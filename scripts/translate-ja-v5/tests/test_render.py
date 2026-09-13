@@ -131,12 +131,13 @@ def test_render_document_is_deterministic_and_complete() -> None:
         "```python",
         "<table>",
         "colspan",
-        "![Alt]",
+        "![Figure]",
         "[^n]",
         "custom-style",
         'w:type="page"',
     ):
         assert value in first
+    assert "![Alt]" not in first
 
 
 def test_validate_document_checks_assets_and_control_characters(tmp_path: Path) -> None:
