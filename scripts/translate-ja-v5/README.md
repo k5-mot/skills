@@ -104,26 +104,55 @@ uv run python scripts/translate-ja-v5/translate.py translate \
 
 ## 翻訳処理の流れ
 
-```text
-入力PDF
-  │
-  ├─ 事前検査・Resume判定
-  │
-  ├─ Parse ─────── Docling Serveで構造化JSONを取得
-  │
-  ├─ Normalize ─── Docling JSONを小さな内部文書モデルへ変換
-  │
-  ├─ PDF第2ページ以降をページ順に処理
-  │    ├─ Structure ── ブロック種別と階層を補正
-  │    ├─ Translate ── 前後ページを参照して日本語化
-  │    └─ Review ───── 誤訳を検査・修正・検証
-  │
-  ├─ Cover ─────── PDF第1ページを表紙画像として追加
-  │
-  ├─ Markdown ──── Review済み文書と表紙をPandoc Markdownへ変換
-  │
-  └─ DOCX ──────── Pandocとtemplate.docxでWord文書を生成
+```mermaid
+flowchart TD
+    subgraph INPUT[外部入力ファイル]
+        PDF["IN: 英語PDF<br/>（--source）"]
+        GLOSSARY["IN: 用語集CSV・任意<br/>（--glossary）"]
+        STRUCTURE_RULES["IN: structure-rules.md<br/>（templates内の固定path）"]
+        TRANSLATION_RULES["IN: translation-rules.md<br/>（templates内の固定path）"]
+        REVIEW_RULES["IN: review-rules.md<br/>（templates内の固定path）"]
+        TEMPLATE["IN: template.docx<br/>（templates内の固定path）"]
+    end
+
+    PREFLIGHT["事前検査・Resume判定"]
+    PARSE["Parse<br/>Docling Serveで構造化"]
+    NORMALIZE["Normalize<br/>内部文書モデルへ変換"]
+    STRUCTURE["Structure<br/>第2ページ以降の種別・階層を補正"]
+    TRANSLATE["Translate<br/>前後ページを参照して翻訳"]
+    REVIEW["Review<br/>誤訳を検査・修正・検証"]
+    COVER["Cover<br/>第1ページを150 DPIで画像化"]
+    MARKDOWN["Markdown<br/>本文と表紙を統合"]
+    PANDOC["Pandoc<br/>目次・図表一覧・章番号を生成"]
+
+    subgraph WORK[Resume用の内部IN/OUT]
+        STATE["IN/OUT: state.json<br/>（--output-dir配下へ自動保存）"]
+        PARSED["IN/OUT: parsed.json<br/>（--output-dir配下へ自動保存）"]
+        NORMALIZED["IN/OUT: normalized.json<br/>（--output-dir配下へ自動保存）"]
+        STRUCTURED["IN/OUT: structured/<br/>（ページJSON・PNG・assetsを--output-dir配下へ自動保存）"]
+        TRANSLATED["IN/OUT: translated/*.json<br/>（--output-dir配下へ自動保存）"]
+        REVIEWED["IN/OUT: reviewed/*.json<br/>（--output-dir配下へ自動保存）"]
+        MD["IN/OUT: document.ja.md<br/>（--output-dir配下へ自動保存）"]
+    end
+
+    DOCX["OUT: document.ja.docx<br/>（--output-dir）"]
+
+    PDF --> PREFLIGHT --> PARSE --> PARSED --> NORMALIZE --> NORMALIZED --> STRUCTURE
+    STRUCTURE --> STRUCTURED --> TRANSLATE --> TRANSLATED --> REVIEW --> REVIEWED --> MARKDOWN
+    PDF --> COVER --> MARKDOWN
+    MARKDOWN --> MD --> PANDOC --> DOCX
+
+    STATE -. "Resume時に読込" .-> PREFLIGHT
+    PREFLIGHT -. "進捗を更新" .-> STATE
+    STRUCTURE_RULES -.-> STRUCTURE
+    TRANSLATION_RULES -.-> TRANSLATE
+    REVIEW_RULES -.-> REVIEW
+    GLOSSARY -.-> TRANSLATE
+    GLOSSARY -.-> REVIEW
+    TEMPLATE -.-> PANDOC
 ```
+
+`IN/OUT`は、再実行時には入力として再利用され、処理完了時には更新される内部ファイルを表します。Rulesと`template.docx`は同梱ファイルを自動で取り込むため、指定用CLIオプションはありません。
 
 ### 事前検査・Resume判定
 
@@ -151,13 +180,17 @@ Docling固有の大きなJSONを、`Document`、`Page`、`Block`、`Inline`を�
 
 各翻訳単位を次の順に直列処理します。
 
-```text
-決定的検査
-  → Fidelity Critic
-  → Japanese Critic（Qdrant設定時は根拠を検索）
-       ├─ 指摘あり → Reviser ─┐
-       └─ 指摘なし ──────────┴→ Verifier
-                                  └─ 不合格ならReviserとVerifierを一度だけ再実行
+```mermaid
+flowchart TD
+    CHECK[決定的検査] --> FIDELITY[Fidelity Critic]
+    FIDELITY --> JAPANESE["Japanese Critic<br/>Qdrant設定時は根拠を検索"]
+    JAPANESE --> HAS_FINDINGS{指摘あり?}
+    HAS_FINDINGS -- はい --> REVISER[Reviser]
+    HAS_FINDINGS -- いいえ --> VERIFIER[Verifier]
+    REVISER --> VERIFIER
+    VERIFIER -- 合格 --> DONE[Review完了]
+    VERIFIER -- 初回不合格 --> REVISER
+    VERIFIER -- 2回目不合格 --> FAILED[ページを失敗として停止]
 ```
 
 決定的検査は数値、単位、URL、識別子、用語集などの保持を確認します。Fidelity Criticは意味の欠落や追加を、Japanese Criticは用語、一貫性、自然さを確認します。Reviserだけが訳文を変更し、Verifierが原文と修正版を直接比較して合否を決めます。2回目のVerifierも不合格なら、そのページを失敗として停止します。結果は`.work/reviewed/`へ保存します。
