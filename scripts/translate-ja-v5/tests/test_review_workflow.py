@@ -401,7 +401,11 @@ def test_review_limits_assessment_output_but_not_revision(
         "verification": 2_048,
     }
     assert "固有ルール" in prompts["revision"]
-    assert "原文自体が文の断片" in systems["japanese_findings"]
+    assert "原文末尾より後を推測して欠落と判定せず" in systems[
+        "japanese_findings"
+    ]
+    for schema_name in ("fidelity_findings", "japanese_findings", "verification"):
+        assert "日本語の語順上完結して見えるだけ" in systems[schema_name]
 
 
 def test_japanese_critic_propagates_rag_evidence(

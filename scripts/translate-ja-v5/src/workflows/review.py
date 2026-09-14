@@ -91,6 +91,11 @@ VERIFICATION_SCHEMA: dict[str, Any] = {
     "required": ["approved", "findings"],
     "additionalProperties": False,
 }
+FRAGMENT_REVIEW_POLICY = (
+    "原文がページ境界などで文の途中でも、原文末尾より後を推測して欠落と判定せず、"
+    "訳文が日本語の語順上完結して見えるだけでは問題にしないでください。"
+    "原文にない意味や後続内容を訳文が追加した場合だけ指摘してください。"
+)
 
 
 def _parse_findings(value: Any) -> list[dict[str, Any]]:
@@ -158,7 +163,8 @@ def build_review_graph(settings: Settings) -> Any:
         response = structured_chat(
             assessment_settings,
             assessment_settings.review_model or "",
-            "忠実性Criticです。訳文は変更せず、意味、欠落、追加、否定、条件、比較、因果関係の問題を最大8件、簡潔に指摘してください。",
+            "忠実性Criticです。訳文は変更せず、意味、欠落、追加、否定、条件、比較、因果関係の問題を最大8件、簡潔に指摘してください。"
+            + FRAGMENT_REVIEW_POLICY,
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n訳文:\n{state['candidate']}",
             "fidelity_findings",
             FINDINGS_SCHEMA,
@@ -183,7 +189,9 @@ def build_review_graph(settings: Settings) -> Any:
         response = structured_chat(
             assessment_settings,
             assessment_settings.review_model or "",
-            "Japanese Criticです。訳文は変更せず、用語、一貫性、自然さを最大8件、簡潔に指摘してください。原文自体が文の断片なら、訳文が断片であることだけを問題にしないでください。参照がある場合はsourceを含む根拠をevidenceへ必ず示してください。",
+            "Japanese Criticです。訳文は変更せず、用語、一貫性、自然さを最大8件、簡潔に指摘してください。"
+            + FRAGMENT_REVIEW_POLICY
+            + "参照がある場合はsourceを含む根拠をevidenceへ必ず示してください。",
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n訳文:\n{state['candidate']}\n\n参照:\n{json.dumps(evidence, ensure_ascii=False)}",
             "japanese_findings",
             FINDINGS_SCHEMA,
@@ -233,7 +241,9 @@ def build_review_graph(settings: Settings) -> Any:
         response = structured_chat(
             assessment_settings,
             assessment_settings.review_model or "",
-            "Verifierです。現在の候補訳を原文と直接比較してください。既存指摘は確認項目であり、存在するだけでは不合格にしません。現在も残る重大な誤訳、欠落、追加だけを最大8件返し、一つでもあればapproved=false、全て解消済みならapproved=trueにしてください。",
+            "Verifierです。現在の候補訳を原文と直接比較してください。既存指摘は確認項目であり、存在するだけでは不合格にしません。"
+            + FRAGMENT_REVIEW_POLICY
+            + "現在も残る重大な誤訳、欠落、追加だけを最大8件返し、一つでもあればapproved=false、全て解消済みならapproved=trueにしてください。",
             f"原文:\n{state['source']}\n\n元訳:\n{state['original']}\n\n候補訳:\n{state['candidate']}\n\n既存指摘:\n{json.dumps(state.get('findings', []), ensure_ascii=False)}\n\n参照根拠:\n{json.dumps(state.get('evidence', []), ensure_ascii=False)}",
             "verification",
             VERIFICATION_SCHEMA,

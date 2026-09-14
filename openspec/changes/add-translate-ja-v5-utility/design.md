@@ -184,7 +184,7 @@ Findings merge
                     └─ 再び不合格 → 失敗
 ```
 
-`max_concurrency=1`とし、Fidelity CriticとJapanese Criticも直列に実行する。Checkerは数値、単位、URL、path、identifier、codeおよび用語集の機械的invariantを検査する。二つのCriticはfindingsだけを返し、Reviserだけが訳を変更する。Verifierは原文、元訳、候補訳、現在の未解消findingsとRAG根拠を比較する。Verifierが差し戻した場合、次のReviserへはそのVerifierが返した未解消findingsだけを渡し、解消済み指摘との競合を避ける。全findingsは監査履歴として最終結果へ保持する。
+`max_concurrency=1`とし、Fidelity CriticとJapanese Criticも直列に実行する。Checkerは数値、単位、URL、path、identifier、codeおよび用語集の機械的invariantを検査する。二つのCriticはfindingsだけを返し、Reviserだけが訳を変更する。CriticとVerifierは、ページ境界で原文が途切れた場合に原文末尾より後を推測して欠落と判定せず、日本語の語順によって訳文が完結して見えること自体を問題にしない。原文にない意味や後続内容を追加した場合だけ指摘する。Verifierは原文、元訳、候補訳、現在の未解消findingsとRAG根拠を比較する。Verifierが差し戻した場合、次のReviserへはそのVerifierが返した未解消findingsだけを渡し、解消済み指摘との競合を避ける。全findingsは監査履歴として最終結果へ保持する。
 
 Qdrant未設定は有効なno-RAG構成である。一方、設定済み接続の検索失敗をno-RAGへfallbackすると、同じ設定でも品質契約が変わるためページを失敗させる。
 
