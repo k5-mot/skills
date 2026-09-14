@@ -421,7 +421,9 @@ def _artifact_inventory(path: Path) -> dict[str, Any]:
     ]
     return {
         "file_count": len(entries),
-        "total_bytes": sum(item["size"] for item in entries),
+        "total_bytes": sum(
+            item.stat().st_size for item in path.rglob("*") if item.is_file()
+        ),
         "sha256": hash_json(entries),
     }
 

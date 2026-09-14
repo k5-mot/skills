@@ -16,6 +16,7 @@ from unittest.mock import Mock
 import pypdfium2 as pdfium
 import pytest
 import httpx
+import httpx2
 from openai import APIStatusError, APITimeoutError
 from typer import BadParameter
 
@@ -1612,7 +1613,7 @@ def test_llm_batch_shrinks_failed_requests(
     """
 
     sizes: list[int] = []
-    request = httpx.Request("POST", "http://example.test/chat/completions")
+    request = httpx2.Request("POST", "http://example.test/chat/completions")
 
     def complete(**kwargs: Any) -> Any:
         """複数要素の呼び出しを失敗させ、単一要素だけ成功させる。
@@ -1640,7 +1641,7 @@ def test_llm_batch_shrinks_failed_requests(
             status = 400 if failure == "context" else int(failure)
             raise APIStatusError(
                 "context_length_exceeded" if failure == "context" else "test failure",
-                response=httpx.Response(status, request=request),
+                response=httpx2.Response(status, request=request),
                 body=None,
             )
         return _completion(
@@ -1700,8 +1701,8 @@ def test_llm_batch_stops_on_unsplittable_api_failure(
     client = Mock()
     error = APIStatusError(
         "test failure",
-        response=httpx.Response(
-            status, request=httpx.Request("POST", "http://example.test")
+        response=httpx2.Response(
+            status, request=httpx2.Request("POST", "http://example.test")
         ),
         body=None,
     )
