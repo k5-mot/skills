@@ -166,6 +166,14 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
     assert "LLM: answer attempt 1/2 started" in output
     assert f"LLM: answer attempt {len(responses)}/2 success" in output
     assert output.count("invalid response") == len(responses) - 1
+    if len(responses) > 1:
+        repair_messages = calls[1]["messages"]
+        assert repair_messages[-2] == {
+            "role": "assistant",
+            "content": responses[0],
+        }
+        assert repair_messages[-1]["role"] == "user"
+        assert "修復" in repair_messages[-1]["content"]
 
 
 def test_langfuse_media_passes_image_content_type(

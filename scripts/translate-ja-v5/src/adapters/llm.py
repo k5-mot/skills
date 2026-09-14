@@ -150,6 +150,8 @@ def structured_chat(
         f"{json.dumps(schema, ensure_ascii=False)}"
     )
 
+    invalid_response: str | None = None
+
     def invoke() -> Any:
         """一回のChat Completions requestを送る。
 
@@ -157,15 +159,26 @@ def structured_chat(
             OpenAI SDK response。
         """
 
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": content},
+        ]
+        if invalid_response is not None:
+            messages.extend(
+                [
+                    {"role": "assistant", "content": invalid_response},
+                    {
+                        "role": "user",
+                        "content": (
+                            "上の不正応答を、情報を増減せず指定JSON Schemaへ"
+                            "適合するJSON objectに修復してください。"
+                        ),
+                    },
+                ]
+            )
         return _client(settings).chat.completions.create(
             model=model,
-            messages=cast(
-                Any,
-                [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": content},
-                ],
-            ),
+            messages=cast(Any, messages),
             response_format={
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
@@ -204,11 +217,11 @@ def structured_chat(
             if missing:
                 raise ValueError(f"LLM response lacks required keys: {missing}")
         except ValueError as error:
+            print(f"LLM: {schema_name}{attempt_label} invalid response", flush=True)
+            update_current(output={"invalid_response": value})
             if format_attempt:
                 raise ValueError("LLM did not return the required JSON object") from error
-            print(f"LLM: {schema_name}{attempt_label} invalid response", flush=True)
-            system_prompt += "\n前の応答は不正でした。必須キーを含むJSON objectだけを再出力してください。"
-            update_current(output={"invalid_response": value})
+            invalid_response = value or ""
             continue
         update_current(output=parsed)
         print(f"LLM: {schema_name}{attempt_label} success", flush=True)
