@@ -36,6 +36,7 @@ class ReviewState(TypedDict, total=False):
     rules: str
     glossary: list[dict[str, str]]
     findings: list[dict[str, Any]]
+    finding_history: list[dict[str, Any]]
     evidence: list[dict[str, Any]]
     approved: bool
     verifications: int
@@ -139,6 +140,7 @@ def build_review_graph(settings: Settings) -> Any:
         findings = deterministic_findings(state["source"], state["candidate"], glossary)
         return {
             "findings": [item.model_dump() for item in findings],
+            "finding_history": [item.model_dump() for item in findings],
             "evidence": [],
             "verifications": 0,
         }
@@ -161,9 +163,10 @@ def build_review_graph(settings: Settings) -> Any:
             "fidelity_findings",
             FINDINGS_SCHEMA,
         )
+        new_findings = _parse_findings(response.get("findings"))
         return {
-            "findings": state.get("findings", [])
-            + _parse_findings(response.get("findings"))
+            "findings": state.get("findings", []) + new_findings,
+            "finding_history": state.get("finding_history", []) + new_findings,
         }
 
     def japanese(state: ReviewState) -> dict[str, Any]:
@@ -188,7 +191,11 @@ def build_review_graph(settings: Settings) -> Any:
         findings = _parse_findings(response.get("findings"))
         if evidence and any(not item.get("evidence") for item in findings):
             raise ValueError("Japanese Critic finding must cite RAG evidence")
-        return {"findings": state.get("findings", []) + findings, "evidence": evidence}
+        return {
+            "findings": state.get("findings", []) + findings,
+            "finding_history": state.get("finding_history", []) + findings,
+            "evidence": evidence,
+        }
 
     def revise(state: ReviewState) -> dict[str, Any]:
         """全findingに必要な最小修正だけを候補訳へ適用する。
@@ -235,7 +242,8 @@ def build_review_graph(settings: Settings) -> Any:
         return {
             "approved": bool(response.get("approved")),
             "verifications": state.get("verifications", 0) + 1,
-            "findings": state.get("findings", []) + new_findings,
+            "findings": new_findings,
+            "finding_history": state.get("finding_history", []) + new_findings,
         }
 
     def after_critics(state: ReviewState) -> Literal["revise", "verify"]:
@@ -323,6 +331,7 @@ def run_review(
         "rules": rules,
         "glossary": [item.model_dump() for item in glossary or []],
         "findings": [],
+        "finding_history": [],
         "evidence": [],
         "approved": False,
         "verifications": 0,
@@ -331,7 +340,10 @@ def run_review(
     outcome = ReviewOutcome(
         approved=bool(result.get("approved")),
         text=str(result.get("candidate", target)),
-        findings=[Finding.model_validate(item) for item in result.get("findings", [])],
+        findings=[
+            Finding.model_validate(item)
+            for item in result.get("finding_history", result.get("findings", []))
+        ],
         evidence=list(result.get("evidence", [])),
         verifications=int(result.get("verifications", 0)),
     )

@@ -237,6 +237,7 @@ def test_review_revises_and_retries_verifier_once(
     """
 
     calls: list[str] = []
+    revision_prompts: list[str] = []
 
     def chat(
         _settings: Settings,
@@ -264,18 +265,31 @@ def test_review_revises_and_retries_verifier_once(
 
         calls.append(schema_name)
         if schema_name == "fidelity_findings":
-            return {"findings": [_finding()]}
+            return {"findings": [_finding("critic-meaning")]}
         if schema_name == "japanese_findings":
             return {"findings": []}
         if schema_name == "revision":
+            revision_prompts.append(_user)
             return {"text": f"修正版{calls.count('revision')}"}
-        return {"approved": calls.count("verification") == 2, "findings": []}
+        return {
+            "approved": calls.count("verification") == 2,
+            "findings": []
+            if calls.count("verification") == 2
+            else [_finding("verifier-omission")],
+        }
 
     monkeypatch.setattr(review, "structured_chat", chat)
     outcome = review.run_review("Source", "訳文", "rules", settings)
     assert outcome.text == "修正版2"
     assert outcome.verifications == 2
     assert calls.count("revision") == 2
+    assert "critic-meaning" in revision_prompts[0]
+    assert "critic-meaning" not in revision_prompts[1]
+    assert "verifier-omission" in revision_prompts[1]
+    assert {item.category for item in outcome.findings} == {
+        "critic-meaning",
+        "verifier-omission",
+    }
 
 
 def test_review_rejects_after_second_verifier(
