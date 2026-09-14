@@ -2,7 +2,7 @@
 
 ## 結論
 
-v5は、PDFから検証済みDOCXを生成する最小コアについてv3/v4の主要機能を維持している。ただし、v3/v4の全機能を包含してはいない。Word翻訳入力、詳細な運用option、独自OOXML後処理などは合意済みの非対象である。DoclingへのPDF分割投入、断片結合、Structureの一部patch、意味anchorがないPDF比較の再整列は未移行であり、将来要否を実文書で判断する。
+v5は、PDFから検証済みDOCXを生成する最小コアについてv3/v4の主要機能を維持している。ただし、v3/v4の全機能を包含してはいない。Word翻訳入力、詳細な運用option、独自OOXML後処理などは合意済みの非対象である。断片結合、Structureの一部patch、意味anchorがないPDF比較の再整列は未移行であり、将来要否を実文書で判断する。
 
 監査対象はv3/v4の`README.md`、`references/workflow.md`、公開CLI、各Stage、Qdrant登録、standalone Reviewおよびテストである。v4はv3の主パイプラインを維持し、Parse検証、予算・retry、Langfuse、DOCX後処理、standalone Reviewを追加しているため、共通機能は主にv4との比較で判定した。
 
@@ -37,6 +37,7 @@ v5は、PDFから検証済みDOCXを生成する最小コアについてv3/v4の
 | 破損したResume artifactで処理が停止する | 破損した抽出、対応付け、ページJSONだけを再生成 |
 | Qdrantが共通retryを通らない | search、upsert、retrieve、deleteを共通retryで実行 |
 | Pandocが既存DOCXへ直接出力する | 同一directoryの一時DOCXを検証後にatomic置換 |
+| 巨大PDFのDocling一括変換でServeが再起動する | PDFを10ページずつ変換し、参照、ページ番号、asset URIを再採番して連結 |
 
 ## 合意済みの非対象
 
@@ -57,7 +58,6 @@ v5は、PDFから検証済みDOCXを生成する最小コアについてv3/v4の
 
 | 未移行機能 | 影響 | 現時点の扱い |
 |---|---|---|
-| PDFを10ページ単位でDocling Serveへ投入して結果を再結合 | 巨大PDFでDocling側のmemory上限へ達する可能性がある | 未実装。実サービスで全PDF変換が失敗する場合に限り追加候補 |
 | 座標・PDF spanを使う本文断片結合とページ跨ぎtable結合 | 内容は失わないが、抽出品質によって段落や表が分断されたままになる | 未実装。Docling出力fixtureで再現してから限定的に追加する |
 | Structureの隣接code結合とtable cell inline-code patch | 分断codeや表セル内codeの表示精度がv4を下回る場合がある | 未実装。v5の本文不変patch契約を変えるため別変更とする |
 | Structure patch監査JSON | model判断の個別監査はLangfuse依存になる | 公開成果物をDOCXだけとする方針により非採用 |

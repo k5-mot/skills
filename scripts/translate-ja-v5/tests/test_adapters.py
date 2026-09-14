@@ -9,6 +9,7 @@ from io import BytesIO
 import zipfile
 
 import httpx
+import pypdfium2 as pdfium
 import pytest
 from PIL import Image
 
@@ -373,6 +374,94 @@ def test_docling_extracts_one_json_and_safe_assets(tmp_path: Path) -> None:
     assert not (tmp_path / "escape.txt").exists()
 
 
+def test_docling_splits_large_pdf_before_submission(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Doclingへ送るPDFを上限ページ数で分割してから連結する。
+
+    Args:
+        monkeypatch: Docling単位変換を差し替えるfixture。
+        tmp_path: pytest一時directory。
+
+    Returns:
+        なし。
+    """
+
+    source = tmp_path / "source.pdf"
+    with pdfium.PdfDocument.new() as pdf:
+        for _ in range(5):
+            pdf.new_page(100, 100).close()
+        pdf.save(source)
+    submitted_pages: list[int] = []
+
+    def fake_convert_one(
+        chunk: Path,
+        _artifacts: Path,
+        _base_url: str,
+        _api_key: str | None,
+        _poll_interval: float,
+    ) -> dict[str, Any]:
+        """分割PDFのページ数を記録して最小Docling文書を返す。
+
+        Args:
+            chunk: 分割済みPDF。
+            _artifacts: 未使用のasset保存先。
+            _base_url: 未使用のDocling URL。
+            _api_key: 未使用のAPI key。
+            _poll_interval: 未使用のpoll間隔。
+
+        Returns:
+            分割PDFと同じページ数を持つDocling文書。
+        """
+
+        with pdfium.PdfDocument(chunk) as pdf:
+            count = len(pdf)
+        submitted_pages.append(count)
+        texts = [
+            {
+                "self_ref": f"#/texts/{index}",
+                "label": "text",
+                "text": f"page {index + 1}",
+                "prov": [{"page_no": index + 1}],
+            }
+            for index in range(count)
+        ]
+        return {
+            "schema_name": "DoclingDocument",
+            "version": "1.0.0",
+            "name": chunk.stem,
+            "origin": {"filename": chunk.name, "mimetype": "application/pdf"},
+            "pages": {str(index + 1): {} for index in range(count)},
+            "texts": texts,
+            "tables": [],
+            "pictures": [],
+            "key_value_items": [],
+            "form_items": [],
+            "groups": [],
+            "body": {
+                "self_ref": "#/body",
+                "children": [{"$ref": item["self_ref"]} for item in texts],
+            },
+            "furniture": {"self_ref": "#/furniture", "children": []},
+        }
+
+    monkeypatch.setattr(docling, "_convert_one", fake_convert_one, raising=False)
+    result = docling.convert_pdf(
+        source,
+        tmp_path / "parsed.json",
+        tmp_path / "assets",
+        "http://docling",
+        chunk_pages=2,
+    )
+
+    assert submitted_pages == [2, 2, 1]
+    assert list(result["pages"]) == ["1", "2", "3", "4", "5"]
+    assert [item["self_ref"] for item in result["texts"]] == [
+        f"#/texts/{index}" for index in range(5)
+    ]
+    assert [item["prov"][0]["page_no"] for item in result["texts"]] == [1, 2, 3, 4, 5]
+
+
 @pytest.mark.parametrize("status_field", ["task_status", "status"])
 def test_docling_accepts_status_fields_after_poll_retry(
     monkeypatch: pytest.MonkeyPatch,
@@ -393,7 +482,9 @@ def test_docling_accepts_status_fields_after_poll_retry(
     """
 
     source = tmp_path / "source.pdf"
-    source.write_bytes(b"pdf")
+    with pdfium.PdfDocument.new() as pdf:
+        pdf.new_page(100, 100).close()
+        pdf.save(source)
     stream = BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:
         archive.writestr(

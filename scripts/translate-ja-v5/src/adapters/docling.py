@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
 import time
 import zipfile
 from io import BytesIO
@@ -10,9 +12,13 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import httpx
+import pypdfium2 as pdfium
 
 from src.adapters.llm import retry_call
 from src.state import atomic_write_json
+
+COLLECTIONS = ("texts", "tables", "pictures", "key_value_items", "form_items", "groups")
+DOCLING_CHUNK_PAGES = 10
 
 
 def _headers(api_key: str | None) -> dict[str, str]:
@@ -83,19 +89,91 @@ def _extract_result(payload: bytes, artifacts: Path) -> dict[str, Any]:
     return value
 
 
-def convert_pdf(
+def _remap(value: Any, offsets: dict[str, int], page_offset: int, subdir: str) -> Any:
+    """分割Docling文書の参照、ページ番号、asset URIを全体座標へ直す。
+
+    Args:
+        value: 再帰変換するDocling値。
+        offsets: collectionごとのindex加算値。
+        page_offset: ページ番号加算値。
+        subdir: assetを隔離するchunk directory名。
+
+    Returns:
+        全体文書用に再採番した値。
+    """
+
+    if isinstance(value, list):
+        return [_remap(item, offsets, page_offset, subdir) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        if key in {"self_ref", "$ref"} and isinstance(item, str):
+            parts = item.removeprefix("#/").split("/")
+            if len(parts) == 2 and parts[0] in offsets and parts[1].isdigit():
+                item = f"#/{parts[0]}/{int(parts[1]) + offsets[parts[0]]}"
+        elif key == "page_no" and isinstance(item, int):
+            item += page_offset
+        elif key == "uri" and isinstance(item, str) and item.startswith("artifacts/"):
+            item = PurePosixPath("artifacts", subdir, item[10:]).as_posix()
+        result[key] = _remap(item, offsets, page_offset, subdir)
+    return result
+
+
+def _merge_chunks(chunks: list[dict[str, Any]], source: Path) -> dict[str, Any]:
+    """ページ順のDocling文書を参照整合性を保って一文書へ連結する。
+
+    Args:
+        chunks: 分割PDFから得たDocling文書。
+        source: 元PDF。
+
+    Returns:
+        全ページを持つDocling文書。
+
+    Raises:
+        ValueError: 変換結果が空の場合。
+    """
+
+    merged: dict[str, Any] | None = None
+    page_offset = 0
+    for number, chunk in enumerate(chunks, 1):
+        offsets = {name: len((merged or {}).get(name, [])) for name in COLLECTIONS}
+        mapped = _remap(chunk, offsets, page_offset, f"chunk_{number:06d}")
+        pages = mapped.get("pages", {})
+        mapped["pages"] = {
+            str(int(key) + page_offset): value for key, value in pages.items()
+        }
+        if merged is None:
+            merged = mapped
+        else:
+            for name in COLLECTIONS:
+                merged.setdefault(name, []).extend(mapped.get(name, []))
+            merged.setdefault("pages", {}).update(mapped["pages"])
+            for tree in ("body", "furniture"):
+                merged.setdefault(tree, {}).setdefault("children", []).extend(
+                    mapped.get(tree, {}).get("children", [])
+                )
+        page_offset += len(pages)
+    if merged is None:
+        raise ValueError("PDF produced no Docling chunks")
+    merged["name"] = source.stem
+    merged.setdefault("origin", {}).update(
+        {"filename": source.name, "mimetype": "application/pdf"}
+    )
+    return merged
+
+
+def _convert_one(
     source: Path,
-    output_json: Path,
     artifacts: Path,
     base_url: str,
     api_key: str | None = None,
     poll_interval: float = 1.0,
 ) -> dict[str, Any]:
-    """PDFをDoclingの非同期APIでJSONへ変換する。
+    """一つのPDFをDoclingの非同期APIでJSONへ変換する。
 
     Args:
         source: 入力PDF。
-        output_json: raw JSON保存先。
         artifacts: 画像等の保存先。
         base_url: Docling Serve URL。
         api_key: 任意API key。
@@ -178,10 +256,83 @@ def convert_pdf(
                 return response
 
             result = retry_call(download)
-            document = _extract_result(result.content, artifacts)
-            atomic_write_json(output_json, document)
-            return document
+            return _extract_result(result.content, artifacts)
         if status in {"failure", "failed", "error"}:
             raise RuntimeError(f"Docling task failed: {task_id}")
         time.sleep(poll_interval)
     raise TimeoutError(f"Docling task timed out: {task_id}")
+
+
+def convert_pdf(
+    source: Path,
+    output_json: Path,
+    artifacts: Path,
+    base_url: str,
+    api_key: str | None = None,
+    poll_interval: float = 1.0,
+    chunk_pages: int = DOCLING_CHUNK_PAGES,
+) -> dict[str, Any]:
+    """PDFを小分けにDocling変換し、単一JSONとして保存する。
+
+    Args:
+        source: 入力PDF。
+        output_json: raw JSON保存先。
+        artifacts: 画像等の保存先。
+        base_url: Docling Serve URL。
+        api_key: 任意API key。
+        poll_interval: status確認間隔。
+        chunk_pages: Doclingへ一度に送る最大ページ数。
+
+    Returns:
+        保存したDocling JSON object。
+
+    Raises:
+        ValueError: ページ分割上限が不正な場合。
+    """
+
+    if chunk_pages < 1:
+        raise ValueError("Docling chunk_pages must be positive")
+    with pdfium.PdfDocument(source) as pdf:
+        page_count = len(pdf)
+        if page_count <= chunk_pages:
+            document = _convert_one(
+                source, artifacts, base_url, api_key, poll_interval
+            )
+            atomic_write_json(output_json, document)
+            return document
+        artifacts.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix=".docling-", dir=artifacts.parent
+        ) as temporary:
+            root = Path(temporary)
+            documents: list[dict[str, Any]] = []
+            total = (page_count + chunk_pages - 1) // chunk_pages
+            for number, start in enumerate(range(0, page_count, chunk_pages), 1):
+                indexes = list(range(start, min(start + chunk_pages, page_count)))
+                chunk = root / f"chunk-{number:06d}.pdf"
+                with pdfium.PdfDocument.new() as destination:
+                    destination.import_pages(pdf, pages=indexes)
+                    destination.save(chunk)
+                first, last = indexes[0] + 1, indexes[-1] + 1
+                print(
+                    f"Docling: chunk {number}/{total} pages {first}-{last} started",
+                    flush=True,
+                )
+                documents.append(
+                    _convert_one(
+                        chunk,
+                        root / "artifacts" / f"chunk_{number:06d}",
+                        base_url,
+                        api_key,
+                        poll_interval,
+                    )
+                )
+                print(f"Docling: chunk {number}/{total} success", flush=True)
+            document = _merge_chunks(documents, source)
+            staged_artifacts = root / "artifacts"
+            if artifacts.exists():
+                shutil.rmtree(artifacts)
+            if staged_artifacts.exists():
+                shutil.move(staged_artifacts, artifacts)
+            atomic_write_json(output_json, document)
+            return document

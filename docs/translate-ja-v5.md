@@ -147,7 +147,7 @@ uv run python scripts/translate-ja-v5/translate.py register --doc-dir references
 
 対応形式はPDF、DOCX、Markdown、UTF-8 textです。directoryは再帰探索され、隠しfileと空fileは無視されます。同じsourceが更新された場合は、新revisionをすべてupsertして取得確認した後、同じsourceの旧revisionだけを削除します。新revision登録に失敗した場合は旧revisionを残します。
 
-Docling Serveの非同期完了statusは、現行の`task_status`と旧形式の`status`の両方に対応します。実行中は`Docling: queued`のように、statusが変化したときだけ表示します。Structure、Translate、Reviewは実行対象ページの開始・完了を表示し、LiteLLM呼出しは`LLM: translations attempt 1/2 started`のようにschema名と構造化応答の再生成状況を表示します。Docling Serve、LiteLLM、LibreTranslate、Qdrantへの通信障害、408、429、5xxは最大3回まで指数backoffで再試行します。最終DOCXは一時packageの整合性を確認してからatomic置換するため、Pandoc失敗時に既存DOCXを上書きしません。
+Docling ServeへはPDFを最大10ページずつ送り、結果の参照、ページ番号、asset URIを全体文書用に再構成します。非同期完了statusは、現行の`task_status`と旧形式の`status`の両方に対応します。実行中は`Docling: chunk 1/36 pages 1-10 started`や`Docling: started`のように、チャンク進捗とstatus変化を表示します。Structure、Translate、Reviewは実行対象ページの開始・完了を表示し、LiteLLM呼出しは`LLM: translations attempt 1/2 started`のようにschema名と構造化応答の再生成状況を表示します。Docling Serve、LiteLLM、LibreTranslate、Qdrantへの通信障害、408、429、5xxは最大3回まで指数backoffで再試行します。最終DOCXは一時packageの整合性を確認してからatomic置換するため、Pandoc失敗時に既存DOCXを上書きしません。
 
 ## 制約
 
