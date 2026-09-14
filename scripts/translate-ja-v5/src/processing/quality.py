@@ -20,7 +20,8 @@ PROTECTED_RE = re.compile(
     r"|\b[a-z]+(?:[A-Z][A-Za-z0-9]*)+\b"
 )
 NUMBER_UNIT_RE = re.compile(
-    r"(?<!\w)[+-]?\d[\d,.]*(?:\s?(?:%|ms|s|MB|GB|KB|V|A|Hz|°C))?"
+    r"(?<!\w)[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+    r"(?:\s?(?:%|ms|s|MB|GB|KB|V|A|Hz|°C))?"
 )
 EN_NEGATION_RE = re.compile(
     r"\b(?:not|no|never|without|mustn['’]t|cannot|can't)\b", re.IGNORECASE

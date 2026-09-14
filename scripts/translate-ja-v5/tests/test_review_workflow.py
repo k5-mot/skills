@@ -83,6 +83,21 @@ def test_deterministic_checker_covers_accuracy_baseline(
     }
 
 
+def test_number_checker_ignores_source_punctuation() -> None:
+    """数値直後の英文区切り記号を数値の一部として比較しない。
+
+    Returns:
+        なし。
+    """
+
+    findings = deterministic_findings(
+        "CJCS Instruction 3110.01, issued in 2018.",
+        "CJCS指示3110.01、2018年発行。",
+        [],
+    )
+    assert not [item for item in findings if item.category == "number-unit"]
+
+
 def test_accuracy_regression_is_no_worse_than_retained_v4_baseline(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> None:
