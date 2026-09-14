@@ -125,25 +125,13 @@ flowchart TD
     MARKDOWN["Markdown<br/>本文と表紙を統合"]
     PANDOC["Pandoc<br/>目次・図表一覧・章番号を生成"]
 
-    subgraph WORK[Resume用の内部IN/OUT]
-        STATE["IN/OUT: state.json<br/>（--output-dir配下へ自動保存）"]
-        PARSED["IN/OUT: parsed.json<br/>（--output-dir配下へ自動保存）"]
-        NORMALIZED["IN/OUT: normalized.json<br/>（--output-dir配下へ自動保存）"]
-        STRUCTURED["IN/OUT: structured/<br/>（ページJSON・PNG・assetsを--output-dir配下へ自動保存）"]
-        TRANSLATED["IN/OUT: translated/*.json<br/>（--output-dir配下へ自動保存）"]
-        REVIEWED["IN/OUT: reviewed/*.json<br/>（--output-dir配下へ自動保存）"]
-        MD["IN/OUT: document.ja.md<br/>（--output-dir配下へ自動保存）"]
-    end
-
     DOCX["OUT: document.ja.docx<br/>（--output-dir）"]
 
-    PDF --> PREFLIGHT --> PARSE --> PARSED --> NORMALIZE --> NORMALIZED --> STRUCTURE
-    STRUCTURE --> STRUCTURED --> TRANSLATE --> TRANSLATED --> REVIEW --> REVIEWED --> MARKDOWN
+    PDF --> PREFLIGHT --> PARSE --> NORMALIZE --> STRUCTURE
+    STRUCTURE --> TRANSLATE --> REVIEW --> MARKDOWN
     PDF --> COVER --> MARKDOWN
-    MARKDOWN --> MD --> PANDOC --> DOCX
+    MARKDOWN --> PANDOC --> DOCX
 
-    STATE -. "Resume時に読込" .-> PREFLIGHT
-    PREFLIGHT -. "進捗を更新" .-> STATE
     STRUCTURE_RULES -.-> STRUCTURE
     TRANSLATION_RULES -.-> TRANSLATE
     REVIEW_RULES -.-> REVIEW
@@ -152,7 +140,7 @@ flowchart TD
     TEMPLATE -.-> PANDOC
 ```
 
-`IN/OUT`は、再実行時には入力として再利用され、処理完了時には更新される内部ファイルを表します。Rulesと`template.docx`は同梱ファイルを自動で取り込むため、指定用CLIオプションはありません。
+フローチャートの`IN`と`OUT`は、利用者が直接指定または利用するファイルだけを示します。Rulesと`template.docx`は同梱ファイルを自動で取り込むため、指定用CLIオプションはありません。Resume用の中間成果物は後述の「出力」を参照してください。
 
 ### 事前検査・Resume判定
 
