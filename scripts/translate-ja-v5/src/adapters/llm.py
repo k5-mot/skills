@@ -61,6 +61,7 @@ def retry_call(
             return call()
         except BaseException as error:
             status = _status_code(error)
+            # 内容不正や認証失敗は待っても直らないため、一時障害だけを再試行する。
             retryable = (
                 isinstance(error, httpx.TransportError)
                 or status in {408, 429}
@@ -144,6 +145,7 @@ def structured_chat(
     content: str | list[dict[str, Any]] = user
     if image_path is not None:
         content = [{"type": "text", "text": user}, _image_message(image_path)]
+    # JSON Schemaをpromptにも明記し、response_format対応が弱いlocal modelを補助する。
     system_prompt = (
         f"{system}\n\n説明文やMarkdownを含めず、次のJSON Schemaに一致する"
         f"JSON objectだけを返してください:\n"
@@ -164,6 +166,7 @@ def structured_chat(
             {"role": "user", "content": content},
         ]
         if invalid_response is not None:
+            # 一から再回答させず不正応答を材料に渡すことで、翻訳内容の揺れを抑える。
             messages.extend(
                 [
                     {"role": "assistant", "content": invalid_response},
@@ -187,6 +190,7 @@ def structured_chat(
             temperature=0,
         )
 
+    # 通信再試行とは分離し、形式修復でAPI呼出しが無制限に増えないよう二回に限る。
     for format_attempt in range(2):
         attempt_label = f" attempt {format_attempt + 1}/2"
         print(f"LLM: {schema_name}{attempt_label} started", flush=True)
@@ -210,6 +214,7 @@ def structured_chat(
                 and lines[-1] == "```"
             ):
                 json_text = "\n".join(lines[1:-1])
+            # local modelが末尾へ短い説明を足しても、先頭のJSON objectは回収する。
             parsed, _ = json.JSONDecoder().raw_decode(json_text)
             if not isinstance(parsed, dict):
                 raise ValueError("LLM response must be a JSON object")
@@ -220,7 +225,9 @@ def structured_chat(
             print(f"LLM: {schema_name}{attempt_label} invalid response", flush=True)
             update_current(output={"invalid_response": value})
             if format_attempt:
-                raise ValueError("LLM did not return the required JSON object") from error
+                raise ValueError(
+                    "LLM did not return the required JSON object"
+                ) from error
             invalid_response = value or ""
             continue
         update_current(output=parsed)

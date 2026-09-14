@@ -43,6 +43,7 @@ def render_inlines(values: list[Inline]) -> str:
             value = f"`{item.text.replace('`', '``')}`"
         else:
             value = _escape(item.text)
+        # Doclingが返したmark順を維持し、複合装飾のnestingを決定的にする。
         for mark in item.marks:
             if mark == "strong":
                 value = f"**{value}**"
@@ -129,6 +130,7 @@ def _render_table(block: Block) -> str:
         Pandocが読めるHTML table。
     """
 
+    # Markdown pipe tableではcell結合を表せないため、Pandocが読めるHTMLを用いる。
     rows: dict[int, list[TableCell]] = {}
     for cell in block.cells:
         rows.setdefault(cell.row, []).append(cell)
@@ -179,6 +181,7 @@ def render_block(block: Block) -> str:
         return f"> [!{label}]\n" + "\n".join(f"> {line}" for line in text.splitlines())
     if block.kind == "code":
         code = inline_text(_current(block))
+        # 本文中のbacktick列より長いfenceを選び、codeを途中で閉じない。
         longest_run = max((len(value) for value in re.findall(r"`+", code)), default=0)
         fence = "`" * max(3, longest_run + 1)
         return f"{fence}{block.language or ''}\n{code}\n{fence}"
@@ -224,6 +227,7 @@ def validate_document(document: Document, asset_root: Path) -> None:
         ValueError: 制御文字、欠損asset、表shapeが不正な場合。
     """
 
+    # link検証より先に全ページの見出しを集め、後方参照も正しく解決する。
     anchors = {
         _anchor(block.id)
         for page in document.pages

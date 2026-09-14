@@ -83,6 +83,7 @@ def replace_revision(
     if not collection:
         raise ValueError("QDRANT_COLLECTION is required")
     client = _client(settings)
+    # 旧revisionを先に消さず、新revisionが検索可能になるまで現行データを保持する。
     retry_call(
         lambda: client.upsert(collection_name=collection, points=points, wait=True)
     )
@@ -97,6 +98,7 @@ def replace_revision(
     )
     if {str(item.id) for item in found} != {str(item) for item in ids}:
         raise RuntimeError("Qdrant did not persist every new revision point")
+    # 同じcollection・sourceの新revisionだけを残し、他文書には触れない。
     old_filter = models.Filter(
         must=[
             models.FieldCondition(key="source", match=models.MatchValue(value=source)),

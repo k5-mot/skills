@@ -94,9 +94,11 @@ def fit_neighbor_context(
     if remaining <= 0:
         return "", ""
     half = remaining // 2
+    # ページ境界に近い文脈を優先し、前ページは末尾、次ページは先頭から採る。
     previous_part = previous[-half:] if half else ""
     following_part = following[: remaining - len(previous_part)]
     unused = remaining - len(previous_part) - len(following_part)
     if unused > 0:
+        # 次ページが短い場合は余りを前ページへ戻し、利用可能な予算を捨てない。
         previous_part = previous[-(len(previous_part) + unused) :]
     return previous_part, following_part

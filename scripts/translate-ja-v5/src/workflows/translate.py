@@ -116,7 +116,7 @@ def _review_page(
             "glossary": [item.model_dump() for item in glossary],
         }
     )
-    # translated層を直接走査して同じIDの訳を得る。
+    # 原文側の走査順を流用せず、実在するtranslated層だけをReview対象にする。
     translated_page = page.model_copy(deep=True)
     pairs: list[tuple[str, str, str]] = []
     source_by_id = dict(translation_units(page))
@@ -229,6 +229,7 @@ def run_translation(
     work = output / ".work"
     state_path = work / "state.json"
     config = _config_snapshot(settings, backend)
+    # lock前の読み取りは計画表示用であり、実書込みはlock取得後だけ行う。
     existing = load_json(state_path)
     state = (
         existing
@@ -246,6 +247,7 @@ def run_translation(
     )
     with OutputLock(work):
         if force:
+            # 出力DOCXは成功するまで残し、再構築対象はResume用artifactに限定する。
             _clear_known_work(work)
             state = new_state(source_hash, list(range(2, page_count + 1)), config)
         atomic_write_json(state_path, state)
@@ -265,6 +267,7 @@ def run_translation(
                     settings.docling_api_key,
                 )
                 state["stages"]["parse"] = "done"
+                # artifact保存後にstateを進め、doneなのに成果物がない状態を作らない。
                 atomic_write_json(state_path, state)
             normalized_path = work / "normalized.json"
             document = (
@@ -285,6 +288,7 @@ def run_translation(
             review_rules = read_rules(settings, "review")
             completed: list[Page] = []
             for number in range(2, page_count + 1):
+                # 表紙は画像として別途転記する契約なので、本文pipelineは2ページ目から始める。
                 page_state = state["pages"][str(number)]
                 try:
                     structured_path = _page_path(work / "structured", number)
@@ -365,9 +369,7 @@ def run_translation(
                         else None
                     )
                     if reviewed_page is None:
-                        print(
-                            f"Review: page {number}/{page_count} started", flush=True
-                        )
+                        print(f"Review: page {number}/{page_count} started", flush=True)
                         page_state["review"] = "pending"
                         atomic_write_json(state_path, state)
                         reviewed_page = _review_page(
@@ -379,9 +381,7 @@ def run_translation(
                         )
                         page_state["review"] = "done"
                         atomic_write_json(state_path, state)
-                        print(
-                            f"Review: page {number}/{page_count} success", flush=True
-                        )
+                        print(f"Review: page {number}/{page_count} success", flush=True)
                     completed.append(reviewed_page)
                 except BaseException as error:
                     active = next(

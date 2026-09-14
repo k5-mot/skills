@@ -92,6 +92,7 @@ def _walk_refs(
     target = _resolve(document, ref) if isinstance(ref, str) else value
     label = str(target.get("label", ""))
     children = target.get("children", [])
+    # groupは配置情報だけなので平坦化するが、可視内容を持つ親は子より先に残す。
     if children and not _visible_content(target):
         nested_level = (
             list_level + 1 if label in {"list", "ordered_list"} else list_level
@@ -291,6 +292,7 @@ def _owned_caption_refs(document: dict[str, Any]) -> set[str]:
         standalone本文として重複出力しないcaption ref集合。
     """
 
+    # captionは図表Blockへ所有させ、body側TextItemとの二重出力を防ぐ。
     refs: set[str] = set()
     for collection in ("tables", "pictures"):
         for item in document.get(collection, []):
@@ -354,6 +356,7 @@ def _picture_content_refs(document: dict[str, Any]) -> set[str]:
             parent = item.get("parent")
             if isinstance(parent, dict) and isinstance(parent.get("$ref"), str):
                 parents[str(item["self_ref"])] = str(parent["$ref"])
+    # 親chainを辿るのは、picture直下にgroupを挟むDocling出力にも対応するため。
     result: set[str] = set()
     for item in document.get("texts", []):
         if (
@@ -422,6 +425,7 @@ def _table_cells(item: dict[str, Any], ref: str) -> list[TableCell]:
     cells: list[TableCell] = []
     grid = data.get("grid")
     if isinstance(grid, list):
+        # 旧grid形式にはspan情報がないため、配列位置をそのまま座標にする。
         for row_index, row in enumerate(grid):
             if not isinstance(row, list):
                 continue
@@ -444,6 +448,7 @@ def _table_cells(item: dict[str, Any], ref: str) -> list[TableCell]:
     values = data.get("table_cells") or data.get("cells")
     if not isinstance(values, list):
         raise ValueError(f"unsupported Docling table: {ref}")
+    # 新形式は半開区間のoffsetからrowspan/colspanを復元する。
     for index, cell in enumerate(values):
         if not isinstance(cell, dict):
             continue
@@ -528,6 +533,7 @@ def _block(
     if kind is None:
         if not _visible_content(item):
             return None
+        # 内容のある未知要素をparagraphへ丸めると欠損に気付けないためfail-fastする。
         raise ValueError(
             f"unsupported content-bearing Docling element: ref={ref} label={label}"
         )
@@ -597,6 +603,7 @@ def normalize_docling(document: dict[str, Any]) -> Document:
     caption_refs = _owned_caption_refs(document)
     index_pages = _index_pages(document)
     picture_content_refs = _picture_content_refs(document)
+    # bodyの文書順を正本とし、bodyに現れないcollection要素だけを後段で補完する。
     ordered_items = list(_walk_refs(document, document.get("body", {})))
     for collection in COLLECTIONS[:-1]:
         values = document.get(collection, [])

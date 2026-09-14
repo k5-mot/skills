@@ -79,6 +79,7 @@ def _extract_result(payload: bytes, artifacts: Path) -> dict[str, Any]:
         artifacts.mkdir(parents=True, exist_ok=True)
         for name in archive.namelist():
             parts = PurePosixPath(name).parts
+            # JSON以外はartifacts配下だけを許し、ZIP path traversalを遮断する。
             if name.endswith("/") or "artifacts" not in parts or ".." in parts:
                 continue
             relative = parts[parts.index("artifacts") + 1 :]
@@ -108,6 +109,7 @@ def _remap(value: Any, offsets: dict[str, int], page_offset: int, subdir: str) -
         return value
     result: dict[str, Any] = {}
     for key, item in value.items():
+        # chunk内indexのrefを、結合後collectionのglobal indexへ揃える。
         if key in {"self_ref", "$ref"} and isinstance(item, str):
             parts = item.removeprefix("#/").split("/")
             if len(parts) == 2 and parts[0] in offsets and parts[1].isdigit():
@@ -115,6 +117,7 @@ def _remap(value: Any, offsets: dict[str, int], page_offset: int, subdir: str) -
         elif key == "page_no" and isinstance(item, int):
             item += page_offset
         elif key == "uri" and isinstance(item, str) and item.startswith("artifacts/"):
+            # 同名assetの上書きを避けるためchunk固有directoryへ隔離する。
             item = PurePosixPath("artifacts", subdir, item[10:]).as_posix()
         result[key] = _remap(item, offsets, page_offset, subdir)
     return result
@@ -137,6 +140,7 @@ def _merge_chunks(chunks: list[dict[str, Any]], source: Path) -> dict[str, Any]:
     merged: dict[str, Any] | None = None
     page_offset = 0
     for number, chunk in enumerate(chunks, 1):
+        # append前のcollection長をoffsetにし、相互参照を壊さず再採番する。
         offsets = {name: len((merged or {}).get(name, [])) for name in COLLECTIONS}
         mapped = _remap(chunk, offsets, page_offset, f"chunk_{number:06d}")
         pages = mapped.get("pages", {})
@@ -196,6 +200,7 @@ def _convert_one(
             Docling submit response。
         """
 
+        # retryごとにstreamを開き直し、二回目以降もPDF先頭から送信する。
         with source.open("rb") as stream:
             response = httpx.post(
                 f"{url}/v1/convert/file/async",
@@ -295,9 +300,7 @@ def convert_pdf(
     with pdfium.PdfDocument(source) as pdf:
         page_count = len(pdf)
         if page_count <= chunk_pages:
-            document = _convert_one(
-                source, artifacts, base_url, api_key, poll_interval
-            )
+            document = _convert_one(source, artifacts, base_url, api_key, poll_interval)
             atomic_write_json(output_json, document)
             return document
         artifacts.parent.mkdir(parents=True, exist_ok=True)

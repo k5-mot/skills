@@ -54,6 +54,7 @@ def observed(
                 元関数の戻り値。
             """
 
+            # dotenvはmodule import後に読まれるため、有効判定はdecorate時でなく呼出時に行う。
             target = traced if _enabled() else function
             return target(*args, **kwargs)
 
@@ -101,6 +102,7 @@ def flush_safely() -> None:
 
     if not _enabled():
         return
+    # telemetry障害は翻訳成果物の成否へ波及させない。
     try:
         get_client().flush()
     except Exception as error:  # noqa: BLE001

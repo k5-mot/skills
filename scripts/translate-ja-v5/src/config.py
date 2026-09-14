@@ -149,6 +149,7 @@ def _validate_settings(settings: Settings, command: Command, backend: Backend) -
 
     if settings.output_tokens + settings.image_tokens >= settings.context_tokens:
         raise ValueError("LLM token reservations must be smaller than context")
+    # 任意serviceは部分設定を黙って無効化せず、設定ミスとして早期に知らせる。
     langfuse_pair = (settings.langfuse_public_key, settings.langfuse_secret_key)
     if any(langfuse_pair) and not all(langfuse_pair):
         raise ValueError(
@@ -157,6 +158,7 @@ def _validate_settings(settings: Settings, command: Command, backend: Backend) -
     qdrant_core = (settings.qdrant_url, settings.qdrant_collection)
     if any(qdrant_core) and not all(qdrant_core):
         raise ValueError("QDRANT_URL and QDRANT_COLLECTION are both required")
+    # 不使用commandの資格情報まで必須にせず、各入口が実際に使う設定だけを要求する。
     if command == "translate":
         required = {
             "DOCLING_URL": settings.docling_url,

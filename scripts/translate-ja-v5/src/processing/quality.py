@@ -120,6 +120,7 @@ def deterministic_findings(
         検出したcritical finding列。
     """
 
+    # heuristicは自動修正せずfindingだけを返し、最終判断をReview graphへ委ねる。
     findings: list[Finding] = []
     for value in NUMBER_UNIT_RE.findall(source):
         if value not in target:
@@ -164,6 +165,7 @@ def deterministic_findings(
                 message="複数語の英語原文が翻訳されていない",
             )
         )
+    # 短い断片で誤検知しないよう、長さ比検査には最低文字数を設ける。
     elif len(source.strip()) >= 80 and len(target.strip()) < len(source.strip()) * 0.15:
         findings.append(
             Finding(

@@ -60,6 +60,7 @@ def create_docx(markdown: Path, output: Path, template: Path) -> None:
     check_pandoc()
     executable = shutil.which("pandoc") or "pandoc"
     output.parent.mkdir(parents=True, exist_ok=True)
+    # 失敗途中のDOCXで既存成果物を上書きしないよう、同じdirectoryへ一時生成する。
     descriptor, temporary_name = tempfile.mkstemp(
         dir=output.parent, prefix=f".{output.stem}.", suffix=".docx"
     )
@@ -91,6 +92,7 @@ def create_docx(markdown: Path, output: Path, template: Path) -> None:
             check=True,
         )
         try:
+            # process成功だけでなく、最低限のOOXML部品とCRCも置換前に確認する。
             with zipfile.ZipFile(temporary) as archive:
                 required = {"[Content_Types].xml", "word/document.xml"}
                 if not required.issubset(archive.namelist()) or archive.testzip():

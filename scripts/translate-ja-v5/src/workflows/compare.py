@@ -122,6 +122,7 @@ def align_pages(
     alignments: list[dict[str, Any]] = []
     used: set[int] = set()
     for source_index, source in enumerate(source_pages):
+        # 翻訳で改ページがずれるケースを吸収するため、1対1と1対2を同時に比較する。
         candidates: list[tuple[float, list[int]]] = []
         for destination_index, destination in enumerate(destination_pages):
             if destination_index not in used:
@@ -141,6 +142,7 @@ def align_pages(
                 )
         score, selected = max(candidates, default=(0.0, []), key=lambda value: value[0])
         if score == 0:
+            # 共通anchorが皆無の文書だけ、順序対応へ限定的にfallbackする。
             selected = (
                 [source_index]
                 if source_index < len(destination_pages) and source_index not in used
@@ -163,6 +165,7 @@ def align_pages(
                 "destination_text": destination,
             }
         )
+    # sourceと結び付かなかった訳文ページも、余剰としてreportから落とさない。
     for index, text in enumerate(destination_pages):
         if index not in used:
             alignments.append(
@@ -238,6 +241,7 @@ def run_compare_review(
     with OutputLock(work):
         existing = load_json(state_path)
         if isinstance(existing, dict) and not force:
+            # hash不一致時のResumeを拒み、別文書のReview結果混入を防ぐ。
             if (
                 existing.get("source_hash") != source_hash
                 or existing.get("destination_hash") != destination_hash
@@ -266,6 +270,7 @@ def run_compare_review(
         work.mkdir(parents=True, exist_ok=True)
         source_path = work / "source" / "pages.json"
         destination_path = work / "destination" / "pages.json"
+        # stateがdoneでもartifactが破損・欠損していれば、その層だけ安全に作り直す。
         source_pages = None if force else _load_string_list(source_path)
         destination_pages = None if force else _load_string_list(destination_path)
         if source_pages is None:

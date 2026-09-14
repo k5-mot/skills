@@ -125,6 +125,7 @@ def build_review_graph(settings: Settings) -> Any:
 
     if not settings.review_model:
         raise ValueError("OPENAI_REVIEW_MODEL is required")
+    # CriticとVerifierは短い指摘だけを返すため、Reviserより出力枠を絞って暴走を防ぐ。
     assessment_settings = replace(
         settings, output_tokens=min(settings.output_tokens, 2_048)
     )
@@ -143,6 +144,7 @@ def build_review_graph(settings: Settings) -> Any:
             GlossaryEntry.model_validate(item) for item in state.get("glossary", [])
         ]
         findings = deterministic_findings(state["source"], state["candidate"], glossary)
+        # findingsは現在の修正対象、historyは解消済みを含む監査記録として分ける。
         return {
             "findings": [item.model_dump() for item in findings],
             "finding_history": [item.model_dump() for item in findings],
@@ -185,6 +187,7 @@ def build_review_graph(settings: Settings) -> Any:
             日本語findingとRAG根拠を追記した状態差分。
         """
 
+        # RAGはJapanese Criticだけが使用し、忠実性判定を外部文書で歪めない。
         evidence = search(settings, state["source"]) if settings.qdrant_enabled else []
         response = structured_chat(
             assessment_settings,
@@ -199,6 +202,7 @@ def build_review_graph(settings: Settings) -> Any:
         findings = _parse_findings(response.get("findings"))
         if evidence and any(not item.get("evidence") for item in findings):
             raise ValueError("Japanese Critic finding must cite RAG evidence")
+        # Verifierの結果でactive findingを置換し、解消済み指摘による再修正を避ける。
         return {
             "findings": state.get("findings", []) + findings,
             "finding_history": state.get("finding_history", []) + findings,
@@ -282,6 +286,7 @@ def build_review_graph(settings: Settings) -> Any:
             return "end"
         return "revise"
 
+    # 品質優先でもlocal LLMを飽和させないよう、分岐を持つ直列graphとして固定する。
     builder = StateGraph(cast(Any, ReviewState))
     builder.add_node(
         "checker", observed("review-checker", capture_input=False)(checker)
@@ -346,6 +351,7 @@ def run_review(
         "approved": False,
         "verifications": 0,
     }
+    # graph定義が将来並列化されても、v5の実行契約は常に同時実行数1を守る。
     result = build_review_graph(settings).invoke(state, config={"max_concurrency": 1})
     outcome = ReviewOutcome(
         approved=bool(result.get("approved")),

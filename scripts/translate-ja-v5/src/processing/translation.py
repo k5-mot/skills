@@ -117,6 +117,7 @@ def apply_layer(
         raise ValueError(f"translation returned foreign ids: {sorted(unknown)}")
     for block in result.blocks:
         if block.kind not in {"code", "formula", "horizontal_rule"} and block.source:
+            # Reviewは原文でなく翻訳済み層へ重ね、先行する翻訳結果を失わない。
             base = (
                 block.translated
                 if layer == "reviewed" and block.translated is not None
@@ -198,12 +199,11 @@ def _openai_translate_chunk(
 
     if not settings.translation_model:
         raise ValueError("OPENAI_TRANSLATION_MODEL is required")
+    # URLや数式等をplaceholder化し、自然言語生成による一字の変形も契約違反にする。
     prepared = {item_id: protect_text(text) for item_id, text in units}
     protected_units = [(item_id, prepared[item_id][0]) for item_id, _text in units]
     expected = {item_id for item_id, _text in units}
-    prompt = _translation_prompt(
-        rules, glossary, protected_units, previous, following
-    )
+    prompt = _translation_prompt(rules, glossary, protected_units, previous, following)
     last_error: ValueError | None = None
     for contract_attempt in range(2):
         try:
@@ -219,6 +219,7 @@ def _openai_translate_chunk(
             if not allow_bisect or len(units) < 2:
                 raise
             middle = len(units) // 2
+            # 分割境界の内側には隣ページ文脈を重ねず、二分後のtoken量を確実に減らす。
             return {
                 **_openai_translate_chunk(
                     settings, units[:middle], rules, glossary, previous, "", False
@@ -248,6 +249,7 @@ def _openai_translate_chunk(
             last_error = error
             if contract_attempt:
                 raise
+            # JSON形式の修復後にも残るID混同やplaceholder欠落は、翻訳自体を再生成する。
             print(
                 f"LLM: translations contract invalid ({error}); regenerating",
                 flush=True,
@@ -257,7 +259,9 @@ def _openai_translate_chunk(
                 "入力中の全__V5_PROTECTED_n__文字列を完全に保持し、各IDの内容を"
                 "他のIDへ移動・統合せずに再出力してください。"
             )
-    raise RuntimeError("translation contract response loop ended unexpectedly") from last_error
+    raise RuntimeError(
+        "translation contract response loop ended unexpectedly"
+    ) from last_error
 
 
 @observed("translate-page", capture_input=False)

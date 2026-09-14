@@ -138,6 +138,7 @@ def chunk_units(units: list[str], size: int = 1_000, overlap: int = 100) -> list
     chunks: list[Chunk] = []
     for unit_index, unit in enumerate(units):
         current = ""
+        # まず見出し・段落境界を尊重し、長すぎる意味単位だけ機械的に分割する。
         for part in _semantic_parts(unit):
             segments = [
                 part[index : index + size] for index in range(0, len(part), size)
@@ -146,6 +147,7 @@ def chunk_units(units: list[str], size: int = 1_000, overlap: int = 100) -> list
                 candidate = f"{current}\n\n{segment}".strip() if current else segment
                 if current and len(candidate) > size:
                     chunks.append(Chunk(current, unit_index, len(chunks)))
+                    # 境界付近の語を検索できるよう、確定chunkの末尾だけを次へ重ねる。
                     prefix = current[-overlap:] if overlap else ""
                     current = f"{prefix}\n\n{segment}".strip()
                 else:
@@ -182,6 +184,7 @@ def register_documents(
         source = path.relative_to(root).as_posix()
         chunks = chunk_units(extract_units(path))
         vectors = embeddings(settings, [chunk.text for chunk in chunks])
+        # revisionをUUID材料へ含め、旧版と新版を同時保持できるID空間にする。
         points = [
             models.PointStruct(
                 id=str(uuid5(NAMESPACE_URL, f"{source}:{revision}:{chunk.index}")),

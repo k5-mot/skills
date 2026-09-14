@@ -46,11 +46,13 @@ def atomic_write_text(path: Path, value: str) -> None:
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    # os.replaceのatomic性を保つため、一時fileは必ず置換先と同じdirectoryへ作る。
     descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             stream.write(value)
             stream.flush()
+            # stateだけ先に見えて成果物が未永続化、というResume時の不整合を避ける。
             os.fsync(stream.fileno())
         os.replace(temporary, path)
     except BaseException:
@@ -194,6 +196,7 @@ def invalidate_state(
         ValueError: 入力が変わりforceがない場合。
     """
 
+    # 異なるPDFへ過去のページ成果物を流用することは、明示的なforce時だけ許す。
     if state.get("source_hash") != source_hash:
         if not force:
             raise ValueError("input PDF changed; use --force to rebuild")
@@ -203,6 +206,7 @@ def invalidate_state(
             for stage in ("structure", "translate", "review"):
                 page[stage] = "pending"
         state["source_hash"] = source_hash
+    # 複数設定が変わった場合は、最も上流の変更点から後続をまとめて無効化する。
     starts: list[int] = []
     old = state.get("config", {})
     if force:
