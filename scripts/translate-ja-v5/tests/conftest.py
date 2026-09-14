@@ -31,6 +31,7 @@ def isolate_local_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
         "LANGFUSE_PUBLIC_KEY",
         "LANGFUSE_SECRET_KEY",
         "LANGFUSE_BASE_URL",
+        "LANGFUSE_MEDIA_ENABLED",
     ):
         monkeypatch.delenv(name, raising=False)
 

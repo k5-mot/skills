@@ -41,11 +41,12 @@ uv sync --all-groups
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key | 任意、secret keyと対で指定 |
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key | 任意、public keyと対で指定 |
 | `LANGFUSE_BASE_URL` | self-hosted Langfuse URL | 任意 |
+| `LANGFUSE_MEDIA_ENABLED` | ページ画像のLangfuse upload | 任意、既定は無効。`true`で有効 |
 | `LLM_CONTEXT_TOKENS` | 総context予算 | 任意、既定`50000` |
 | `LLM_OUTPUT_TOKENS` | 出力予約 | 任意、既定`8192` |
 | `LLM_IMAGE_TOKENS` | 画像予約 | 任意、既定`4096` |
 
-Langfuseの認証情報が設定されている場合、原文、訳文、Rules、prompt、response、RAG本文、修正、Review指摘、ページ画像を含む文書内容全体を記録します。機密文書では、Langfuseの保存先とアクセス制御を確認するか、認証情報を設定せずに実行してください。認証情報自体はtraceへ記録しません。
+Langfuseの認証情報が設定されている場合、原文、訳文、Rules、prompt、response、RAG本文、修正、Review指摘を記録します。ページ画像のuploadは既定で無効です。必要な場合だけ`LANGFUSE_MEDIA_ENABLED=true`を設定してください。機密文書では、Langfuseの保存先とアクセス制御を確認するか、認証情報を設定せずに実行してください。認証情報自体はtraceへ記録しません。
 
 ## 翻訳
 

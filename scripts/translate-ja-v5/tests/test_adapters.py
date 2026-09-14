@@ -176,10 +176,10 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
         assert "修復" in repair_messages[-1]["content"]
 
 
-def test_langfuse_media_passes_image_content_type(
+def test_langfuse_media_is_opt_in(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """LangfuseMediaへfile pathとMIME typeを両方渡すことを確認する。
+    """Langfuse画像を既定で無効にし、明示設定時だけ生成する。
 
     Args:
         monkeypatch: LangfuseMediaを差し替えるfixture。
@@ -192,6 +192,8 @@ def test_langfuse_media_passes_image_content_type(
     image = tmp_path / "page.png"
     image.write_bytes(b"png")
     monkeypatch.setattr(langfuse_adapter, "LangfuseMedia", dict)
+    assert langfuse_adapter.media(image) is None
+    monkeypatch.setenv("LANGFUSE_MEDIA_ENABLED", "true")
     assert langfuse_adapter.media(image) == {
         "file_path": str(image),
         "content_type": "image/png",

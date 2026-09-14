@@ -170,7 +170,7 @@ LLM呼出しはLiteLLM経由の`/v1/chat/completions`、JSON Schema structured o
 - **THEN** 再試行せず対象工程を失敗させる
 
 ### Requirement: 任意のLangfuse記録
-Langfuse認証情報が完全に設定されている場合、実行、工程、ページおよびReview処理を階層的に記録しなければならない（SHALL）。原文、訳文、prompt、response、RAG本文、修正内容、Review指摘およびページ画像を記録し、認証情報を記録してはならない（SHALL NOT）。
+Langfuse認証情報が完全に設定されている場合、実行、工程、ページおよびReview処理を階層的に記録しなければならない（SHALL）。原文、訳文、prompt、response、RAG本文、修正内容およびReview指摘を記録し、認証情報を記録してはならない（SHALL NOT）。ページ画像のuploadは既定で無効とし、`LANGFUSE_MEDIA_ENABLED=true`の場合だけ記録しなければならない（SHALL）。
 
 #### Scenario: Langfuseを設定しない
 - **WHEN** Langfuse認証情報が一つも設定されていない

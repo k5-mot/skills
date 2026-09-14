@@ -72,16 +72,23 @@ def _enabled() -> bool:
     return bool(os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"))
 
 
-def media(path: Path) -> LangfuseMedia:
-    """ページ画像をLangfuseで記録可能なmedia値へ変換する。
+def media(path: Path) -> LangfuseMedia | None:
+    """明示的に有効化されたページ画像をLangfuse mediaへ変換する。
 
     Args:
         path: 記録する画像file。
 
     Returns:
-        遅延uploadされるLangfuseMedia。
+        遅延uploadされるLangfuseMedia。既定ではNone。
     """
 
+    if os.getenv("LANGFUSE_MEDIA_ENABLED", "").casefold() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return None
     return LangfuseMedia(file_path=str(path), content_type=cast(Any, "image/png"))
 
 

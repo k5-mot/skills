@@ -113,7 +113,7 @@ Reviewは「指摘の有無」「Verifier合否」「一度だけの差戻し」
 
 LangfuseのPython SDKによる関数観測とLLM client統合を使い、top-level workflow、内部工程、ページ、Review nodeの順にspanを入れ子化する。LangfuseはLangGraphの有無ではなく、観測対象関数とLLM呼出しを基準にtraceを構成できるため、単純な関数呼出しとの相性は問題にならない。
 
-LiteLLM proxy側のcallbackとPython側計装を併用すると同じLLM呼出しが二重記録されるため、v5の契約はPython側だけとする。設定がない場合はno-op、不完全な場合は開始前エラー、送信障害は警告として主処理を継続する。機密情報は除外するが、利用者の明示要件に従い原文、訳文、prompt、response、RAG本文、修正、指摘およびページ画像は記録する。
+LiteLLM proxy側のcallbackとPython側計装を併用すると同じLLM呼出しが二重記録されるため、v5の契約はPython側だけとする。設定がない場合はno-op、不完全な場合は開始前エラー、送信障害は警告として主処理を継続する。機密情報は除外するが、利用者の明示要件に従い原文、訳文、prompt、response、RAG本文、修正および指摘は記録する。ページ画像のuploadは既定で無効とし、`LANGFUSE_MEDIA_ENABLED=true`の場合だけ記録する。
 
 ### 5. 小さな文書モデルへ早期変換する
 
