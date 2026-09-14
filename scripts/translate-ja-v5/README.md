@@ -205,4 +205,4 @@ uv run python scripts/translate-ja-v5/translate.py register --doc-path reference
 uv run python scripts/translate-ja-v5/translate.py register --doc-dir references/
 ```
 
-環境変数、Resume条件、Rules、制約の詳細は[利用者向けドキュメント](../../docs/translate-ja-v5.md)を参照してください。
+環境変数、Resume条件、Rules、制約の詳細は[利用者向けドキュメント](../../docs/translate-ja-v5.md)を参照してください。Docling JSONから変換する型の詳細は[内部文書スキーマ](docs/internal-document-schema.md)に記載しています。
