@@ -4,13 +4,35 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 
+from src import config  # noqa: E402
 from src.config import Settings  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def isolate_local_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """unit testが開発者の実`.env`を読まないようにする。
+
+    Args:
+        monkeypatch: dotenv読込みとprocess環境を隔離するfixture。
+
+    Returns:
+        なし。
+    """
+
+    monkeypatch.setattr(config, "load_dotenv", Mock(return_value=False))
+    for name in (
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture
