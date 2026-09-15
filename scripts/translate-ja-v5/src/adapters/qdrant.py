@@ -64,7 +64,7 @@ def search(settings: Settings, query: str, limit: int = 5) -> list[dict[str, Any
 def replace_revision(
     settings: Settings, points: list[models.PointStruct], source: str, revision: str
 ) -> None:
-    """新revisionを検証後に同じsourceの旧revisionだけ削除する。
+    """collectionを用意し、新revision検証後に旧revisionだけ削除する。
 
     Args:
         settings: Qdrant接続とcollection設定。
@@ -82,7 +82,21 @@ def replace_revision(
     collection = settings.qdrant_collection
     if not collection:
         raise ValueError("QDRANT_COLLECTION is required")
+    if not points:
+        raise ValueError("at least one Qdrant point is required")
     client = _client(settings)
+    if not retry_call(lambda: client.collection_exists(collection_name=collection)):
+        vector = points[0].vector
+        if not isinstance(vector, list) or not vector:
+            raise ValueError("a non-empty dense vector is required")
+        retry_call(
+            lambda: client.create_collection(
+                collection_name=collection,
+                vectors_config=models.VectorParams(
+                    size=len(vector), distance=models.Distance.COSINE
+                ),
+            )
+        )
     # 旧revisionを先に消さず、新revisionが検索可能になるまで現行データを保持する。
     retry_call(
         lambda: client.upsert(collection_name=collection, points=points, wait=True)

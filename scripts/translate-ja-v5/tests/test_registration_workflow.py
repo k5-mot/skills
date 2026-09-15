@@ -153,6 +153,18 @@ def test_qdrant_verifies_new_revision_before_delete(
     class Client:
         """Qdrant置換順序を記録するtest double。"""
 
+        def collection_exists(self, **_kwargs: Any) -> bool:
+            """既存collectionを返す。
+
+            Args:
+                _kwargs: 未使用collection指定。
+
+            Returns:
+                True。
+            """
+
+            return True
+
         def upsert(self, **_kwargs: Any) -> None:
             """upsert呼出しを記録する。
 
@@ -238,6 +250,18 @@ def test_qdrant_deletes_only_after_successful_verification(
     class Client:
         """成功するQdrant置換のtest double。"""
 
+        def collection_exists(self, **_kwargs: Any) -> bool:
+            """既存collectionを返す。
+
+            Args:
+                _kwargs: 未使用collection指定。
+
+            Returns:
+                True。
+            """
+
+            return True
+
         def upsert(self, **_kwargs: Any) -> None:
             """upsert呼出しを記録する。
 
@@ -281,6 +305,109 @@ def test_qdrant_deletes_only_after_successful_verification(
     assert calls == ["upsert", "retrieve", "delete"]
 
 
+def test_qdrant_creates_missing_collection_before_upsert(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """未作成collectionをvector次元に合わせて作ってから登録する。
+
+    Args:
+        monkeypatch: Qdrant clientを差し替えるfixture。
+        settings: 共通Settings fixture。
+
+    Returns:
+        なし。
+    """
+
+    configured = replace(
+        settings, qdrant_url="http://qdrant", qdrant_collection="review"
+    )
+    calls: list[tuple[str, dict[str, Any]]] = []
+    point = qdrant.models.PointStruct(
+        id="00000000-0000-0000-0000-000000000001",
+        vector=[1.0, 0.0],
+        payload={},
+    )
+
+    class Client:
+        """collection作成と登録順を記録するtest double。"""
+
+        def collection_exists(self, **kwargs: Any) -> bool:
+            """collection未作成を返す。
+
+            Args:
+                kwargs: collection指定。
+
+            Returns:
+                False。
+            """
+
+            calls.append(("exists", kwargs))
+            return False
+
+        def create_collection(self, **kwargs: Any) -> None:
+            """collection作成引数を記録する。
+
+            Args:
+                kwargs: collectionとvector設定。
+
+            Returns:
+                なし。
+            """
+
+            calls.append(("create", kwargs))
+
+        def upsert(self, **kwargs: Any) -> None:
+            """point登録を記録する。
+
+            Args:
+                kwargs: upsert引数。
+
+            Returns:
+                なし。
+            """
+
+            calls.append(("upsert", kwargs))
+
+        def retrieve(self, **kwargs: Any) -> list[SimpleNamespace]:
+            """登録済みpointを返す。
+
+            Args:
+                kwargs: retrieve引数。
+
+            Returns:
+                登録済みpoint。
+            """
+
+            calls.append(("retrieve", kwargs))
+            return [SimpleNamespace(id=point.id)]
+
+        def delete(self, **kwargs: Any) -> None:
+            """旧revision削除を記録する。
+
+            Args:
+                kwargs: delete引数。
+
+            Returns:
+                なし。
+            """
+
+            calls.append(("delete", kwargs))
+
+    monkeypatch.setattr(qdrant, "_client", lambda _settings: Client())
+    qdrant.replace_revision(configured, [point], "source.md", "new")
+    assert [name for name, _kwargs in calls] == [
+        "exists",
+        "create",
+        "upsert",
+        "retrieve",
+        "delete",
+    ]
+    create = calls[1][1]
+    assert create["collection_name"] == "review"
+    assert create["vectors_config"].size == 2
+    assert create["vectors_config"].distance == qdrant.models.Distance.COSINE
+
+
 def test_every_qdrant_operation_uses_shared_retry(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> None:
@@ -304,6 +431,18 @@ def test_every_qdrant_operation_uses_shared_retry(
 
     class Client:
         """各operationを一度だけ失敗させるQdrant test double。"""
+
+        def collection_exists(self, **_kwargs: Any) -> bool:
+            """既存collectionを返す。
+
+            Args:
+                _kwargs: 未使用collection指定。
+
+            Returns:
+                True。
+            """
+
+            return True
 
         def _temporary_once(self, name: str) -> None:
             """指定operationの初回だけ一時例外を送出する。
@@ -432,6 +571,18 @@ def test_qdrant_delete_failure_is_recoverable_and_rerun_converges(
 
     class Client:
         """置換失敗と再実行を模擬する共有状態client。"""
+
+        def collection_exists(self, **_kwargs: Any) -> bool:
+            """既存collectionを返す。
+
+            Args:
+                _kwargs: 未使用collection指定。
+
+            Returns:
+                True。
+            """
+
+            return True
 
         def upsert(self, **kwargs: Any) -> None:
             """新revisionを冪等に保存する。
