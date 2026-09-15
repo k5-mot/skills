@@ -352,6 +352,47 @@ def test_normalize_rejects_picture_without_asset() -> None:
         normalize_docling(document)
 
 
+@pytest.mark.parametrize(
+    "mimetype",
+    [
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ],
+)
+def test_normalize_places_pageless_office_document_on_virtual_page(
+    mimetype: str,
+) -> None:
+    """pageを持たないDocling Office文書を仮想ページ1へ正規化する。
+
+    Args:
+        mimetype: DOCXまたはPPTXのMIME type。
+
+    Returns:
+        なし。
+    """
+
+    document = _docling_document()
+    document["origin"] = {"mimetype": mimetype}
+    document["pages"] = {}
+    normalized = normalize_docling(document)
+    assert [page.number for page in normalized.pages] == [1]
+    assert normalized.pages[0].blocks
+
+
+def test_normalize_rejects_pageless_pdf() -> None:
+    """PDFの空pagesは破損したDocling応答として拒否する。
+
+    Returns:
+        なし。
+    """
+
+    document = _docling_document()
+    document["origin"] = {"mimetype": "application/pdf"}
+    document["pages"] = {}
+    with pytest.raises(ValueError, match="pages must be a non-empty object"):
+        normalize_docling(document)
+
+
 @pytest.mark.parametrize(("label", "kind"), sorted(TEXT_KINDS.items()))
 def test_normalize_maps_every_supported_text_label(label: str, kind: BlockKind) -> None:
     """全ての既知Docling text labelを対応Blockへ変換する。

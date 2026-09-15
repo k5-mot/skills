@@ -584,8 +584,18 @@ def normalize_docling(document: dict[str, Any]) -> Document:
     if document.get("schema_name") != "DoclingDocument":
         raise ValueError(f"unsupported Docling schema: {document.get('schema_name')!r}")
     raw_pages = document.get("pages")
-    if not isinstance(raw_pages, dict) or not raw_pages:
+    if not isinstance(raw_pages, dict):
         raise ValueError("Docling pages must be a non-empty object")
+    if not raw_pages:
+        origin = document.get("origin", {})
+        mimetype = origin.get("mimetype") if isinstance(origin, dict) else None
+        if mimetype not in {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        }:
+            raise ValueError("Docling pages must be a non-empty object")
+        # Office文書はDoclingがpageを返さないため、全要素を仮想ページへ載せる。
+        raw_pages = {"1": {}}
     pages: dict[int, Page] = {}
     for raw_number, raw_page in raw_pages.items():
         number = int(raw_number)

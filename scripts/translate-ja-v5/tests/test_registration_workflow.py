@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,6 +11,7 @@ import pytest
 
 from src.adapters import qdrant
 from src.config import Settings
+from src.model import Block, Document, Inline, Page
 from src.workflows import register
 
 
@@ -39,6 +40,7 @@ def test_collect_files_filters_hidden_empty_and_unsupported(tmp_path: Path) -> N
     """
 
     (tmp_path / "ok.md").write_text("text", encoding="utf-8")
+    (tmp_path / "slides.pptx").write_bytes(b"presentation")
     (tmp_path / "empty.txt").touch()
     (tmp_path / "skip.bin").write_bytes(b"x")
     hidden = tmp_path / ".hidden"
@@ -46,48 +48,106 @@ def test_collect_files_filters_hidden_empty_and_unsupported(tmp_path: Path) -> N
     (hidden / "secret.md").write_text("secret", encoding="utf-8")
     root, files = register.collect_files(None, tmp_path)
     assert root == tmp_path.resolve()
-    assert files == [(tmp_path / "ok.md").resolve()]
+    assert files == [
+        (tmp_path / "ok.md").resolve(),
+        (tmp_path / "slides.pptx").resolve(),
+    ]
 
 
-def test_extract_units_supports_all_formats(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_extract_units_routes_binary_formats_through_docling_normalize(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings, tmp_path: Path
 ) -> None:
-    """PDF、DOCX、Markdown、UTF-8 textの抽出routeを確認する。
+    """PDF、DOCX、PPTXを共通のDocling Parse、Normalizeへ通す。
 
     Args:
-        monkeypatch: PDFとPandoc抽出を差し替えるfixture。
+        monkeypatch: Docling ParseとNormalizeを差し替えるfixture。
+        settings: 共通Settings fixture。
         tmp_path: pytest一時directory。
 
     Returns:
         なし。
     """
 
-    pdf, docx, markdown, text = (
-        tmp_path / name for name in ("a.pdf", "a.docx", "a.md", "a.txt")
+    configured = replace(settings, docling_url="http://docling")
+    pdf, docx, pptx, markdown, text = (
+        tmp_path / name for name in ("a.pdf", "a.docx", "a.pptx", "a.md", "a.txt")
     )
-    for path in (pdf, docx):
+    for path in (pdf, docx, pptx):
         path.write_bytes(b"binary")
     markdown.write_text("# Heading", encoding="utf-8")
     text.write_text("Plain", encoding="utf-8")
-    monkeypatch.setattr(register, "pdf_pages_text", lambda _path: ["PDF page"])
-    monkeypatch.setattr(register, "docx_to_text", lambda _path: "DOCX body")
-    assert register.extract_units(pdf) == ["PDF page"]
-    assert register.extract_units(docx) == ["DOCX body"]
-    assert register.extract_units(markdown) == ["# Heading"]
-    assert register.extract_units(text) == ["Plain"]
+    parsed: list[str] = []
+
+    def convert(source: Path, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        """Parse対象の拡張子を記録する。
+
+        Args:
+            source: Parse対象文書。
+            _args: 未使用の位置引数。
+            _kwargs: 未使用のkeyword引数。
+
+        Returns:
+            入力形式だけを持つ模擬Docling文書。
+        """
+
+        parsed.append(source.suffix)
+        return {"source": source.suffix}
+
+    document = Document(
+        pages=[
+            Page(
+                number=1,
+                blocks=[
+                    Block(
+                        id="heading",
+                        order=0,
+                        kind="heading",
+                        level=1,
+                        source=[Inline(id="heading:0", text="Heading")],
+                    ),
+                    Block(
+                        id="body",
+                        order=1,
+                        kind="paragraph",
+                        source=[Inline(id="body:0", text="Body")],
+                    ),
+                ],
+            )
+        ]
+    )
+    monkeypatch.setattr(register, "convert_document", convert)
+    monkeypatch.setattr(register, "normalize_docling", lambda _parsed: document)
+    for path in (pdf, docx, pptx):
+        assert register.extract_units(path, configured) == ["# Heading\n\nBody"]
+    assert parsed == [".pdf", ".docx", ".pptx"]
+    assert register.extract_units(markdown, configured) == ["# Heading"]
+    assert register.extract_units(text, configured) == ["Plain"]
 
 
-def test_chunk_units_preserves_boundaries_and_overlap() -> None:
-    """意味境界優先のchunkが上限とoverlapを満たすことを確認する。
+def test_chunk_units_joins_whole_blocks_up_to_limit() -> None:
+    """意味blockを分割せず上限まで連結することを確認する。
 
     Returns:
         なし。
     """
 
-    chunks = register.chunk_units(["A" * 70 + "\n\n" + "B" * 70], size=100, overlap=10)
+    chunks = register.chunk_units(["A" * 70 + "\n\n" + "B" * 70], size=100)
     assert len(chunks) == 2
-    assert chunks[1].text.startswith("A" * 10)
-    assert all(len(chunk.text) <= 100 for chunk in chunks)
+    assert chunks[0].text == "A" * 70
+    assert chunks[1].text == "B" * 70
+
+
+def test_chunk_units_uses_1500_character_default() -> None:
+    """既定値では区切り込み1,500文字までを一chunkへ連結する。
+
+    Returns:
+        なし。
+    """
+
+    joined = register.chunk_units(["A" * 749 + "\n\n" + "B" * 749])
+    split = register.chunk_units(["A" * 750 + "\n\n" + "B" * 750])
+    assert [len(chunk.text) for chunk in joined] == [1_500]
+    assert [len(chunk.text) for chunk in split] == [750, 750]
 
 
 def test_chunk_units_keeps_markdown_heading_with_its_body() -> None:
@@ -98,7 +158,7 @@ def test_chunk_units_keeps_markdown_heading_with_its_body() -> None:
     """
 
     chunks = register.chunk_units(
-        ["# Alpha\n\nAlpha body\n\n# Beta\n\nBeta body"], size=30, overlap=0
+        ["# Alpha\n\nAlpha body\n\n# Beta\n\nBeta body"], size=30
     )
     assert [chunk.text for chunk in chunks] == [
         "# Alpha\n\nAlpha body",
@@ -114,8 +174,23 @@ def test_chunk_units_does_not_split_oversized_heading_block() -> None:
     """
 
     source = "# Alpha\n\n" + "A" * 40
-    chunks = register.chunk_units([source], size=20, overlap=0)
+    chunks = register.chunk_units([source], size=20)
     assert [chunk.text for chunk in chunks] == [source]
+
+
+def test_chunk_units_keeps_consecutive_headings_with_following_body() -> None:
+    """連続見出しを後続本文と一つの意味blockにする。
+
+    Returns:
+        なし。
+    """
+
+    source = "# Chapter\n\n## Section\n\nBody\n\n# Next\n\nNext body"
+    chunks = register.chunk_units([source], size=40)
+    assert [chunk.text for chunk in chunks] == [
+        "# Chapter\n\n## Section\n\nBody",
+        "# Next\n\nNext body",
+    ]
 
 
 def test_register_uses_relative_source_and_stable_point_ids(
@@ -331,6 +406,93 @@ def test_qdrant_deletes_only_after_successful_verification(
     monkeypatch.setattr(qdrant, "_client", lambda _settings: Client())
     qdrant.replace_revision(configured, [point], "source.md", "new")
     assert calls == ["upsert", "retrieve", "delete"]
+
+
+def test_qdrant_sends_large_revisions_in_fixed_batches(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """Qdrant登録と確認を64件ずつ送り、全確認後だけ旧版を削除する。
+
+    Args:
+        monkeypatch: Qdrant clientを差し替えるfixture。
+        settings: 共通Settings fixture。
+
+    Returns:
+        なし。
+    """
+
+    configured = replace(
+        settings, qdrant_url="http://qdrant", qdrant_collection="review"
+    )
+    points = [
+        qdrant.models.PointStruct(id=index, vector=[1.0], payload={})
+        for index in range(129)
+    ]
+    calls: list[tuple[str, int]] = []
+
+    class Client:
+        """Qdrant batch sizeと呼出し順序を記録するtest double。"""
+
+        def collection_exists(self, **_kwargs: Any) -> bool:
+            """既存collectionを返す。
+
+            Args:
+                _kwargs: 未使用collection指定。
+
+            Returns:
+                True。
+            """
+
+            return True
+
+        def upsert(self, **kwargs: Any) -> None:
+            """upsert batch件数を記録する。
+
+            Args:
+                kwargs: pointsを含むupsert引数。
+
+            Returns:
+                なし。
+            """
+
+            calls.append(("upsert", len(kwargs["points"])))
+
+        def retrieve(self, **kwargs: Any) -> list[SimpleNamespace]:
+            """retrieve batch件数を記録して全IDを返す。
+
+            Args:
+                kwargs: idsを含むretrieve引数。
+
+            Returns:
+                指定IDを持つpoint列。
+            """
+
+            calls.append(("retrieve", len(kwargs["ids"])))
+            return [SimpleNamespace(id=value) for value in kwargs["ids"]]
+
+        def delete(self, **_kwargs: Any) -> None:
+            """旧revision削除を記録する。
+
+            Args:
+                _kwargs: 未使用削除引数。
+
+            Returns:
+                なし。
+            """
+
+            calls.append(("delete", 0))
+
+    monkeypatch.setattr(qdrant, "_client", lambda _settings: Client())
+    qdrant.replace_revision(configured, points, "source.md", "new")
+    assert calls == [
+        ("upsert", 64),
+        ("upsert", 64),
+        ("upsert", 1),
+        ("retrieve", 64),
+        ("retrieve", 64),
+        ("retrieve", 1),
+        ("delete", 0),
+    ]
 
 
 def test_qdrant_creates_missing_collection_before_upsert(

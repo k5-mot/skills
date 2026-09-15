@@ -9,6 +9,8 @@ from qdrant_client import QdrantClient, models
 from src.adapters.llm import embeddings, retry_call
 from src.config import Settings
 
+QDRANT_BATCH_SIZE = 64
+
 
 def _client(settings: Settings) -> QdrantClient:
     """設定からQdrant clientを作る。
@@ -97,20 +99,28 @@ def replace_revision(
                 ),
             )
         )
-    # 旧revisionを先に消さず、新revisionが検索可能になるまで現行データを保持する。
-    retry_call(
-        lambda: client.upsert(collection_name=collection, points=points, wait=True)
-    )
-    ids = [point.id for point in points]
-    found = retry_call(
-        lambda: client.retrieve(
-            collection_name=collection,
-            ids=ids,
-            with_payload=False,
-            with_vectors=False,
+    # 大きな文書もrequest上限へ達しないよう、固定件数ずつ直列登録する。
+    for start in range(0, len(points), QDRANT_BATCH_SIZE):
+        batch = points[start : start + QDRANT_BATCH_SIZE]
+        retry_call(
+            lambda batch=batch: client.upsert(
+                collection_name=collection, points=batch, wait=True
+            )
         )
-    )
-    if {str(item.id) for item in found} != {str(item) for item in ids}:
+    ids = [point.id for point in points]
+    found_ids: set[str] = set()
+    for start in range(0, len(ids), QDRANT_BATCH_SIZE):
+        batch = ids[start : start + QDRANT_BATCH_SIZE]
+        found = retry_call(
+            lambda batch=batch: client.retrieve(
+                collection_name=collection,
+                ids=batch,
+                with_payload=False,
+                with_vectors=False,
+            )
+        )
+        found_ids.update(str(item.id) for item in found)
+    if found_ids != {str(item) for item in ids}:
         raise RuntimeError("Qdrant did not persist every new revision point")
     # 同じcollection・sourceの新revisionだけを残し、他文書には触れない。
     old_filter = models.Filter(

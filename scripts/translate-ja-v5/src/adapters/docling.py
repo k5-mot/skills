@@ -1,4 +1,4 @@
-"""Docling ServeへPDF変換を依頼してJSONとassetを保存する。"""
+"""Docling Serveへ文書変換を依頼してJSONとassetを保存する。"""
 
 from __future__ import annotations
 
@@ -19,6 +19,11 @@ from src.state import atomic_write_json
 
 COLLECTIONS = ("texts", "tables", "pictures", "key_value_items", "form_items", "groups")
 DOCLING_CHUNK_PAGES = 10
+CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
 
 
 def _safe_artifact_target(artifacts: Path, name: str) -> Path | None:
@@ -208,10 +213,10 @@ def _convert_one(
     api_key: str | None = None,
     poll_interval: float = 1.0,
 ) -> dict[str, Any]:
-    """一つのPDFをDoclingの非同期APIでJSONへ変換する。
+    """一つの文書をDoclingの非同期APIでJSONへ変換する。
 
     Args:
-        source: 入力PDF。
+        source: 入力PDF、DOCX、PPTX。
         artifacts: 画像等の保存先。
         base_url: Docling Serve URL。
         api_key: 任意API key。
@@ -228,18 +233,24 @@ def _convert_one(
     url = base_url.rstrip("/")
 
     def submit() -> httpx.Response:
-        """PDF streamを開き直してtaskを登録する。
+        """文書streamを開き直してtaskを登録する。
 
         Returns:
             Docling submit response。
         """
 
-        # retryごとにstreamを開き直し、二回目以降もPDF先頭から送信する。
+        # retryごとにstreamを開き直し、二回目以降も文書先頭から送信する。
         with source.open("rb") as stream:
             response = httpx.post(
                 f"{url}/v1/convert/file/async",
                 headers=_headers(api_key),
-                files={"files": (source.name, stream, "application/pdf")},
+                files={
+                    "files": (
+                        source.name,
+                        stream,
+                        CONTENT_TYPES[source.suffix.casefold()],
+                    )
+                },
                 data=_payload(),
                 timeout=300,
             )
@@ -373,3 +384,42 @@ def convert_pdf(
                 shutil.move(staged_artifacts, artifacts)
             atomic_write_json(output_json, document)
             return document
+
+
+def convert_document(
+    source: Path,
+    output_json: Path,
+    artifacts: Path,
+    base_url: str,
+    api_key: str | None = None,
+    poll_interval: float = 1.0,
+) -> dict[str, Any]:
+    """PDF、DOCX、PPTXをDocling JSONへ変換して保存する。
+
+    PDFは既存のページ分割処理を使い、Office文書は一文書として送信する。
+
+    Args:
+        source: 入力PDF、DOCX、PPTX。
+        output_json: raw JSON保存先。
+        artifacts: 画像等の保存先。
+        base_url: Docling Serve URL。
+        api_key: 任意API key。
+        poll_interval: status確認間隔。
+
+    Returns:
+        保存したDocling JSON object。
+
+    Raises:
+        ValueError: 未対応形式の場合。
+    """
+
+    suffix = source.suffix.casefold()
+    if suffix not in CONTENT_TYPES:
+        raise ValueError(f"unsupported Docling document: {source}")
+    if suffix == ".pdf":
+        return convert_pdf(
+            source, output_json, artifacts, base_url, api_key, poll_interval
+        )
+    document = _convert_one(source, artifacts, base_url, api_key, poll_interval)
+    atomic_write_json(output_json, document)
+    return document

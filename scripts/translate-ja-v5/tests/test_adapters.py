@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -432,6 +433,67 @@ def test_docling_extracts_one_json_and_safe_assets(tmp_path: Path) -> None:
     assert (tmp_path / "assets" / "image.png").read_bytes() == b"png"
     assert not (tmp_path / "escape.txt").exists()
     assert [path.name for path in (tmp_path / "assets").iterdir()] == ["image.png"]
+
+
+@pytest.mark.parametrize(
+    ("suffix", "content_type"),
+    [
+        (
+            ".docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        (
+            ".pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
+    ],
+)
+def test_docling_converts_office_documents_with_shared_flow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    suffix: str,
+    content_type: str,
+) -> None:
+    """Office文書を対応MIME typeで既存の単文書変換へ渡す。
+
+    Args:
+        monkeypatch: Docling単文書変換を差し替えるfixture。
+        tmp_path: pytest一時directory。
+        suffix: 検証するOffice拡張子。
+        content_type: 期待するMIME type。
+
+    Returns:
+        なし。
+    """
+
+    source = tmp_path / f"source{suffix}"
+    source.write_bytes(b"document")
+    called: list[Path] = []
+    document = {"schema_name": "DoclingDocument", "pages": {"1": {}}}
+
+    def convert_one(path: Path, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        """単文書変換の入力pathを記録する。
+
+        Args:
+            path: 変換対象文書。
+            _args: 未使用の位置引数。
+            _kwargs: 未使用のkeyword引数。
+
+        Returns:
+            固定Docling文書。
+        """
+
+        called.append(path)
+        return document
+
+    monkeypatch.setattr(docling, "_convert_one", convert_one)
+    output = tmp_path / "parsed.json"
+    assert docling.convert_document(
+        source, output, tmp_path / "assets", "http://docling"
+    ) == document
+    assert called == [source]
+    assert json.loads(output.read_text(encoding="utf-8")) == document
+    assert docling.CONTENT_TYPES[suffix] == content_type
 
 
 def test_docx_to_text_decodes_pandoc_output_as_utf8(
