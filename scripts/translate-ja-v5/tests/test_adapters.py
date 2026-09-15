@@ -92,6 +92,52 @@ def test_retry_call_does_not_retry_other_4xx() -> None:
     assert attempts == 1
 
 
+def test_embeddings_are_sent_one_at_a_time(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """Embedding入力を一件ずつ直列送信する。
+
+    Args:
+        monkeypatch: OpenAI clientを差し替えるfixture。
+        settings: 共通Settings fixture。
+
+    Returns:
+        なし。
+    """
+
+    calls: list[dict[str, Any]] = []
+
+    class Embeddings:
+        """Embedding APIのtest double。"""
+
+        def create(self, **kwargs: Any) -> Any:
+            """requestを記録して入力順のvectorを返す。
+
+            Args:
+                kwargs: Embedding API引数。
+
+            Returns:
+                batch内indexを持つ模擬response。
+            """
+
+            calls.append(kwargs)
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(index=index, embedding=[float(value)])
+                    for index, value in enumerate(kwargs["input"])
+                ]
+            )
+
+    monkeypatch.setattr(
+        llm, "_client", lambda _settings: SimpleNamespace(embeddings=Embeddings())
+    )
+    assert llm.embeddings(settings, [str(index) for index in range(10)]) == [
+        [float(index)] for index in range(10)
+    ]
+    assert [len(call["input"]) for call in calls] == [1] * 10
+    assert all(call["encoding_format"] == "float" for call in calls)
+
+
 @pytest.mark.parametrize(
     ("responses", "schema"),
     [

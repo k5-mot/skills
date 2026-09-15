@@ -238,7 +238,7 @@ def structured_chat(
 
 @observed("llm-embeddings", capture_input=False)
 def embeddings(settings: Settings, texts: list[str]) -> list[list[float]]:
-    """OpenAI互換Embedding APIで文字列列をvector化する。
+    """OpenAI互換Embedding APIで文字列列を一件ずつvector化する。
 
     Args:
         settings: APIとEmbedding model設定。
@@ -251,12 +251,19 @@ def embeddings(settings: Settings, texts: list[str]) -> list[list[float]]:
     if not settings.embedding_model:
         raise ValueError("OPENAI_EMBEDDING_MODEL is required")
     update_current(input={"model": settings.embedding_model, "texts": texts})
-    response = retry_call(
-        lambda: _client(settings).embeddings.create(
-            model=settings.embedding_model or "", input=texts
+    client = _client(settings)
+    values: list[list[float]] = []
+    for text in texts:
+        response = retry_call(
+            lambda text=text: client.embeddings.create(
+                model=settings.embedding_model or "",
+                input=[text],
+                encoding_format="float",
+            )
         )
-    )
-    ordered = sorted(response.data, key=lambda item: item.index)
-    values = [list(item.embedding) for item in ordered]
+        values.extend(
+            list(item.embedding)
+            for item in sorted(response.data, key=lambda item: item.index)
+        )
     update_current(output={"vector_count": len(values)})
     return values
