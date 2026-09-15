@@ -90,6 +90,34 @@ def test_chunk_units_preserves_boundaries_and_overlap() -> None:
     assert all(len(chunk.text) <= 100 for chunk in chunks)
 
 
+def test_chunk_units_keeps_markdown_heading_with_its_body() -> None:
+    """Markdown見出しを対応本文と同じblockとしてchunkへ入れる。
+
+    Returns:
+        なし。
+    """
+
+    chunks = register.chunk_units(
+        ["# Alpha\n\nAlpha body\n\n# Beta\n\nBeta body"], size=30, overlap=0
+    )
+    assert [chunk.text for chunk in chunks] == [
+        "# Alpha\n\nAlpha body",
+        "# Beta\n\nBeta body",
+    ]
+
+
+def test_chunk_units_does_not_split_oversized_heading_block() -> None:
+    """上限超過時もMarkdown見出しblockを本文から分離しない。
+
+    Returns:
+        なし。
+    """
+
+    source = "# Alpha\n\n" + "A" * 40
+    chunks = register.chunk_units([source], size=20, overlap=0)
+    assert [chunk.text for chunk in chunks] == [source]
+
+
 def test_register_uses_relative_source_and_stable_point_ids(
     monkeypatch: pytest.MonkeyPatch, settings: Settings, tmp_path: Path
 ) -> None:

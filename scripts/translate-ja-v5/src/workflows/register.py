@@ -107,7 +107,7 @@ def extract_units(path: Path) -> list[str]:
 
 
 def _semantic_parts(text: str) -> list[str]:
-    """本文を空行または見出し境界の意味単位へ分ける。
+    """Markdown見出しと対応本文を一つの意味単位へまとめる。
 
     Args:
         text: 分割する本文。
@@ -116,11 +116,23 @@ def _semantic_parts(text: str) -> list[str]:
         空でない意味単位列。
     """
 
-    return [
+    headings = list(re.finditer(r"^#{1,6}\s", text, flags=re.MULTILINE))
+    if not headings:
+        return [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+    parts = [
         part.strip()
-        for part in re.split(r"\n\s*\n|(?=^#{1,6}\s)", text, flags=re.MULTILINE)
+        for part in re.split(r"\n\s*\n", text[: headings[0].start()])
         if part.strip()
     ]
+    parts.extend(
+        text[heading.start() : next_start].strip()
+        for heading, next_start in zip(
+            headings,
+            [item.start() for item in headings[1:]] + [len(text)],
+            strict=True,
+        )
+    )
+    return [part for part in parts if part]
 
 
 def chunk_units(units: list[str], size: int = 1_000, overlap: int = 100) -> list[Chunk]:
@@ -138,11 +150,14 @@ def chunk_units(units: list[str], size: int = 1_000, overlap: int = 100) -> list
     chunks: list[Chunk] = []
     for unit_index, unit in enumerate(units):
         current = ""
-        # まず見出し・段落境界を尊重し、長すぎる意味単位だけ機械的に分割する。
+        # 見出しblockだけは検索文脈を壊さないよう上限超過時も分割しない。
         for part in _semantic_parts(unit):
-            segments = [
-                part[index : index + size] for index in range(0, len(part), size)
-            ] or [part]
+            heading_block = bool(re.match(r"^#{1,6}\s", part))
+            segments = (
+                [part]
+                if heading_block
+                else [part[index : index + size] for index in range(0, len(part), size)]
+            )
             for segment in segments:
                 candidate = f"{current}\n\n{segment}".strip() if current else segment
                 if current and len(candidate) > size:
@@ -152,9 +167,10 @@ def chunk_units(units: list[str], size: int = 1_000, overlap: int = 100) -> list
                     current = f"{prefix}\n\n{segment}".strip()
                 else:
                     current = candidate
-                while len(current) > size:
-                    chunks.append(Chunk(current[:size], unit_index, len(chunks)))
-                    current = current[max(0, size - overlap) :]
+                if not heading_block:
+                    while len(current) > size:
+                        chunks.append(Chunk(current[:size], unit_index, len(chunks)))
+                        current = current[max(0, size - overlap) :]
         if current:
             chunks.append(Chunk(current, unit_index, len(chunks)))
     return chunks
