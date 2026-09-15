@@ -37,7 +37,7 @@ uv sync --all-groups
 | `LIBRETRANSLATE_API_KEY` | LibreTranslate認証 | 接続先が要求する場合 |
 | `QDRANT_URL` | Qdrant URL | Qdrant使用時、`register` |
 | `QDRANT_API_KEY` | Qdrant認証 | 接続先が要求する場合 |
-| `QDRANT_COLLECTION` | 既存Review collection | Qdrant使用時、`register` |
+| `QDRANT_COLLECTION` | Review collection名 | Qdrant使用時、`register` |
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key | 任意、secret keyと対で指定 |
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key | 任意、public keyと対で指定 |
 | `LANGFUSE_BASE_URL` | self-hosted Langfuse URL | 任意 |
@@ -147,7 +147,7 @@ uv run python scripts/translate-ja-v5/translate.py register --doc-path reference
 uv run python scripts/translate-ja-v5/translate.py register --doc-dir references/
 ```
 
-対応形式はPDF、DOCX、Markdown、UTF-8 textです。directoryは再帰探索され、隠しfileと空fileは無視されます。同じsourceが更新された場合は、新revisionをすべてupsertして取得確認した後、同じsourceの旧revisionだけを削除します。新revision登録に失敗した場合は旧revisionを残します。
+対応形式はPDF、DOCX、Markdown、UTF-8 textです。directoryは再帰探索され、隠しfileと空fileは無視されます。Markdown見出しから次の見出し直前までを本文と一体のblockにし、そのblockを規定文字数まで連結してchunk化します。見出しblock自体が上限を超える場合も、見出しと本文を分離しません。Embeddingは入力を一件ずつ直列送信します。`QDRANT_COLLECTION`が存在しない場合は、最初のEmbedding次元とCosine距離を使って自動作成します。既存collectionにはfileを追加し、同じsourceが更新された場合は、新revisionをすべてupsertして取得確認した後、同じsourceの旧revisionだけを削除します。新revision登録に失敗した場合は旧revisionを残します。
 
 Docling ServeへはPDFを最大10ページずつ送り、結果の参照、ページ番号、asset URIを全体文書用に再構成します。非同期完了statusは、現行の`task_status`と旧形式の`status`の両方に対応します。実行中は`Docling: chunk 1/36 pages 1-10 started`や`Docling: started`のように、チャンク進捗とstatus変化を表示します。Structure、Translate、Reviewは実行対象ページの開始・完了を表示し、LiteLLM呼出しは`LLM: translations attempt 1/2 started`のようにschema名と構造化応答の再生成状況を表示します。Docling Serve、LiteLLM、LibreTranslate、Qdrantへの通信障害、408、429、5xxは最大3回まで指数backoffで再試行します。最終DOCXは一時packageの整合性を確認してからatomic置換するため、Pandoc失敗時に既存DOCXを上書きしません。
 

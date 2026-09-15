@@ -228,4 +228,6 @@ uv run python scripts/translate-ja-v5/translate.py register --doc-path reference
 uv run python scripts/translate-ja-v5/translate.py register --doc-dir references/
 ```
 
+Markdown見出しと次の見出し直前までの本文を不可分のblockとして規定文字数まで連結し、Embeddingは一件ずつ直列送信します。設定したQdrant collectionが存在しない場合は、最初のEmbedding次元とCosine距離で自動作成し、存在する場合は文書を追加します。
+
 環境変数、Resume条件、Rules、制約の詳細は[利用者向けドキュメント](../../docs/translate-ja-v5.md)を参照してください。Docling JSONから変換する型の詳細は[内部文書スキーマ](docs/internal-document-schema.md)に記載しています。
