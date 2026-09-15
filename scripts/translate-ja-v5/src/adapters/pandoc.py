@@ -26,7 +26,7 @@ def check_pandoc() -> None:
     if not executable:
         raise RuntimeError("pandoc is required")
     help_text = subprocess.run(
-        [executable, "--help"], check=True, capture_output=True, text=True
+        [executable, "--help"], check=True, capture_output=True, encoding="utf-8"
     ).stdout
     missing = [
         option
@@ -37,7 +37,7 @@ def check_pandoc() -> None:
         [executable, "--list-extensions=docx"],
         check=True,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
     ).stdout
     if "native_numbering" not in extensions:
         missing.append("docx+native_numbering")
@@ -119,7 +119,7 @@ def docx_to_text(path: Path) -> str:
         ["pandoc", str(path), "--to", "plain"],
         check=True,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
     ).stdout
 
 

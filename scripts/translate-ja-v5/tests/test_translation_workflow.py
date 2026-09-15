@@ -657,6 +657,7 @@ def test_fifty_thousand_token_workflow_resumes_after_long_page_review_failure(
         path.name for path in (tmp_path / "output" / "source" / ".work").iterdir()
     }
     assert work_entries == {
+        "run.lock",
         "state.json",
         "parsed.json",
         "normalized.json",

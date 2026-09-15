@@ -36,6 +36,7 @@ v5が使用する主なPythonパッケージは次のとおりです。バージ
 | `httpx` | Docling Serve、LibreTranslateなどのHTTP通信 |
 | `openai` | LiteLLMのOpenAI互換API呼び出し |
 | `pydantic` | 内部文書モデルと応答の検証 |
+| `portalocker` | 出力directoryの多重実行防止 |
 | `pypdfium2` / `Pillow` | PDF本文抽出とページ画像生成 |
 | `langgraph` | Reviewの分岐と再修正フロー |
 | `langfuse` | 任意のLLMトレース記録 |
@@ -198,6 +199,7 @@ outputs/<source-stem>/
 ├── document.ja.docx
 └── .work/
     ├── state.json
+    ├── run.lock
     ├── parsed.json
     ├── normalized.json
     ├── structured/

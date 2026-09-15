@@ -378,10 +378,50 @@ def test_docling_extracts_one_json_and_safe_assets(tmp_path: Path) -> None:
         archive.writestr("document.json", '{"schema_name":"DoclingDocument"}')
         archive.writestr("artifacts/image.png", b"png")
         archive.writestr("../escape.txt", b"bad")
+        archive.writestr("artifacts/..\\windows-escape.txt", b"bad")
+        archive.writestr("artifacts/C:\\drive-escape.txt", b"bad")
+        archive.writestr("artifacts/\\\\server\\share\\unc-escape.txt", b"bad")
     value = docling._extract_result(stream.getvalue(), tmp_path / "assets")
     assert value["schema_name"] == "DoclingDocument"
     assert (tmp_path / "assets" / "image.png").read_bytes() == b"png"
     assert not (tmp_path / "escape.txt").exists()
+    assert [path.name for path in (tmp_path / "assets").iterdir()] == ["image.png"]
+
+
+def test_docx_to_text_decodes_pandoc_output_as_utf8(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pandocの標準出力をOS localeによらずUTF-8で復号する。
+
+    Args:
+        monkeypatch: Pandoc実行を差し替えるfixture。
+        tmp_path: 入力pathを作る一時directory。
+
+    Returns:
+        なし。
+    """
+
+    options: dict[str, Any] = {}
+
+    def run(_args: list[str], **kwargs: Any) -> SimpleNamespace:
+        """subprocess optionを記録して日本語出力を返す。
+
+        Args:
+            _args: 未使用のcommand引数。
+            kwargs: subprocess option。
+
+        Returns:
+            日本語標準出力を持つ模擬結果。
+        """
+
+        options.update(kwargs)
+        return SimpleNamespace(stdout="日本語")
+
+    monkeypatch.setattr(pandoc, "check_pandoc", lambda: None)
+    monkeypatch.setattr(pandoc.subprocess, "run", run)
+    assert pandoc.docx_to_text(tmp_path / "input.docx") == "日本語"
+    assert options["encoding"] == "utf-8"
+    assert "text" not in options
 
 
 def test_docling_splits_large_pdf_before_submission(

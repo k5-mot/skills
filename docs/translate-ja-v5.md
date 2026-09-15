@@ -75,6 +75,7 @@ output/<source-stem>/
 ├── document.ja.docx
 └── .work/
     ├── state.json
+    ├── run.lock
     ├── parsed.json
     ├── normalized.json
     ├── structured/

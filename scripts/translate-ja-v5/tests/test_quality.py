@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from src.processing.quality import deterministic_findings, protected_fragments, read_glossary
+from src.processing.quality import (
+    deterministic_findings,
+    protected_fragments,
+    read_glossary,
+)
 
 
 def test_glossary_accepts_source_target_and_optional_notes(tmp_path: Path) -> None:
@@ -65,3 +69,24 @@ def test_uppercase_heading_is_translatable_and_unchanged_english_is_rejected() -
     assert "untranslated" in {
         item.category for item in deterministic_findings(source, source, [])
     }
+
+
+def test_windows_paths_are_protected() -> None:
+    """UNC、root相対、相対、空白付きWindows pathを保護する。
+
+    Returns:
+        なし。
+    """
+
+    source = (
+        r"Use \\server\share\file.txt, \Windows\file.ini, folder\file.txt, and "
+        r'"C:\Program Files\App\app.exe" or C:/Temp/app.exe.'
+    )
+    assert protected_fragments(source) == [
+        r"\\server\share\file.txt",
+        r"\Windows\file.ini",
+        r"folder\file.txt",
+        r'"C:\Program Files\App\app.exe"',
+        "C:/Temp/app.exe.",
+    ]
+    assert protected_fragments("Compare input/output formats") == []

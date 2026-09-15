@@ -81,6 +81,7 @@ def test_output_lock_rejects_second_holder(tmp_path: Path) -> None:
 
     path = tmp_path / "work"
     with OutputLock(path):
+        assert (path / "run.lock").is_file()
         with pytest.raises(RuntimeError, match="already in use"):
             with OutputLock(path):
                 pass

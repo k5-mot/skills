@@ -8,7 +8,7 @@ import tempfile
 import time
 import zipfile
 from io import BytesIO
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import httpx
@@ -19,6 +19,43 @@ from src.state import atomic_write_json
 
 COLLECTIONS = ("texts", "tables", "pictures", "key_value_items", "form_items", "groups")
 DOCLING_CHUNK_PAGES = 10
+
+
+def _safe_artifact_target(artifacts: Path, name: str) -> Path | None:
+    """ZIP memberからOSに依存しない安全なasset保存先を作る。
+
+    Args:
+        artifacts: asset保存directory。
+        name: ZIP member名。
+
+    Returns:
+        artifacts配下の保存先。不正なpathはNone。
+    """
+
+    normalized = name.replace("\\", "/")
+    parts = normalized.split("/")
+    windows_member = PureWindowsPath(normalized)
+    if (
+        normalized.endswith("/")
+        or not all(parts)
+        or any(part in {".", ".."} for part in parts)
+        or windows_member.drive
+        or windows_member.root
+    ):
+        return None
+    try:
+        relative = tuple(parts[parts.index("artifacts") + 1 :])
+    except ValueError:
+        return None
+    windows_relative = PureWindowsPath(*relative)
+    if not relative or windows_relative.drive or windows_relative.root:
+        return None
+    target = artifacts.joinpath(*relative)
+    try:
+        target.resolve().relative_to(artifacts.resolve())
+    except ValueError:
+        return None
+    return target
 
 
 def _headers(api_key: str | None) -> dict[str, str]:
@@ -78,15 +115,12 @@ def _extract_result(payload: bytes, artifacts: Path) -> dict[str, Any]:
             raise ValueError("Docling JSON must be an object")
         artifacts.mkdir(parents=True, exist_ok=True)
         for name in archive.namelist():
-            parts = PurePosixPath(name).parts
-            # JSON以外はartifacts配下だけを許し、ZIP path traversalを遮断する。
-            if name.endswith("/") or "artifacts" not in parts or ".." in parts:
+            # 両OSのseparatorを検査し、Windowsでも保存先から脱出させない。
+            target = _safe_artifact_target(artifacts, name)
+            if target is None:
                 continue
-            relative = parts[parts.index("artifacts") + 1 :]
-            if relative:
-                target = artifacts.joinpath(*relative)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(archive.read(name))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(archive.read(name))
     return value
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -10,6 +9,8 @@ import tempfile
 from pathlib import Path
 from types import TracebackType
 from typing import Any
+
+import portalocker
 
 STAGES = ("parse", "normalize", "structure", "translate", "review", "markdown", "docx")
 
@@ -104,7 +105,7 @@ class OutputLock:
         """
 
         self.path = path
-        self._descriptor: int | None = None
+        self._lock: portalocker.Lock | None = None
 
     def __enter__(self) -> OutputLock:
         """non-blocking排他lockを取得する。
@@ -117,13 +118,12 @@ class OutputLock:
         """
 
         self.path.mkdir(parents=True, exist_ok=True)
-        self._descriptor = os.open(self.path, os.O_RDONLY)
+        lock = portalocker.Lock(self.path / "run.lock", mode="a+b", timeout=0)
         try:
-            fcntl.flock(self._descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            os.close(self._descriptor)
-            self._descriptor = None
+            lock.acquire()
+        except portalocker.AlreadyLocked as error:
             raise RuntimeError(f"output is already in use: {self.path}") from error
+        self._lock = lock
         return self
 
     def __exit__(
@@ -143,10 +143,9 @@ class OutputLock:
             なし。
         """
 
-        if self._descriptor is not None:
-            fcntl.flock(self._descriptor, fcntl.LOCK_UN)
-            os.close(self._descriptor)
-            self._descriptor = None
+        if self._lock is not None:
+            self._lock.release()
+            self._lock = None
 
 
 def new_state(
