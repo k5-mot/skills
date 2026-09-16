@@ -57,6 +57,7 @@ def test_translate_page_uses_neighbor_context_and_rejects_foreign_ids(
     """
 
     prompts: list[str] = []
+
     def chat(
         _settings: Settings,
         _model: str,
@@ -163,6 +164,77 @@ def test_structure_clamps_heading_level_jumps(
         page, tmp_path / "page.png", "rules", settings
     )
     assert [block.level for block in result.blocks] == [1, 2, 2]
+
+
+def test_structure_discards_attributes_that_do_not_match_final_kind(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings, tmp_path: Path
+) -> None:
+    """非見出し・非Alertへ返された無意味な属性を決定的に除去する。
+
+    Args:
+        monkeypatch: Structure LLMを差し替えるfixture。
+        settings: 共通Settings fixture。
+        tmp_path: 画像path用一時directory。
+
+    Returns:
+        なし。
+    """
+
+    page = Page(
+        number=43,
+        blocks=[
+            Block(
+                id="#/texts/376",
+                order=0,
+                kind="paragraph",
+                source=[Inline(id="inline-376", text="Contingency plans")],
+            ),
+            Block(
+                id="heading",
+                order=1,
+                kind="heading",
+                level=2,
+                source=[Inline(id="heading-inline", text="Heading")],
+            ),
+        ],
+    )
+
+    def chat(*_args: Any, **_kwargs: Any) -> dict[str, list[dict[str, Any]]]:
+        """実障害と同じ不整合属性を持つpatchを返す。
+
+        Args:
+            _args: 未使用の位置引数。
+            _kwargs: 未使用のkeyword引数。
+
+        Returns:
+            非見出しにlevel、非Alertにalert_kindを含むpatch。
+        """
+
+        return {
+            "patches": [
+                {
+                    "id": "#/texts/376",
+                    "kind": "paragraph",
+                    "level": 1,
+                    "alert_kind": "note",
+                },
+                {
+                    "id": "heading",
+                    "kind": "paragraph",
+                    "level": None,
+                    "alert_kind": None,
+                },
+            ]
+        }
+
+    monkeypatch.setattr(page_structure, "structured_chat", chat)
+    result = page_structure.structure_page(
+        page, tmp_path / "page.png", "rules", settings
+    )
+    assert [(block.kind, block.level, block.alert_kind) for block in result.blocks] == [
+        ("paragraph", None, None),
+        ("paragraph", None, None),
+    ]
 
 
 def test_context_overflow_bisects_only_once(
@@ -287,7 +359,9 @@ def test_openai_translation_preserves_protected_fragments(
 
 
 def test_openai_translation_regenerates_removed_protected_fragment(
-    monkeypatch: pytest.MonkeyPatch, settings: Settings, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """保護文字列を落とした構造化訳を理由付きで一度再生成する。
 

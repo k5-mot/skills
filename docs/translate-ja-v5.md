@@ -110,6 +110,8 @@ uv run python scripts/translate-ja-v5/translate.py translate \
 - `templates/translation-rules.md`: Translationだけ
 - `templates/review-rules.md`: 翻訳内Reviewとstandalone Reviewだけ
 
+Structure応答に最終的なblock種別と両立しない見出しlevelまたはAlert種別が含まれた場合、その属性だけを決定的に破棄し、本文とblock種別は維持します。
+
 付録見出しを翻訳しない、英語と日本語を併記する、といった例外は`translation-rules.md`へ追加します。同じ例外をReviewでも許容する場合は、対応する規則を`review-rules.md`にも明記します。Rulesや用語集の変更は自動的なResume無効化対象ではないため、既存成果物へ反映する場合は`--force`を使用します。
 
 全大文字という理由だけでは本文や見出しを保護しません。URL、path、command option、コード形式の識別子は機械的に保護し、略語や製品名はTranslation RulesとReviewで維持します。複数語の英語原文がそのまま訳文へ返された場合は未翻訳としてReview対象になります。
@@ -147,7 +149,7 @@ uv run python scripts/translate-ja-v5/translate.py register --doc-path reference
 uv run python scripts/translate-ja-v5/translate.py register --doc-dir references/
 ```
 
-対応形式はPDF、DOCX、PPTX、Markdown、UTF-8 textです。directoryは再帰探索され、隠しfileと空fileは無視されます。PDF/DOCX/PPTXはDocling ServeでParseし、翻訳処理と同じ内部文書モデルへNormalizeします。連続する見出しと後続本文を一体の意味blockにし、そのblockを壊さず1,500文字まで連結してchunk化します。単一blockが上限を超える場合も、見出しと本文を分離しません。MarkdownとtextはDoclingへ送らず、同じchunk化規則を直接適用します。Embeddingは入力を一件ずつ直列送信し、Qdrantのupsertと登録確認は64件ずつ直列送信します。`QDRANT_COLLECTION`が存在しない場合は、最初のEmbedding次元とCosine距離を使って自動作成します。既存collectionにはfileを追加し、同じsourceが更新された場合は、新revisionをすべてupsertして取得確認した後、同じsourceの旧revisionだけを削除します。新revision登録に失敗した場合は旧revisionを残します。
+対応形式はPDF、DOCX、PPTX、Markdown、UTF-8 textです。directoryは再帰探索され、隠しfileと空fileは無視されます。PDF/DOCX/PPTXはDocling ServeでParseし、翻訳処理と同じ内部文書モデルへNormalizeします。見出しと段落の境界を優先し、約1,000 tokenごとに約100 tokenを重複させてchunk化します。単一blockが上限を超える場合は本文を分割し、継続chunkへ見出しを再掲します。MarkdownとtextはDoclingへ送らず、同じchunk化規則を直接適用します。Embeddingは入力を一件ずつ直列送信し、Qdrantのupsertと登録確認は64件ずつ直列送信します。`QDRANT_COLLECTION`が存在しない場合は、最初のEmbedding次元とCosine距離を使って自動作成します。既存collectionにはfileを追加し、新pointをすべてupsertして取得確認した後、同じsourceの旧revisionと同一revisionの余剰pointを削除します。新revision登録に失敗した場合は旧revisionを残します。
 
 Docling ServeへはPDFを最大10ページずつ、DOCX/PPTXを一文書ずつ送ります。PDFの分割結果は参照、ページ番号、asset URIを全体文書用に再構成します。Office文書のDocling JSONにページ情報がない場合は、Normalize時に仮想ページ1へ全要素を配置します。非同期完了statusは、現行の`task_status`と旧形式の`status`の両方に対応します。実行中は`Docling: chunk 1/36 pages 1-10 started`や`Docling: started`のように、チャンク進捗とstatus変化を表示します。Structure、Translate、Reviewは実行対象ページの開始・完了を表示し、LiteLLM呼出しは`LLM: translations attempt 1/2 started`のようにschema名と構造化応答の再生成状況を表示します。Docling Serve、LiteLLM、LibreTranslate、Qdrantへの通信障害、408、429、5xxは最大3回まで指数backoffで再試行します。最終DOCXは一時packageの整合性を確認してからatomic置換するため、Pandoc失敗時に既存DOCXを上書きしません。
 

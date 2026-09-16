@@ -131,23 +131,24 @@ def test_chunk_units_joins_whole_blocks_up_to_limit() -> None:
         なし。
     """
 
-    chunks = register.chunk_units(["A" * 70 + "\n\n" + "B" * 70], size=100)
+    chunks = register.chunk_units(["A" * 70 + "\n\n" + "B" * 70], size=100, overlap=0)
     assert len(chunks) == 2
     assert chunks[0].text == "A" * 70
     assert chunks[1].text == "B" * 70
 
 
-def test_chunk_units_uses_1500_character_default() -> None:
-    """既定値では区切り込み1,500文字までを一chunkへ連結する。
+def test_chunk_units_uses_1000_character_default() -> None:
+    """既定値では区切り込み1,000文字までを一chunkへ連結する。
 
     Returns:
         なし。
     """
 
-    joined = register.chunk_units(["A" * 749 + "\n\n" + "B" * 749])
-    split = register.chunk_units(["A" * 750 + "\n\n" + "B" * 750])
-    assert [len(chunk.text) for chunk in joined] == [1_500]
-    assert [len(chunk.text) for chunk in split] == [750, 750]
+    joined = register.chunk_units(["A" * 499 + "\n\n" + "B" * 499])
+    split = register.chunk_units(["A" * 500 + "\n\n" + "B" * 500])
+    assert [len(chunk.text) for chunk in joined] == [1_000]
+    assert len(split) == 2
+    assert all(len(chunk.text) <= 1_000 for chunk in split)
 
 
 def test_chunk_units_keeps_markdown_heading_with_its_body() -> None:
@@ -158,7 +159,7 @@ def test_chunk_units_keeps_markdown_heading_with_its_body() -> None:
     """
 
     chunks = register.chunk_units(
-        ["# Alpha\n\nAlpha body\n\n# Beta\n\nBeta body"], size=30
+        ["# Alpha\n\nAlpha body\n\n# Beta\n\nBeta body"], size=30, overlap=0
     )
     assert [chunk.text for chunk in chunks] == [
         "# Alpha\n\nAlpha body",
@@ -166,16 +167,33 @@ def test_chunk_units_keeps_markdown_heading_with_its_body() -> None:
     ]
 
 
-def test_chunk_units_does_not_split_oversized_heading_block() -> None:
-    """上限超過時もMarkdown見出しblockを本文から分離しない。
+def test_chunk_units_splits_oversized_heading_block_with_context() -> None:
+    """巨大な見出しblockを見出しと重複文脈付きで上限内へ分割する。
 
     Returns:
         なし。
     """
 
-    source = "# Alpha\n\n" + "A" * 40
-    chunks = register.chunk_units([source], size=20)
-    assert [chunk.text for chunk in chunks] == [source]
+    source = "# Alpha\n\n" + "0123456789 " * 8
+    chunks = register.chunk_units([source], size=30, overlap=5)
+    assert len(chunks) > 1
+    assert all(chunk.text.startswith("# Alpha\n\n") for chunk in chunks)
+    assert all(len(chunk.text) <= 30 for chunk in chunks)
+
+
+def test_chunk_units_splits_indivisible_paragraph_with_overlap() -> None:
+    """長い単一段落を上限内へ分割して隣接文脈を重複させる。
+
+    Returns:
+        なし。
+    """
+
+    chunks = register.chunk_units(["0123456789ABCDEFGHIJ"], size=10, overlap=3)
+    assert [chunk.text for chunk in chunks] == [
+        "0123456789",
+        "789ABCDEFG",
+        "EFGHIJ",
+    ]
 
 
 def test_chunk_units_keeps_consecutive_headings_with_following_body() -> None:
@@ -186,7 +204,7 @@ def test_chunk_units_keeps_consecutive_headings_with_following_body() -> None:
     """
 
     source = "# Chapter\n\n## Section\n\nBody\n\n# Next\n\nNext body"
-    chunks = register.chunk_units([source], size=40)
+    chunks = register.chunk_units([source], size=40, overlap=0)
     assert [chunk.text for chunk in chunks] == [
         "# Chapter\n\n## Section\n\nBody",
         "# Next\n\nNext body",
@@ -405,7 +423,88 @@ def test_qdrant_deletes_only_after_successful_verification(
 
     monkeypatch.setattr(qdrant, "_client", lambda _settings: Client())
     qdrant.replace_revision(configured, [point], "source.md", "new")
-    assert calls == ["upsert", "retrieve", "delete"]
+    assert calls == ["upsert", "retrieve", "delete", "delete"]
+
+
+def test_qdrant_deletes_stale_tail_from_same_revision(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """chunk数減少時に同一revisionの余剰pointを削除する。
+
+    Args:
+        monkeypatch: Qdrant clientを差し替えるfixture。
+        settings: 共通Settings fixture。
+
+    Returns:
+        なし。
+    """
+
+    configured = replace(
+        settings, qdrant_url="http://qdrant", qdrant_collection="review"
+    )
+    point = qdrant.models.PointStruct(
+        id="00000000-0000-0000-0000-000000000001", vector=[1.0], payload={}
+    )
+    selectors: list[dict[str, Any]] = []
+
+    class Client:
+        """同一revisionの削除条件を記録するtest double。"""
+
+        def collection_exists(self, **_kwargs: Any) -> bool:
+            """既存collectionを返す。
+
+            Args:
+                _kwargs: 未使用collection指定。
+
+            Returns:
+                True。
+            """
+
+            return True
+
+        def upsert(self, **_kwargs: Any) -> None:
+            """point登録を成功させる。
+
+            Args:
+                _kwargs: 未使用登録引数。
+
+            Returns:
+                なし。
+            """
+
+        def retrieve(self, **_kwargs: Any) -> list[SimpleNamespace]:
+            """登録済みpointを返す。
+
+            Args:
+                _kwargs: 未使用取得引数。
+
+            Returns:
+                登録済みpoint。
+            """
+
+            return [SimpleNamespace(id=point.id)]
+
+        def delete(self, **kwargs: Any) -> None:
+            """削除条件を記録する。
+
+            Args:
+                kwargs: point selectorを含む削除引数。
+
+            Returns:
+                なし。
+            """
+
+            selectors.append(kwargs["points_selector"].model_dump())
+
+    monkeypatch.setattr(qdrant, "_client", lambda _settings: Client())
+    qdrant.replace_revision(configured, [point], "source.md", "new")
+    conditions = selectors[1]["must"]
+    assert conditions[0]["key"] == "source"
+    assert conditions[0]["match"]["value"] == "source.md"
+    assert conditions[1]["key"] == "revision"
+    assert conditions[1]["match"]["value"] == "new"
+    assert conditions[2]["key"] == "chunk"
+    assert conditions[2]["range"]["gte"] == 1.0
 
 
 def test_qdrant_sends_large_revisions_in_fixed_batches(
@@ -491,6 +590,7 @@ def test_qdrant_sends_large_revisions_in_fixed_batches(
         ("retrieve", 64),
         ("retrieve", 64),
         ("retrieve", 1),
+        ("delete", 0),
         ("delete", 0),
     ]
 
@@ -590,6 +690,7 @@ def test_qdrant_creates_missing_collection_before_upsert(
         "create",
         "upsert",
         "retrieve",
+        "delete",
         "delete",
     ]
     create = calls[1][1]
@@ -714,7 +815,7 @@ def test_every_qdrant_operation_uses_shared_retry(
     )
     assert qdrant.search(configured, "query")[0]["text"] == "evidence"
     qdrant.replace_revision(configured, [point], "source.md", "new")
-    assert attempts == {name: 2 for name in attempts}
+    assert attempts == {"query": 2, "upsert": 2, "retrieve": 2, "delete": 3}
 
 
 def test_qdrant_delete_failure_is_recoverable_and_rerun_converges(
@@ -817,13 +918,15 @@ def test_qdrant_delete_failure_is_recoverable_and_rerun_converges(
                 raise TemporaryQdrantError
             selector = kwargs["points_selector"].model_dump()
             source = selector["must"][0]["match"]["value"]
-            kept_revision = selector["must"][1]["match"]["except_"][0]
-            for point_id, payload in list(stored.items()):
-                if (
-                    payload.get("source") == source
-                    and payload.get("revision") != kept_revision
-                ):
-                    del stored[point_id]
+            revision_match = selector["must"][1]["match"]
+            if "except_" in revision_match:
+                kept_revision = revision_match["except_"][0]
+                for point_id, payload in list(stored.items()):
+                    if (
+                        payload.get("source") == source
+                        and payload.get("revision") != kept_revision
+                    ):
+                        del stored[point_id]
 
     client = Client()
     actual_retry = qdrant.retry_call
