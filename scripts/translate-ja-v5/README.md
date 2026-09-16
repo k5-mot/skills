@@ -145,7 +145,7 @@ flowchart TD
 
 ### 事前検査・Resume判定
 
-Pandocの必要機能、入力PDF、必須環境変数を検査します。`.work/state.json`があれば完了済みページを再利用します。入力PDFのhashが変わっている場合は、誤ったResumeを防ぐため停止します。
+Pandocの必要機能、入力PDF、必須環境変数を検査します。`.work/state.json`があれば完了済みページを再利用します。用語集の追加・削除・内容変更時はTranslate以降を再実行します。入力PDFのhashが変わっている場合は、誤ったResumeを防ぐため停止します。
 
 ### Parse
 

@@ -82,7 +82,7 @@ output/<source-stem>/
 
 PDF第1ページは150 DPI相当の表紙画像としてDOCX第1ページへ入り、翻訳本文はPDF第2ページから始まります。DOCXのstyle、余白、用紙、header/footerは`scripts/translate-ja-v5/templates/template.docx`で管理します。Pandoc生成後のOOXML書換えは行いません。
 
-通常の再実行は`.work/state.json`を読み、完了済みページを再利用します。入力PDFが変わった場合は誤Resumeを避けるためエラーになります。全工程をやり直す場合は`--force`を指定します。
+通常の再実行は`.work/state.json`を読み、完了済みページを再利用します。用語集の追加・削除・内容変更時はTranslate以降を自動的に再実行します。入力PDFが変わった場合は誤Resumeを避けるためエラーになります。全工程をやり直す場合は`--force`を指定します。
 
 完了状態に対応する内部JSONが欠損または破損している場合は、その成果物と必要な後工程だけを再実行します。比較ReviewのPDF抽出結果と対応付けも再利用されます。
 
@@ -108,7 +108,7 @@ uv run python scripts/translate-ja-v5/translate.py translate \
 
 Structure応答に最終的なblock種別と両立しない見出しlevelまたはAlert種別が含まれた場合、その属性だけを決定的に破棄し、本文とblock種別は維持します。
 
-付録見出しを翻訳しない、英語と日本語を併記する、といった例外は`translation-rules.md`へ追加します。同じ例外をReviewでも許容する場合は、対応する規則を`review-rules.md`にも明記します。Rulesや用語集の変更は自動的なResume無効化対象ではないため、既存成果物へ反映する場合は`--force`を使用します。
+付録見出しを翻訳しない、英語と日本語を併記する、といった例外は`translation-rules.md`へ追加します。同じ例外をReviewでも許容する場合は、対応する規則を`review-rules.md`にも明記します。Rulesの変更は自動的なResume無効化対象ではないため、既存成果物へ反映する場合は`--force`を使用します。
 
 全大文字という理由だけでは本文や見出しを保護しません。URL、path、command option、コード形式の識別子は機械的に保護し、略語や製品名はTranslation RulesとReviewで維持します。複数語の英語原文がそのまま訳文へ返された場合は未翻訳としてReview対象になります。
 
@@ -153,7 +153,7 @@ Docling ServeへはPDFを最大10ページずつ、DOCX/PPTXを一文書ずつ�
 
 - PDFの座標どおりの見た目は再現しません。
 - 章・付録ごとのpage number再開始、章別の動的header/footer、高度なWord相互参照は対象外です。
-- Rules、用語集、Qdrant内容、script変更は自動無効化しません。必要時は`--force`を使用します。
+- Rules、Qdrant内容、script変更は自動無効化しません。必要時は`--force`を使用します。用語集変更はTranslate以降を自動無効化します。
 - Qdrantを設定した状態で検索が失敗した場合、根拠なしReviewへ切り替えず対象処理を失敗させます。
 
 v3/v4から維持した機能、意図的に採用しない機能、未移行機能は[機能差分監査](./translate-ja-v5-compatibility-audit.md)に記録しています。
