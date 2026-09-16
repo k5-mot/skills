@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 
 Backend = Literal["openai", "libretranslate"]
 Command = Literal["translate", "review", "register"]
+DEFAULT_CONTEXT_TOKENS = 50_000
+DEFAULT_OUTPUT_TOKENS = 8_192
+DEFAULT_IMAGE_TOKENS = 4_096
 
 
 @dataclass(frozen=True)
@@ -32,7 +35,7 @@ class Settings:
     libretranslate_api_key: str | None
     langfuse_public_key: str | None
     langfuse_secret_key: str | None
-    langfuse_base_url: str | None
+    langfuse_otel_host: str | None
     qdrant_url: str | None
     qdrant_api_key: str | None
     qdrant_collection: str | None
@@ -59,30 +62,6 @@ class Settings:
         return bool(self.qdrant_url and self.qdrant_collection and self.embedding_model)
 
 
-def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
-    """環境変数から正の整数を読む。
-
-    Args:
-        env: 環境変数mapping。
-        name: 変数名。
-        default: 未設定時の値。
-
-    Returns:
-        検証済みの正整数。
-
-    Raises:
-        ValueError: 値が整数でないか1未満の場合。
-    """
-
-    try:
-        value = int(env.get(name, str(default)))
-    except ValueError as error:
-        raise ValueError(f"{name} must be an integer") from error
-    if value < 1:
-        raise ValueError(f"{name} must be positive")
-    return value
-
-
 def load_settings(
     command: Command,
     backend: Backend = "openai",
@@ -107,7 +86,7 @@ def load_settings(
         env = os.environ
     base = Path(__file__).resolve().parents[1]
     settings = Settings(
-        docling_url=env.get("DOCLING_URL"),
+        docling_url=env.get("DOCLING_SERVER_URL"),
         docling_api_key=env.get("DOCLING_API_KEY"),
         openai_base_url=env.get("OPENAI_BASE_URL", ""),
         openai_api_key=env.get("OPENAI_API_KEY", ""),
@@ -115,15 +94,15 @@ def load_settings(
         translation_model=env.get("OPENAI_TRANSLATION_MODEL"),
         review_model=env.get("OPENAI_REVIEW_MODEL"),
         embedding_model=env.get("OPENAI_EMBEDDING_MODEL"),
-        context_tokens=_positive_int(env, "LLM_CONTEXT_TOKENS", 50_000),
-        output_tokens=_positive_int(env, "LLM_OUTPUT_TOKENS", 8_192),
-        image_tokens=_positive_int(env, "LLM_IMAGE_TOKENS", 4_096),
+        context_tokens=DEFAULT_CONTEXT_TOKENS,
+        output_tokens=DEFAULT_OUTPUT_TOKENS,
+        image_tokens=DEFAULT_IMAGE_TOKENS,
         libretranslate_url=env.get("LIBRETRANSLATE_URL"),
         libretranslate_api_key=env.get("LIBRETRANSLATE_API_KEY"),
         langfuse_public_key=env.get("LANGFUSE_PUBLIC_KEY"),
         langfuse_secret_key=env.get("LANGFUSE_SECRET_KEY"),
-        langfuse_base_url=env.get("LANGFUSE_BASE_URL"),
-        qdrant_url=env.get("QDRANT_URL") or env.get("QDRANT_URI"),
+        langfuse_otel_host=env.get("LANGFUSE_OTEL_HOST"),
+        qdrant_url=env.get("QDRANT_URI"),
         qdrant_api_key=env.get("QDRANT_API_KEY"),
         qdrant_collection=env.get("QDRANT_COLLECTION"),
         templates_dir=base / "templates",
@@ -157,11 +136,11 @@ def _validate_settings(settings: Settings, command: Command, backend: Backend) -
         )
     qdrant_core = (settings.qdrant_url, settings.qdrant_collection)
     if any(qdrant_core) and not all(qdrant_core):
-        raise ValueError("QDRANT_URL and QDRANT_COLLECTION are both required")
+        raise ValueError("QDRANT_URI and QDRANT_COLLECTION are both required")
     # 不使用commandの資格情報まで必須にせず、各入口が実際に使う設定だけを要求する。
     if command == "translate":
         required = {
-            "DOCLING_URL": settings.docling_url,
+            "DOCLING_SERVER_URL": settings.docling_url,
             "OPENAI_BASE_URL": settings.openai_base_url,
             "OPENAI_API_KEY": settings.openai_api_key,
             "OPENAI_STRUCTURE_MODEL": settings.structure_model,
@@ -190,7 +169,7 @@ def _validate_settings(settings: Settings, command: Command, backend: Backend) -
             "OPENAI_BASE_URL": settings.openai_base_url,
             "OPENAI_API_KEY": settings.openai_api_key,
             "OPENAI_EMBEDDING_MODEL": settings.embedding_model,
-            "QDRANT_URL": settings.qdrant_url,
+            "QDRANT_URI": settings.qdrant_url,
             "QDRANT_COLLECTION": settings.qdrant_collection,
         }
         missing = [name for name, value in required.items() if not value]

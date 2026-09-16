@@ -113,10 +113,10 @@ JA_MD="${OUTPUT_DIR}/${STEM}.ja.md"
 JA_DOCX="${OUTPUT_DIR}/${STEM}.ja.docx"
 PREPROCESS_REPORT="${OUTPUT_DIR}/reports/preprocess_report.json"
 
-if [[ -z "${PYTHON_BIN:-}" && -x "${REPO_ROOT}/.venv/bin/python3" ]]; then
+if [[ -x "${REPO_ROOT}/.venv/bin/python3" ]]; then
   PYTHON_BIN="${REPO_ROOT}/.venv/bin/python3"
 else
-  PYTHON_BIN="${PYTHON_BIN:-python3}"
+  PYTHON_BIN="python3"
 fi
 SCRIPTS_DIR="${SCRIPT_DIR}/scripts"
 FORCE_ARGS=()

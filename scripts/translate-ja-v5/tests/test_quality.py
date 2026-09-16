@@ -7,14 +7,16 @@ from pathlib import Path
 import pytest
 
 from src.processing.quality import (
+    GlossaryEntry,
     deterministic_findings,
+    matching_glossary,
     protected_fragments,
     read_glossary,
 )
 
 
-def test_glossary_accepts_source_target_and_optional_notes(tmp_path: Path) -> None:
-    """二必須列と任意notes列をUTF-8で読めることを確認する。
+def test_glossary_expands_eight_column_short_and_long_terms(tmp_path: Path) -> None:
+    """8列schemaのshort/long用語とmetadataを展開できることを確認する。
 
     Args:
         tmp_path: pytest一時directory。
@@ -25,17 +27,36 @@ def test_glossary_accepts_source_target_and_optional_notes(tmp_path: Path) -> No
 
     path = tmp_path / "glossary.csv"
     path.write_text(
-        "source,target,notes\nAPI,APIインターフェース,指定訳\n", encoding="utf-8"
+        "english-short,english-long,japanese-short,japanese-long,kind,description,note,reference\n"
+        "API,Application Programming Interface,API,アプリケーションプログラミングインターフェース,technical term,Interface,Keep abbreviation,guide\n"
+        ",reading order,,読み順,term,Order,,,\n",
+        encoding="utf-8",
     )
-    assert read_glossary(path)[0].target == "APIインターフェース"
+    values = read_glossary(path)
+    assert [(item.source, item.target) for item in values] == [
+        ("API", "API"),
+        (
+            "Application Programming Interface",
+            "アプリケーションプログラミングインターフェース",
+        ),
+        ("reading order", "読み順"),
+    ]
+    assert values[0].notes == (
+        "kind: technical term; description: Interface; "
+        "note: Keep abbreviation; reference: guide"
+    )
 
 
 @pytest.mark.parametrize(
     "content",
     [
-        "english,japanese\nAPI,API\n",
-        "source,target\nAPI,\n",
-        "source,target\nAPI,一\napi,二\n",
+        "source,target\nAPI,API\n",
+        "english-short,english-long,japanese-short,japanese-long,kind,description,note,reference\n"
+        ",,,,,,,\n",
+        "english-short,english-long,japanese-short,japanese-long,kind,description,note,reference\n"
+        "API,,API,,,,,\napi,,別訳,,,,,\n",
+        "english-short,english-long,japanese-short,japanese-long,kind,description,note,reference\n"
+        "API,,,,,,,,\n",
     ],
 )
 def test_glossary_rejects_invalid_schema_values_and_duplicates(
@@ -55,6 +76,26 @@ def test_glossary_rejects_invalid_schema_values_and_duplicates(
     path.write_text(content, encoding="utf-8")
     with pytest.raises(ValueError):
         read_glossary(path)
+
+
+def test_matching_glossary_selects_only_terms_in_body() -> None:
+    """本文に語境界付きで出現する用語だけを選ぶ。
+
+    Returns:
+        なし。
+    """
+
+    glossary = [
+        GlossaryEntry(source="API", target="API"),
+        GlossaryEntry(source="reading order", target="読み順"),
+        GlossaryEntry(source="VLM", target="VLM"),
+    ]
+    assert [
+        item.source
+        for item in matching_glossary(
+            "The api defines the reading   order. APIClient is separate.", glossary
+        )
+    ] == ["API", "reading order"]
 
 
 def test_uppercase_heading_is_translatable_and_unchanged_english_is_rejected() -> None:

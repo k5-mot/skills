@@ -8,6 +8,16 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+GLOSSARY_FIELDS = (
+    "english-short",
+    "english-long",
+    "japanese-short",
+    "japanese-long",
+    "kind",
+    "description",
+    "note",
+    "reference",
+)
 PROTECTED_RE = re.compile(
     r"`[^`\n]+`"
     r"|https?://[^\s<>()]+"
@@ -62,13 +72,13 @@ class Finding(BaseModel):
 
 
 def read_glossary(path: Path | None) -> list[GlossaryEntry]:
-    """v5のUTF-8 CSV用語集を検証して読む。
+    """8列schemaのUTF-8 CSV用語集を検証してshort/long用語へ展開する。
 
     Args:
         path: 用語集path。Noneなら用語集なし。
 
     Returns:
-        原語が重複しない用語entry列。
+        原語が重複しないshort/long用語entry列。
 
     Raises:
         ValueError: 必須列、値、原語の一意性が不正な場合。
@@ -79,22 +89,65 @@ def read_glossary(path: Path | None) -> list[GlossaryEntry]:
     with path.open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
         fields = set(reader.fieldnames or [])
-        if not {"source", "target"} <= fields:
-            raise ValueError("glossary requires source and target columns")
-        values = [
-            GlossaryEntry(
-                source=(row.get("source") or "").strip(),
-                target=(row.get("target") or "").strip(),
-                notes=(row.get("notes") or "").strip(),
+        if not set(GLOSSARY_FIELDS) <= fields:
+            raise ValueError("glossary requires columns: " + ", ".join(GLOSSARY_FIELDS))
+        values: list[GlossaryEntry] = []
+        for number, row in enumerate(reader, start=2):
+            metadata = "; ".join(
+                f"{field}: {value}"
+                for field in ("kind", "description", "note", "reference")
+                if (value := (row.get(field) or "").strip())
             )
-            for row in reader
-        ]
-    if any(not item.source or not item.target for item in values):
-        raise ValueError("glossary source and target must not be empty")
+            pairs = [
+                (
+                    (row.get("english-short") or "").strip(),
+                    (row.get("japanese-short") or "").strip(),
+                ),
+                (
+                    (row.get("english-long") or "").strip(),
+                    (row.get("japanese-long") or "").strip(),
+                ),
+            ]
+            if not any(source or target for source, target in pairs):
+                raise ValueError(f"glossary row {number} has no term")
+            for source, target in pairs:
+                if bool(source) != bool(target):
+                    raise ValueError(
+                        f"glossary row {number} source and target must be paired"
+                    )
+                if source:
+                    values.append(
+                        GlossaryEntry(source=source, target=target, notes=metadata)
+                    )
     sources = [item.source.casefold() for item in values]
     if len(sources) != len(set(sources)):
         raise ValueError("glossary source values must be unique")
     return values
+
+
+def matching_glossary(text: str, glossary: list[GlossaryEntry]) -> list[GlossaryEntry]:
+    """本文に原語が現れる用語だけを入力順で返す。
+
+    Args:
+        text: 用語を検索する英語本文。
+        glossary: 全用語entry列。
+
+    Returns:
+        大小文字と連続空白を正規化して本文へ一致したentry列。
+    """
+
+    folded = text.casefold()
+    result: list[GlossaryEntry] = []
+    for entry in glossary:
+        parts = entry.source.casefold().split()
+        pattern = r"\s+".join(re.escape(part) for part in parts)
+        if entry.source[0].isalnum():
+            pattern = rf"(?<!\w){pattern}"
+        if entry.source[-1].isalnum():
+            pattern = rf"{pattern}(?!\w)"
+        if re.search(pattern, folded):
+            result.append(entry)
+    return result
 
 
 def protected_fragments(text: str) -> list[str]:

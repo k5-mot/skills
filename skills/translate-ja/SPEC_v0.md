@@ -52,12 +52,9 @@ python convert_md_to_docx_with_docling.py --input ./docs/source/output/source.ja
 - `OPENAI_BASE_URL`: OpenAI 互換 Chat Completions API のベース URL。例: `http://litellm:4000`
 - `OPENAI_API_KEY`: OpenAI 互換 API キー。
 - `OPENAI_MODEL`: 構造補正と翻訳に使う既定モデル。
-- `OPENAI_TIMEOUT_SECONDS`: OpenAI Python クライアントの timeout 秒数。ローカル LLM を想定し、既定値は `1800` 秒とする。
-- `LOG_LEVEL`: logger のログレベル。`DEBUG` のとき、LLM stream の受信内容を逐次ログ出力する。
 - `LANGFUSE_PUBLIC_KEY`: Langfuse 連携用の public key。任意。
 - `LANGFUSE_SECRET_KEY`: Langfuse 連携用の secret key。任意。logger、manifest、エラーには出さない。
 - `LANGFUSE_OTEL_HOST`: Langfuse OTEL または Langfuse 連携先ホスト。任意。
-- `LANGFUSE_TRACE_USER_ID`: Langfuse の `langfuse_trace_user_id` に使うユーザー ID。任意。
 
 Docling Serve は v1 API を前提にし、同期処理は `/v1/convert/file`、長時間処理は `/v1/convert/file/async`、ポーリングは `/v1/status/poll/{task_id}`、結果取得は `/v1/result/{task_id}` を使う。実装時は起動中サーバーの `/docs` を正として、オプション名の差分を吸収できるクライアント層を置く。
 
@@ -158,11 +155,11 @@ manifest の共通フィールド例:
 
 `realign_doc_struct_with_llm.py` と `translate_chunks.py` は OpenAI Python クライアントを使う。ローカル LLM は応答開始や生成に時間がかかるため timeout は長めに設定し、OpenAI Python SDK の自動リトライは無効化する。
 
-- timeout は `OPENAI_TIMEOUT_SECONDS` を使い、未設定時は `1800` 秒とする。
+- timeoutはCLI指定を優先し、未指定時は`1800`秒とする。
 - OpenAI Python クライアントの `max_retries` は `0` とする。
 - アプリ側の LLM 出力修復、構造検証、API 失敗時の再試行は最大 `10` 回とする。
 - Chat Completions は stream 処理を有効化する。
-- `LOG_LEVEL=DEBUG` のとき、stream で受信した差分テキストを logger へ逐次出力する。
+- streamで受信した差分テキストをloggerへ逐次出力する。
 - DEBUG ログには API キー、Authorization ヘッダー、`.env` の秘密値を出さない。
 - INFO ログではチャンク ID、補正単位 ID、試行回数、開始/終了、処理時間だけを出す。
 - stream 出力の逐次ログは、長時間処理中に外から「動いている」ことを確認するための運用機能として扱う。
@@ -204,7 +201,7 @@ Langfuse 連携は optional とする。`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET
 - `langfuse_trace_id`: manifest の `run_id`。未作成なら `uuid4` で生成し manifest に保存する。
 - `langfuse_trace_name`: `translate-ja:<input_stem>`。例: `translate-ja:source`
 - `langfuse_session_id`: 入力ドキュメント単位で安定する ID。例: `sha256(input_path)[:16]`
-- `langfuse_trace_user_id`: `LANGFUSE_TRACE_USER_ID` があればその値、なければ `USER`、それもなければ `translate-ja`
+- `langfuse_trace_user_id`: 固定値`translate-ja`
 - `langfuse_tags`: JSON 文字列。既定値は `["translate-ja", "<script_name>"]`
 - `langfuse_generation_id`: `<run_id>:<unit_id>:<attempt>`。再試行ごとに一意にする。
 - `langfuse_generation_name`: `<script_name>:<unit_id>`。例: `translate_chunks.py:chunk-0001`
@@ -223,9 +220,9 @@ Langfuse 連携は optional とする。`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET
 }
 ```
 
-`LOG_LEVEL=DEBUG` でも、`LANGFUSE_SECRET_KEY`、`OPENAI_API_KEY`、`Authorization` ヘッダーは出力しない。Langfuse ヘッダーをログに出す場合は、`langfuse_trace_id`、`langfuse_generation_id` などの非秘密トレース ID だけにする。
+どのlog levelでも、`LANGFUSE_SECRET_KEY`、`OPENAI_API_KEY`、`Authorization` ヘッダーは出力しない。Langfuse ヘッダーをログに出す場合は、`langfuse_trace_id`、`langfuse_generation_id` などの非秘密トレース ID だけにする。
 
-機密文書を扱う場合、`LOG_LEVEL=DEBUG` の stream 差分ログには原文や翻訳文が含まれうる。README には、機密文書翻訳時は DEBUG ログを無効にすること、ログ保存先のアクセス制御、ログ削除方針を強い注意書きとして記載する。
+機密文書を扱う場合、stream差分ログには原文や翻訳文が含まれうる。READMEには、機密文書翻訳時のログ保存先のアクセス制御、ログ削除方針を強い注意書きとして記載する。
 
 ## ディレクトリ構成
 
@@ -290,8 +287,8 @@ python3 skills/translate-ja/scripts/preprocess_doc_with_docling.py \
 - `--min-chars`: 通常チャンクを連結する目安の下限。既定値 `1000`。
 - `--max-chars`: 通常チャンクの上限。既定値 `2000`。
 - `--docling-timeout`: Docling 変換の最大待ち時間。既定値 `21600` 秒。
-- `--openai-timeout`: OpenAI Python クライアントの timeout 秒数。既定値は `OPENAI_TIMEOUT_SECONDS`、未設定時は `1800`。
-- `--dictionary-csv`: 翻訳時に使う用語辞書 CSV。省略時は `TRANSLATE_JA_DICTIONARY_CSV` を見る。
+- `--openai-timeout`: OpenAI Python クライアントの timeout 秒数。既定値は`1800`。
+- `--dictionary-csv`: 翻訳時に使う用語辞書 CSV。省略時は用語辞書を使わない。
 - `--template`: `convert_md_to_docx_with_docling.py` で使う `template.dotx` のパス。
 - `--force`: 既存の中間成果物や manifest を再利用せず、対象工程を再実行する。
 
@@ -467,7 +464,7 @@ JSONL 形式:
 - 翻訳困難な箇所は勝手に要約せず、原文を残す。
 - 翻訳後に Markdown 構造検証を実行し、壊れていれば最大 10 回までリトライする。
 - LLM 呼び出しは stream 処理を有効化する。
-- `LOG_LEVEL=DEBUG` のとき、stream で受信した差分テキストをチャンク ID とともに逐次 logger へ出力する。
+- stream受信差分をチャンクIDとともに逐次loggerへ出力する。
 
 `chunks-ja/chunks.ja.jsonl` 形式:
 
@@ -581,7 +578,7 @@ Python 実装では次を満たす。
 - Docling JSON とページ画像を LLM/VLM に渡す。
 - OpenAI Python クライアントの timeout は既定 `1800` 秒、`max_retries` は `0`、stream は有効にする。
 - アプリ側の LLM 出力修復、構造検証、API 失敗時の再試行は最大 `10` 回とする。
-- `LOG_LEVEL=DEBUG` のとき、stream 受信差分を逐次 logger へ出力する。
+- stream受信差分を逐次loggerへ出力する。
 - 補正パッチを受け取り、Python 側で schema に適用する。
 - JSON Schema 検証を行う。
 - output ファイルと同じ階層に `manifest.realign.json` を作成し、補正単位ごとの進捗、リトライ、適用済みパッチ、補正理由、確信度を記録する。
@@ -608,7 +605,7 @@ Python 実装では次を満たす。
 - OpenAI 互換 API でチャンクを翻訳する。
 - OpenAI Python クライアントの timeout は既定 `1800` 秒、`max_retries` は `0`、stream は有効にする。
 - アプリ側の LLM 出力修復、構造検証、API 失敗時の再試行は最大 `10` 回とする。
-- `LOG_LEVEL=DEBUG` のとき、stream 受信差分を逐次 logger へ出力する。
+- stream受信差分を逐次loggerへ出力する。
 - 成功済みチャンクのスキップ、再試行、構造検証を行う。
 - JSONL に逐次保存する。
 - output ディレクトリ直下に `manifest.translate.json` を作成し、チャンク単位の進捗、リトライ、出力ファイル、フォールバック状態を記録する。
@@ -697,7 +694,7 @@ if __name__ == "__main__":
 - `running` のまま残った manifest 単位が再実行対象になること。
 - OpenAI Python クライアントが timeout `1800` 秒、`max_retries=0`、`stream=True` で呼び出されること。
 - アプリ側リトライが最大 `10` 回に制御されること。
-- `LOG_LEVEL=DEBUG` のとき、stream 差分が logger に逐次出力されること。
+- stream差分がloggerに逐次出力されること。
 - Langfuse 環境変数が未設定の場合、Langfuse ヘッダーが付与されないこと。
 - Langfuse 環境変数が設定済みの場合、`langfuse_trace_id`、`langfuse_generation_id` などの非秘密ヘッダーが付与されること。
 - `LANGFUSE_SECRET_KEY` が logger、manifest、例外、ヘッダー出力ログに含まれないこと。

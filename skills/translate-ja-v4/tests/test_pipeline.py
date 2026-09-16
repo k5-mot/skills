@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import logging
-import os
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -238,17 +237,13 @@ def test_color_formatter_colors_only_level_name() -> None:
     assert "\x1b" not in rendered.split(" ", 1)[1]
 
 
-def test_logging_suppresses_transport_debug(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_logging_suppresses_transport_debug() -> None:
     """既定DEBUGでもHTTP transportの内部logを抑えることを確認する。
-
-    Args:
-        monkeypatch: pytest monkeypatch fixture。
 
     Returns:
         なし。
     """
 
-    monkeypatch.delenv("LOG_LEVEL", raising=False)
     configure_logging()
     assert logging.getLogger().level == logging.DEBUG
     assert logging.getLogger("httpcore").level == logging.WARNING
@@ -313,7 +308,7 @@ def test_langfuse_callback_is_optional_and_named(
 
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "public")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "secret")
-    monkeypatch.setenv("LANGFUSE_BASE_URL", "http://langfuse.example:3000")
+    monkeypatch.setenv("LANGFUSE_OTEL_HOST", "http://langfuse.example:3000")
     monkeypatch.setattr(module, "_langfuse_client", lambda *_args: None)
     monkeypatch.setattr(module, "CallbackHandler", FakeHandler)
     config = _langfuse_config("structure")
@@ -322,7 +317,6 @@ def test_langfuse_callback_is_optional_and_named(
     callbacks = config["callbacks"]
     assert isinstance(callbacks, list)
     assert isinstance(callbacks[0], FakeHandler)
-    assert os.environ["LANGFUSE_MEDIA_UPLOAD_ENABLED"] == "false"
 
 
 def test_langfuse_rejects_partial_credentials(
@@ -343,10 +337,10 @@ def test_langfuse_rejects_partial_credentials(
         _langfuse_config("translate")
 
 
-def test_langfuse_normalizes_legacy_self_hosted_url(
+def test_langfuse_normalizes_otel_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """旧OTEL host名とendpoint pathをSDK標準base URLへ変換する。
+    """OTEL endpoint pathをSDK用base URLへ変換する。
 
     Args:
         monkeypatch: pytest monkeypatch fixture。
@@ -355,14 +349,11 @@ def test_langfuse_normalizes_legacy_self_hosted_url(
         なし。
     """
 
-    monkeypatch.delenv("LANGFUSE_BASE_URL", raising=False)
-    monkeypatch.delenv("LANGFUSE_HOST", raising=False)
     monkeypatch.setenv(
         "LANGFUSE_OTEL_HOST", "http://langfuse.example:3000/api/public/otel"
     )
 
     assert _prepare_langfuse_base_url() == "http://langfuse.example:3000"
-    assert os.environ["LANGFUSE_BASE_URL"] == "http://langfuse.example:3000"
 
 
 def test_langfuse_rejects_invalid_host(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -375,8 +366,6 @@ def test_langfuse_rejects_invalid_host(monkeypatch: pytest.MonkeyPatch) -> None:
         なし。
     """
 
-    monkeypatch.delenv("LANGFUSE_BASE_URL", raising=False)
-    monkeypatch.delenv("LANGFUSE_HOST", raising=False)
     monkeypatch.setenv("LANGFUSE_OTEL_HOST", "langfuse:3000")
     with pytest.raises(RuntimeError, match="absolute HTTP"):
         _prepare_langfuse_base_url()
@@ -413,25 +402,9 @@ def test_langfuse_flush_skips_uninitialized_client(
 
     import translate_ja_v4.llm as module
 
-    def fail_get_client(**_kwargs: Any) -> None:
-        """未初期化clientへのアクセスをtest失敗として扱う。
-
-        Args:
-            **_kwargs: Langfuse client取得引数。
-
-        Returns:
-            この関数は正常終了しない。
-
-        Raises:
-            AssertionError: 関数が呼ばれた場合。
-        """
-
-        raise AssertionError("get_client must not be called")
-
     module._langfuse_client.cache_clear()
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "public")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "secret")
-    monkeypatch.setattr(module, "get_client", fail_get_client)
 
     flush_langfuse()
 

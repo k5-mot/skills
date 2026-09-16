@@ -30,7 +30,7 @@ def _environment() -> dict[str, str]:
     """
 
     return {
-        "DOCLING_URL": "http://docling",
+        "DOCLING_SERVER_URL": "http://docling",
         "OPENAI_BASE_URL": "http://litellm/v1",
         "OPENAI_API_KEY": "key",
         "OPENAI_STRUCTURE_MODEL": "structure",
@@ -38,7 +38,7 @@ def _environment() -> dict[str, str]:
         "OPENAI_REVIEW_MODEL": "review",
         "OPENAI_EMBEDDING_MODEL": "embedding",
         "LIBRETRANSLATE_URL": "http://libre",
-        "QDRANT_URL": "http://qdrant",
+        "QDRANT_URI": "http://qdrant",
         "QDRANT_COLLECTION": "review",
     }
 
@@ -103,11 +103,29 @@ def test_settings_accept_optional_services_absent() -> None:
     """
 
     env = _environment()
-    for key in ("QDRANT_URL", "QDRANT_COLLECTION", "OPENAI_EMBEDDING_MODEL"):
+    for key in ("QDRANT_URI", "QDRANT_COLLECTION", "OPENAI_EMBEDDING_MODEL"):
         env.pop(key)
     settings = load_settings("translate", env=env)
     assert not settings.langfuse_enabled
     assert not settings.qdrant_enabled
+
+
+def test_settings_do_not_accept_legacy_service_aliases() -> None:
+    """旧Docling・Qdrant変数を正規変数の代用として扱わない。
+
+    Returns:
+        なし。
+    """
+
+    env = _environment()
+    env["DOCLING_URL"] = env.pop("DOCLING_SERVER_URL")
+    with pytest.raises(ValueError, match="DOCLING_SERVER_URL"):
+        load_settings("translate", env=env)
+
+    env = _environment()
+    env["QDRANT_URL"] = env.pop("QDRANT_URI")
+    with pytest.raises(ValueError, match="QDRANT_URI"):
+        load_settings("register", env=env)
 
 
 def test_settings_reject_partial_langfuse() -> None:

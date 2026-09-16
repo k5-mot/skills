@@ -6,7 +6,6 @@ import argparse
 import copy
 import json
 import logging
-import os
 import sys
 import uuid
 from pathlib import Path
@@ -323,13 +322,29 @@ def _load_patch_payload(text: str) -> Any:
     raise ValueError(f"LLM response did not contain a patches JSON object: {preview}")
 
 
-def realign(input_path: Path, output_path: Path, *, force: bool) -> None:
-    """Docling JSON の構造補正を行い、silver JSON と manifest を保存する。"""
+def realign(
+    input_path: Path,
+    output_path: Path,
+    *,
+    openai_timeout: int | None = None,
+    force: bool,
+) -> None:
+    """Docling JSONの構造補正を行い、silver JSONとmanifestを保存する。
+
+    Args:
+        input_path: 入力Docling JSON。
+        output_path: 補正済みJSONの出力先。
+        openai_timeout: OpenAI request timeout秒。
+        force: 既存checkpointを無視するか。
+
+    Returns:
+        なし。
+    """
 
     data = read_json(input_path)
     if not isinstance(data, dict):
         raise ValueError(f"Docling JSON object expected: {input_path}")
-    settings = require_openai_settings()
+    settings = require_openai_settings(timeout_seconds=openai_timeout)
     client = _load_openai_client(settings)
     units = _texts_by_page(data)
     manifest_path = output_path.parent / "manifest.realign.json"
@@ -449,13 +464,16 @@ def main() -> int:
     parser.add_argument("--openai-timeout", type=int)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
-    if args.openai_timeout is not None:
-        os.environ["OPENAI_TIMEOUT_SECONDS"] = str(args.openai_timeout)
     output = Path(args.output)
     if output.exists() and not args.force:
         LOGGER.info("既存出力を再利用します output=%s", output)
         return 0
-    realign(Path(args.input), output, force=args.force)
+    realign(
+        Path(args.input),
+        output,
+        openai_timeout=args.openai_timeout,
+        force=args.force,
+    )
     LOGGER.info("構造補正が完了しました output=%s", output)
     return 0
 

@@ -16,7 +16,7 @@ from src.budget import (
 )
 from src.config import Backend, Settings
 from src.model import Inline, Page
-from src.processing.quality import GlossaryEntry
+from src.processing.quality import GlossaryEntry, matching_glossary
 
 TRANSLATION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -203,7 +203,12 @@ def _openai_translate_chunk(
     prepared = {item_id: protect_text(text) for item_id, text in units}
     protected_units = [(item_id, prepared[item_id][0]) for item_id, _text in units]
     expected = {item_id for item_id, _text in units}
-    prompt = _translation_prompt(rules, glossary, protected_units, previous, following)
+    relevant_glossary = matching_glossary(
+        "\n".join(text for _item_id, text in units), glossary
+    )
+    prompt = _translation_prompt(
+        rules, relevant_glossary, protected_units, previous, following
+    )
     last_error: ValueError | None = None
     for contract_attempt in range(2):
         try:
@@ -289,16 +294,19 @@ def translate_page(
         translated層を持つページ。
     """
 
+    units = translation_units(page)
+    page_glossary = matching_glossary(
+        "\n".join(text for _item_id, text in units), glossary
+    )
     update_current(
         input={
             "page": page.model_dump(),
             "previous": previous,
             "following": following,
             "rules": rules,
-            "glossary": [item.model_dump() for item in glossary],
+            "glossary": [item.model_dump() for item in page_glossary],
         }
     )
-    units = translation_units(page)
     if not units:
         result = apply_layer(page, {}, "translated")
         update_current(output=result.model_dump())
@@ -309,7 +317,9 @@ def translate_page(
     fixed = (
         approximate_tokens(
             rules,
-            json.dumps([item.model_dump() for item in glossary], ensure_ascii=False),
+            json.dumps(
+                [item.model_dump() for item in page_glossary], ensure_ascii=False
+            ),
         )
         + 1_000
     )

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import shutil
 import socket
 import sys
@@ -39,23 +38,6 @@ def load_dotenv(path: str | Path = ".env") -> None:
     python_dotenv_load_dotenv(dotenv_path=Path(path), override=False)
 
 
-def env_bool(name: str, default: bool) -> bool:
-    """環境変数を bool として解釈する。
-
-    Args:
-        name: 環境変数名。
-        default: 環境変数が未設定または空の場合の値。
-
-    Returns:
-        真偽値として解釈した結果。
-    """
-
-    value = os.environ.get(name)
-    if value is None or not value.strip():
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def format_connection_error(endpoint: str, exc: Exception) -> str:
     """Docling 接続エラーを運用者向けの説明へ整形する。
 
@@ -84,12 +66,10 @@ def docling_markdown_payload(document_timeout: int) -> dict[str, str | list[str]
         httpx に渡す form field。
     """
 
-    do_ocr = env_bool("DOCLING_DO_OCR", default=False)
-    force_ocr = env_bool("DOCLING_FORCE_OCR", default=False)
     payload: dict[str, str | list[str]] = {
-        "to_formats": os.environ.get("DOCLING_MARKDOWN_FORMAT", "md"),
-        "do_ocr": str(do_ocr).lower(),
-        "force_ocr": str(force_ocr).lower(),
+        "to_formats": "md",
+        "do_ocr": "false",
+        "force_ocr": "false",
         "document_timeout": str(document_timeout),
         "do_picture_description": "false",
         "include_images": "true",
@@ -97,12 +77,6 @@ def docling_markdown_payload(document_timeout: int) -> dict[str, str | list[str]
         "image_export_mode": "referenced",
         "target_type": "zip",
     }
-    if do_ocr or force_ocr:
-        payload["ocr_preset"] = os.environ.get("DOCLING_OCR_PRESET", "tesseract")
-        languages = os.environ.get("DOCLING_OCR_LANGS", "jpn,jpn_vert,eng")
-        payload["ocr_lang"] = [
-            part.strip() for part in languages.split(",") if part.strip()
-        ]
     return payload
 
 

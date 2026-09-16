@@ -41,8 +41,8 @@ def _settings() -> tuple[str, str]:
         RuntimeError: 必須設定が不足する場合。
     """
 
-    url = os.getenv("DOCLING_SERVER_URL") or os.getenv("DOCLING_SERVE_URL")
-    key = os.getenv("DOCLING_API_KEY") or os.getenv("DOCLING_SERVE_API_KEY")
+    url = os.getenv("DOCLING_SERVER_URL")
+    key = os.getenv("DOCLING_API_KEY")
     if not url or not key:
         raise RuntimeError("DOCLING_SERVER_URL and DOCLING_API_KEY are required")
     return url.rstrip("/"), key

@@ -12,6 +12,7 @@ from src.config import Settings
 from src.model import Block, Inline, Page
 from src.processing import structure as page_structure
 from src.processing import translation as page_translation
+from src.processing.quality import GlossaryEntry
 from src.state import atomic_write_json, load_json
 from src.workflows import review as review_workflow
 from src.workflows import translate as workflow
@@ -86,12 +87,24 @@ def test_translate_page_uses_neighbor_context_and_rejects_foreign_ids(
         return {"translations": [{"id": "i2-0", "text": "訳文"}]}
 
     monkeypatch.setattr(page_translation, "structured_chat", chat)
+    glossary = [
+        GlossaryEntry(source="Text", target="本文"),
+        GlossaryEntry(source="Unused", target="未使用"),
+    ]
     page = workflow.translate_page(
-        _page(2, ["Text"]), "Previous", "Following", "rules", [], settings, "openai"
+        _page(2, ["Text"]),
+        "Previous",
+        "Following",
+        "rules",
+        glossary,
+        settings,
+        "openai",
     )
     assert page.blocks[0].translated is not None
     assert page.blocks[0].translated[0].text == "訳文"
     assert "Previous" in prompts[0] and "Following" in prompts[0]
+    assert '"source": "Text"' in prompts[0]
+    assert "Unused" not in prompts[0]
     monkeypatch.setattr(
         page_translation,
         "structured_chat",
@@ -101,6 +114,62 @@ def test_translate_page_uses_neighbor_context_and_rejects_foreign_ids(
         workflow.translate_page(
             _page(2, ["Text"]), "", "", "rules", [], settings, "openai"
         )
+
+
+def test_review_page_passes_only_matching_glossary_per_inline(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """Reviewへ各Inline原文に出現する用語だけを渡す。
+
+    Args:
+        monkeypatch: Reviewを差し替えるfixture。
+        settings: 共通Settings fixture。
+
+    Returns:
+        なし。
+    """
+
+    page = _page(2, ["API request", "ordinary text"])
+    for block in page.blocks:
+        block.translated = [
+            Inline(id=block.source[0].id, text=f"訳-{block.source[0].id}")
+        ]
+    received: list[list[str]] = []
+
+    def review(
+        _source: str,
+        target: str,
+        _rules: str,
+        _settings: Settings,
+        glossary: list[GlossaryEntry],
+    ) -> ReviewOutcome:
+        """受け取った用語だけを記録して合格を返す。
+
+        Args:
+            _source: 未使用原文。
+            target: 返却する訳文。
+            _rules: 未使用Rules。
+            _settings: 未使用設定。
+            glossary: 記録する抽出済み用語。
+
+        Returns:
+            合格結果。
+        """
+
+        received.append([item.source for item in glossary])
+        return ReviewOutcome(approved=True, text=target)
+
+    monkeypatch.setattr(review_workflow, "run_review", review)
+    workflow._review_page(
+        page,
+        "rules",
+        settings,
+        [
+            GlossaryEntry(source="API", target="API"),
+            GlossaryEntry(source="VLM", target="VLM"),
+        ],
+    )
+    assert received == [["API"], []]
 
 
 def test_structure_clamps_heading_level_jumps(

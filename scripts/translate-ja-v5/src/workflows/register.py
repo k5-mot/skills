@@ -122,7 +122,9 @@ def extract_units(path: Path, settings: Settings) -> list[str]:
     suffix = path.suffix.casefold()
     if suffix in DOCLING_SUFFIXES:
         if not settings.docling_url:
-            raise ValueError("DOCLING_URL is required for PDF/DOCX/PPTX registration")
+            raise ValueError(
+                "DOCLING_SERVER_URL is required for PDF/DOCX/PPTX registration"
+            )
         with tempfile.TemporaryDirectory(prefix="translate-ja-register-") as temporary:
             root = Path(temporary)
             parsed = convert_document(

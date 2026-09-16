@@ -30,8 +30,7 @@ def isolate_local_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
         "LANGFUSE_PUBLIC_KEY",
         "LANGFUSE_SECRET_KEY",
-        "LANGFUSE_BASE_URL",
-        "LANGFUSE_MEDIA_ENABLED",
+        "LANGFUSE_OTEL_HOST",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -68,7 +67,7 @@ def settings(tmp_path: Path) -> Settings:
         libretranslate_api_key=None,
         langfuse_public_key=None,
         langfuse_secret_key=None,
-        langfuse_base_url=None,
+        langfuse_otel_host=None,
         qdrant_url=None,
         qdrant_api_key=None,
         qdrant_collection=None,

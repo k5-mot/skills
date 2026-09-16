@@ -47,7 +47,7 @@ flowchart TD
 
 ## CLI契約
 
-正本は `scripts/run_pipeline.py --help` とする。主要既定値は `translator=default`、`context_chars=50000`、`batch_chars=20000`、`max_batch_elements=0`、`max_output_tokens=16384`、`pdf_chunk_pages=10`、`request_timeout_seconds=1800`、`max_retries=5`、`stage_max_attempts=2`、`LOG_LEVEL=DEBUG` である。API retryとLangGraph Stage retryは障害範囲が異なるため別々に調整できる。
+正本は `scripts/run_pipeline.py --help` とする。主要既定値は `translator=default`、`context_chars=50000`、`batch_chars=20000`、`max_batch_elements=0`、`max_output_tokens=16384`、`pdf_chunk_pages=10`、`request_timeout_seconds=1800`、`max_retries=5`、`stage_max_attempts=2`であり、log levelはDEBUG固定である。API retryとLangGraph Stage retryは障害範囲が異なるため別々に調整できる。
 
 `--translator default` はLibreTranslate、`--translator llm` はLangChain ChatOpenAIを使う。StructureとReviewはtranslator設定に関係なくOpenAI互換APIを使う。ただし `--skip-vlm`、`--skip-review` で省略できる。
 
@@ -67,7 +67,7 @@ span schemaは `id`、`text`、`bbox`、`font`、`size`、`weight` とする。b
 
 LibreTranslateはv1.9.6互換 `/translate` の配列入力を使う。送信対象は翻訳対象要素のtextだけとし、URL、path、command option、inline code、identifierをID付きの翻訳禁止HTML spanで保護する。`format=html` の応答から属性順に依存せずIDを照合し、保護断片とHTML entityをplain textへ復元する。OpenAI互換APIは `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` を使い、Pydantic structured outputで検証する。
 
-`LANGFUSE_PUBLIC_KEY` と `LANGFUSE_SECRET_KEY` が両方ある場合、Langfuse v3以降のLangChain `CallbackHandler` を有効にする。run名は `translate-ja-v4.<stage-or-agent>` とし、Structure、Translate、Fidelity Reviewer、Terminology Reviewer、Adjudicatorを区別する。LLM/VLMを実行したprocessだけがCLI終了時にeventをflushし、全StageをResumeしたprocessはclientを新規作成しない。両keyが未設定なら外部送信せず、片方だけなら設定errorにする。endpointと環境はLangfuse標準の `LANGFUSE_BASE_URL`、`LANGFUSE_TRACING_ENVIRONMENT` に従う。従来版の `LANGFUSE_OTEL_HOST` は互換入力としてbase URLへ変換し、SDKが既定Cloudへ誤送信しないようにする。
+`LANGFUSE_PUBLIC_KEY` と `LANGFUSE_SECRET_KEY` が両方ある場合、Langfuse v3以降のLangChain `CallbackHandler` を有効にする。run名は `translate-ja-v4.<stage-or-agent>` とし、Structure、Translate、Fidelity Reviewer、Terminology Reviewer、Adjudicatorを区別する。LLM/VLMを実行したprocessだけがCLI終了時にeventをflushし、全StageをResumeしたprocessはclientを新規作成しない。両keyが未設定なら外部送信せず、片方だけなら設定errorにする。self-hosted endpointは`LANGFUSE_OTEL_HOST`をclient用base URLへ正規化する。
 
 StructureStageのpage画像は大容量であり、self-hosted環境のpresigned URLがSDK実行hostから到達不能な場合もあるため、v4ではLangfuse SDKのmedia uploadを常に無効にする。base64 mediaはtrace markerへ置換し、text、span、応答patchのtraceを維持する。
 
@@ -79,7 +79,7 @@ Review RAGは `QDRANT_URI`、`QDRANT_API_KEY`、`QDRANT_COLLECTION` を使う。
 
 point IDはsource、unit、chunk番号からUUID5で決定し、同じ入力の再実行で重複しない。`--replace-source` を明示した場合だけ、upsert成功後に同じsourceの旧SHA-256 revisionを削除する。`--dry-run` はQdrantとembedding APIを呼ばない。
 
-既定値は `chunk_chars=1500`、`overlap_chars=200`、`batch_size=64`。IngestとReviewは同じ `OPENAI_EMBEDDING_MODEL`、`QDRANT_COLLECTION`、`QDRANT_VECTOR_NAME` を使わなければならない。
+既定値は `chunk_chars=1500`、`overlap_chars=200`、`batch_size=64`。IngestとReviewは同じ `OPENAI_EMBEDDING_MODEL`、`QDRANT_COLLECTION`とdefault vectorを使わなければならない。
 
 ## 用語集契約
 

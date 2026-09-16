@@ -103,17 +103,12 @@ Python依存はリポジトリルートの `pyproject.toml` と `uv.lock` を正
 | `OPENAI_MODEL` | Structure、Review、Translate（`llm`） | 共通model名 |
 | `LIBRETRANSLATE_URL` | Translate（既定） | LibreTranslate base URL。例: `http://localhost:5000` |
 | `LIBRETRANSLATE_API_KEY` | Translate（任意） | API keyを要求する構成だけ設定 |
-| `QDRANT_URI` | Review（`multi`＋RAG） | Qdrant REST API base URL。`QDRANT_URL` も受理 |
+| `QDRANT_URI` | Review（`multi`＋RAG） | Qdrant REST API base URL |
 | `QDRANT_API_KEY` | Review（`multi`＋RAG） | Qdrant API key |
 | `QDRANT_COLLECTION` | Review（任意） | 検索collection。未設定時はcollectionが1件の場合だけ自動選択 |
-| `QDRANT_EMBEDDING_MODEL` | Review（任意） | Qdrant inference model。既定は `sentence-transformers/all-minilm-l6-v2` |
-| `QDRANT_VECTOR_NAME` | Review（任意） | named vector。未設定時はdefault vector |
-| `QDRANT_TEXT_FIELD` | Review（任意） | 根拠本文payload field。既定は `text` |
-| `QDRANT_SOURCE_FIELD` | Review（任意） | 出典ID payload field。既定は `source` |
-| `QDRANT_LOCATOR_FIELD` | Review（任意） | ページ・section payload field。既定は `page` |
-| `QDRANT_TOP_K` | Review（任意） | 要素ごとの取得件数。既定は3 |
+| `OPENAI_EMBEDDING_MODEL` | Review（RAG時必須） | 検索queryのembedding model |
 
-Docling変数は互換名 `DOCLING_SERVE_URL`、`DOCLING_SERVE_API_KEY` も受理する。OpenAI設定はStructure、Review、および `--translator llm` のTranslateで必要である。`--translator default` のTranslateだけを使う場合、OpenAI設定は不要である。
+Qdrantはdefault vector、payload field `text`・`source`・`page`、取得件数3を固定で使う。OpenAI設定はStructure、Review、および `--translator llm` のTranslateで必要である。`--translator default` のTranslateだけを使う場合、OpenAI設定は不要である。旧環境変数名は受理しない。
 
 ## 5. CLI
 

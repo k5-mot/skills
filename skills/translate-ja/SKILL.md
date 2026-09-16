@@ -27,4 +27,4 @@ PDF、Word、PowerPoint、HTML、画像などの入力文書を Docling schema J
 
 - Docling Serve と OpenAI 互換 API が必要。外部サービスなしの PDF フォールバックは行わない。
 - `.env` または環境変数に `DOCLING_SERVER_URL`, `DOCLING_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` を設定する。
-- `LOG_LEVEL=DEBUG` では stream 差分ログに原文や翻訳文が含まれうるため、機密文書では使わない。
+- ログには原文や翻訳文が含まれうるため、機密文書では保存先のアクセス制御を確認する。

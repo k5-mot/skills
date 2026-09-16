@@ -206,10 +206,7 @@ def _retriever() -> Any:
         RuntimeError: Qdrantまたはembedding設定が不足する場合。
     """
 
-    url, key = (
-        os.getenv("QDRANT_URI") or os.getenv("QDRANT_URL"),
-        os.getenv("QDRANT_API_KEY"),
-    )
+    url, key = os.getenv("QDRANT_URI"), os.getenv("QDRANT_API_KEY")
     if not url or not key:
         raise RuntimeError("QDRANT_URI and QDRANT_API_KEY are required")
     client = QdrantClient(url=url, api_key=key)
@@ -221,15 +218,16 @@ def _retriever() -> Any:
                 "QDRANT_COLLECTION is required unless exactly one collection exists"
             )
         collection = names[0]
+    embedding_model = os.getenv("OPENAI_EMBEDDING_MODEL")
+    if not embedding_model:
+        raise RuntimeError("OPENAI_EMBEDDING_MODEL is required")
     embeddings = OpenAIEmbeddings(
-        model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+        model=embedding_model,
         base_url=os.getenv("OPENAI_BASE_URL"),
         api_key=SecretStr(os.getenv("OPENAI_API_KEY", "")),
     )
-    store = QdrantVectorStore(
-        client, collection, embeddings, vector_name=os.getenv("QDRANT_VECTOR_NAME", "")
-    )
-    return store.as_retriever(search_kwargs={"k": int(os.getenv("QDRANT_TOP_K", "3"))})
+    store = QdrantVectorStore(client, collection, embeddings, vector_name="")
+    return store.as_retriever(search_kwargs={"k": 3})
 
 
 def _evidence(

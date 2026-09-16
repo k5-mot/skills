@@ -27,13 +27,16 @@ def utc_now_iso() -> str:
 
 
 def configure_logging(level_name: str | None = None) -> None:
-    """標準 logger の出力形式とレベルを設定する。"""
+    """標準loggerの出力形式とレベルを設定する。
 
-    level = getattr(
-        logging,
-        (level_name or os.environ.get("LOG_LEVEL") or "INFO").upper(),
-        logging.INFO,
-    )
+    Args:
+        level_name: 明示するlog level。NoneならINFO。
+
+    Returns:
+        なし。
+    """
+
+    level = getattr(logging, (level_name or "INFO").upper(), logging.INFO)
     logging.basicConfig(
         level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )

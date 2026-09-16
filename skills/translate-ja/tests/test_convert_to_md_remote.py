@@ -90,8 +90,10 @@ def test_docling_markdown_payload_disables_ocr_by_default(monkeypatch) -> None: 
     assert "ocr_lang" not in payload
 
 
-def test_docling_markdown_payload_adds_ocr_languages(monkeypatch) -> None:  # noqa: ANN001
-    """OCR 有効時は言語指定を payload に追加する。
+def test_docling_markdown_payload_ignores_unlisted_environment(
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    """契約外の環境変数でDocling payloadを変更しない。
 
     Args:
         monkeypatch: 環境変数を一時変更する pytest fixture。
@@ -105,9 +107,9 @@ def test_docling_markdown_payload_adds_ocr_languages(monkeypatch) -> None:  # no
 
     payload = remote.docling_markdown_payload(120)
 
-    assert payload["do_ocr"] == "true"
-    assert payload["ocr_preset"] == "tesseract"
-    assert payload["ocr_lang"] == ["eng", "jpn"]
+    assert payload["do_ocr"] == "false"
+    assert "ocr_preset" not in payload
+    assert "ocr_lang" not in payload
 
 
 def test_extract_zip_result_writes_markdown_and_artifacts(tmp_path: Path) -> None:

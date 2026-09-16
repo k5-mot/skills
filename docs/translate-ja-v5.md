@@ -2,7 +2,7 @@
 
 `translate-ja-v5`は、英語PDFを日本語DOCXへ変換し、既存翻訳の比較ReviewとReview用参照文書の登録も行うPythonユーティリティです。Agent Skillではありません。
 
-品質判断は、翻訳の正確さ、構造保持、実行コスト、見た目の順で優先します。v4のCLI、中間JSON、manifest、8列用語集との互換性はありません。
+品質判断は、翻訳の正確さ、構造保持、実行コスト、見た目の順で優先します。v4のCLI、中間JSON、manifestとの互換性はありません。用語集はv4と同じ8列schemaを使用します。
 
 ## 必要な環境
 
@@ -25,7 +25,7 @@ uv sync --all-groups
 
 | 変数 | 用途 | 必須条件 |
 |---|---|---|
-| `DOCLING_URL` | Docling Serve URL | `translate`、PDF/DOCX/PPTXの`register` |
+| `DOCLING_SERVER_URL` | Docling Serve URL | `translate`、PDF/DOCX/PPTXの`register` |
 | `DOCLING_API_KEY` | Docling認証 | 接続先が要求する場合 |
 | `OPENAI_BASE_URL` | LiteLLMのOpenAI互換base URL | 全command |
 | `OPENAI_API_KEY` | LiteLLM認証 | 全command |
@@ -35,18 +35,14 @@ uv sync --all-groups
 | `OPENAI_EMBEDDING_MODEL` | Qdrant検索・登録 | Qdrant使用時、`register` |
 | `LIBRETRANSLATE_URL` | LibreTranslate URL | `--backend libretranslate` |
 | `LIBRETRANSLATE_API_KEY` | LibreTranslate認証 | 接続先が要求する場合 |
-| `QDRANT_URL` | Qdrant URL | Qdrant使用時、`register` |
+| `QDRANT_URI` | Qdrant URL | Qdrant使用時、`register` |
 | `QDRANT_API_KEY` | Qdrant認証 | 接続先が要求する場合 |
 | `QDRANT_COLLECTION` | Review collection名 | Qdrant使用時、`register` |
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key | 任意、secret keyと対で指定 |
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key | 任意、public keyと対で指定 |
-| `LANGFUSE_BASE_URL` | self-hosted Langfuse URL | 任意 |
-| `LANGFUSE_MEDIA_ENABLED` | ページ画像のLangfuse upload | 任意、既定は無効。`true`で有効 |
-| `LLM_CONTEXT_TOKENS` | 総context予算 | 任意、既定`50000` |
-| `LLM_OUTPUT_TOKENS` | 出力予約 | 任意、既定`8192` |
-| `LLM_IMAGE_TOKENS` | 画像予約 | 任意、既定`4096` |
+| `LANGFUSE_OTEL_HOST` | self-hosted Langfuse URL | 任意 |
 
-Langfuseの認証情報が設定されている場合、原文、訳文、Rules、prompt、response、RAG本文、修正、Review指摘を記録します。ページ画像のuploadは既定で無効です。必要な場合だけ`LANGFUSE_MEDIA_ENABLED=true`を設定してください。機密文書では、Langfuseの保存先とアクセス制御を確認するか、認証情報を設定せずに実行してください。認証情報自体はtraceへ記録しません。
+Langfuseの認証情報が設定されている場合、原文、訳文、Rules、prompt、response、RAG本文、修正、Review指摘を記録します。ページ画像のuploadは無効です。機密文書では、Langfuseの保存先とアクセス制御を確認するか、認証情報を設定せずに実行してください。認証情報自体はtraceへ記録しません。context予算は50,000 token、出力予約は8,192 token、画像予約は4,096 tokenの固定値です。
 
 ## 翻訳
 
@@ -59,7 +55,7 @@ uv run python scripts/translate-ja-v5/translate.py translate \
 
 LibreTranslateへ翻訳だけを切り替える場合は`--backend libretranslate`を指定します。StructureとReviewは引き続きOpenAI互換APIを使用します。
 
-用語集は`source,target`必須列と`notes`任意列を持つUTF-8 CSVです。
+用語集は`english-short,english-long,japanese-short,japanese-long,kind,description,note,reference`の8列を持つUTF-8 CSVです。short/longの各英日ペアを用語として読み、翻訳チャンクまたはReview対象の原文に実際に出現する用語だけをpromptへ含めます。
 
 ```bash
 uv run python scripts/translate-ja-v5/translate.py translate \
@@ -138,7 +134,7 @@ uv run python scripts/translate-ja-v5/translate.py review \
     └── reviewed/
 ```
 
-Reviewは決定的検査、Fidelity Critic、Japanese Critic、Reviser、Verifierを直列実行します。CriticとVerifierの指摘応答は最大8件かつ2,048 tokenに制限し、Reviserには通常の`LLM_OUTPUT_TOKENS`を使います。数値と単位は保持を検査しますが、数値直後の英文区切り記号は数値の一部として比較しません。原文がページ境界などで文の途中でも、原文末尾より後を推測して欠落と判定しません。訳文が日本語の語順上完結して見えること自体は問題にせず、原文にない意味や後続内容を追加した場合だけ指摘します。Verifierが不合格にした場合は一度だけ再修正し、2回目のReviserには直前のVerifierが未解消と判定した指摘だけを渡します。監査用の指摘履歴は最終結果へ保持します。再び不合格なら処理を失敗させます。失敗messageにはInline IDと末尾3件までの指摘理由を含めます。Qdrantが設定されていればJapanese Criticが参照本文とsource metadataを検索し、根拠をReviserとVerifierにも渡します。参照本文は訳語選択の参考に限定し、短い図表ラベルへ原文にない定義、関係者、背景説明を補う根拠にはしません。
+Reviewは決定的検査、Fidelity Critic、Japanese Critic、Reviser、Verifierを直列実行します。CriticとVerifierの指摘応答は最大8件かつ2,048 tokenに制限し、Reviserには8,192 tokenの固定出力予約を使います。数値と単位は保持を検査しますが、数値直後の英文区切り記号は数値の一部として比較しません。原文がページ境界などで文の途中でも、原文末尾より後を推測して欠落と判定しません。訳文が日本語の語順上完結して見えること自体は問題にせず、原文にない意味や後続内容を追加した場合だけ指摘します。Verifierが不合格にした場合は一度だけ再修正し、2回目のReviserには直前のVerifierが未解消と判定した指摘だけを渡します。監査用の指摘履歴は最終結果へ保持します。再び不合格なら処理を失敗させます。失敗messageにはInline IDと末尾3件までの指摘理由を含めます。Qdrantが設定されていればJapanese Criticが参照本文とsource metadataを検索し、根拠をReviserとVerifierにも渡します。参照本文は訳語選択の参考に限定し、短い図表ラベルへ原文にない定義、関係者、背景説明を補う根拠にはしません。
 
 ## Review参照文書の登録
 

@@ -208,8 +208,6 @@ def test_ingest_upserts_with_review_settings(
     monkeypatch.setattr(
         ingest_qdrant, "_delete_old_revisions", fake_delete_old_revisions
     )
-    monkeypatch.setenv("QDRANT_VECTOR_NAME", "content")
-
     assert ingest(documents, "requested", 32, False) == 1
     assert deletions == []
     assert ingest(documents, "requested", 32, True) == 1
@@ -219,7 +217,7 @@ def test_ingest_upserts_with_review_settings(
         "url": "url",
         "api_key": "key",
         "collection_name": "chosen",
-        "vector_name": "content",
+        "vector_name": "",
         "batch_size": 32,
     }
 
