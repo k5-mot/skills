@@ -238,11 +238,12 @@ def test_review_revises_and_retries_verifier_once(
 
     calls: list[str] = []
     revision_prompts: list[str] = []
+    revision_systems: list[str] = []
 
     def chat(
         _settings: Settings,
         _model: str,
-        _system: str,
+        system: str,
         _user: str,
         schema_name: str,
         _schema: dict[str, Any],
@@ -253,7 +254,7 @@ def test_review_revises_and_retries_verifier_once(
         Args:
             _settings: 未使用設定。
             _model: 未使用model。
-            _system: 未使用prompt。
+            system: 記録するsystem prompt。
             _user: 未使用prompt。
             schema_name: node識別名。
             _schema: 未使用schema。
@@ -270,6 +271,7 @@ def test_review_revises_and_retries_verifier_once(
             return {"findings": []}
         if schema_name == "revision":
             revision_prompts.append(_user)
+            revision_systems.append(system)
             return {"text": f"修正版{calls.count('revision')}"}
         return {
             "approved": calls.count("verification") == 2,
@@ -286,6 +288,9 @@ def test_review_revises_and_retries_verifier_once(
     assert "critic-meaning" in revision_prompts[0]
     assert "critic-meaning" not in revision_prompts[1]
     assert "verifier-omission" in revision_prompts[1]
+    assert "文全体を再構成" not in revision_systems[0]
+    assert "文全体を再構成" in revision_systems[1]
+    assert "理由、条件、選択肢の係り受け" in revision_systems[1]
     assert {item.category for item in outcome.findings} == {
         "critic-meaning",
         "verifier-omission",
