@@ -153,6 +153,10 @@ def test_embeddings_are_sent_one_at_a_time(
             {"type": "object", "required": ["value"]},
         ),
         (
+            ["", "", '{"value":"ok"}'],
+            {"type": "object", "required": ["value"]},
+        ),
+        (
             ['{"value":"ok"}\n\nこれは追加説明です。'],
             {"type": "object"},
         ),
@@ -208,17 +212,68 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
     assert "tools" not in calls[-1]
     assert "JSON Schema" in calls[-1]["messages"][0]["content"]
     output = capsys.readouterr().out
-    assert "LLM: answer attempt 1/2 started" in output
-    assert f"LLM: answer attempt {len(responses)}/2 success" in output
+    assert "LLM: answer attempt 1/3 started" in output
+    assert f"LLM: answer attempt {len(responses)}/3 success" in output
     assert output.count("invalid response") == len(responses) - 1
     if len(responses) > 1:
         repair_messages = calls[1]["messages"]
-        assert repair_messages[-2] == {
-            "role": "assistant",
-            "content": responses[0],
-        }
-        assert repair_messages[-1]["role"] == "user"
-        assert "修復" in repair_messages[-1]["content"]
+        if responses[0]:
+            assert repair_messages[-2] == {
+                "role": "assistant",
+                "content": responses[0],
+            }
+            assert repair_messages[-1]["role"] == "user"
+            assert "修復" in repair_messages[-1]["content"]
+        else:
+            assert len(repair_messages) == 2
+
+
+def test_structured_chat_stops_after_three_invalid_responses(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """structured応答が3回とも不正なら有限回で失敗する。
+
+    Args:
+        monkeypatch: OpenAI clientを差し替えるfixture。
+        settings: 共通Settings fixture。
+
+    Returns:
+        なし。
+    """
+
+    calls = 0
+
+    class Completions:
+        """空応答だけを返すChat Completions test double。"""
+
+        def create(self, **_kwargs: Any) -> Any:
+            """呼出し回数を記録して空応答を返す。
+
+            Args:
+                **_kwargs: 未使用request引数。
+
+            Returns:
+                空contentを持つ模擬response。
+            """
+
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=""))]
+            )
+
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+    monkeypatch.setattr(llm, "_client", lambda _settings: fake)
+    with pytest.raises(ValueError, match="required JSON object"):
+        llm.structured_chat(
+            settings,
+            "model",
+            "system",
+            "user",
+            "answer",
+            {"type": "object"},
+        )
+    assert calls == 3
 
 
 def test_langfuse_media_is_disabled_without_extra_environment_contract(

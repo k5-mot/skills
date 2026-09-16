@@ -19,7 +19,7 @@ uv sync --all-groups
 - JSON Schema structured outputと画像messageに対応するvLLM model
 - `--list-of-figures`、`--list-of-tables`、`docx+native_numbering`に対応するPandoc
 
-想定modelはQwen/Gemma系ですが、model名は固定していません。`translate`の入力はPDFだけです。`register`はPDFに加えてDOCXとPPTXも受け付けます。JSON Schemaをsystem promptにも明記し、JSON objectのほか、local modelが返す外側の`json`code fenceも受理します。先頭JSON後の追加説明は出力に使用しません。非JSONまたは必須キー不足の応答は、不正応答を修復対象としてモデルへ渡し、一度だけ再生成します。翻訳は各IDを独立して扱い、前後に続く文の断片でも補完やID間の移動・統合を禁止します。翻訳JSONのID集合、空文字、保護placeholderに違反した応答も、違反理由を示して一度だけ再生成します。
+想定modelはQwen/Gemma系ですが、model名は固定していません。`translate`の入力はPDFだけです。`register`はPDFに加えてDOCXとPPTXも受け付けます。JSON Schemaをsystem promptにも明記し、JSON objectのほか、local modelが返す外側の`json`code fenceも受理します。先頭JSON後の追加説明は出力に使用しません。空、非JSON、必須キー不足の応答は最大3回まで再生成し、内容のある不正応答は修復対象としてモデルへ渡します。翻訳は各IDを独立して扱い、前後に続く文の断片でも補完やID間の移動・統合を禁止します。翻訳JSONのID集合、空文字、保護placeholderに違反した応答も、違反理由を示して一度だけ再生成します。
 
 ## 環境変数
 
@@ -147,7 +147,7 @@ uv run python scripts/translate-ja-v5/translate.py register --doc-dir references
 
 対応形式はPDF、DOCX、PPTX、Markdown、UTF-8 textです。directoryは再帰探索され、隠しfileと空fileは無視されます。PDF/DOCX/PPTXはDocling ServeでParseし、翻訳処理と同じ内部文書モデルへNormalizeします。見出しと段落の境界を優先し、約1,000 tokenごとに約100 tokenを重複させてchunk化します。単一blockが上限を超える場合は本文を分割し、継続chunkへ見出しを再掲します。MarkdownとtextはDoclingへ送らず、同じchunk化規則を直接適用します。Embeddingは入力を一件ずつ直列送信し、Qdrantのupsertと登録確認は64件ずつ直列送信します。`QDRANT_COLLECTION`が存在しない場合は、最初のEmbedding次元とCosine距離を使って自動作成します。既存collectionにはfileを追加し、新pointをすべてupsertして取得確認した後、同じsourceの旧revisionと同一revisionの余剰pointを削除します。新revision登録に失敗した場合は旧revisionを残します。
 
-Docling ServeへはPDFを最大10ページずつ、DOCX/PPTXを一文書ずつ送ります。PDFの分割結果は参照、ページ番号、asset URIを全体文書用に再構成します。Office文書のDocling JSONにページ情報がない場合は、Normalize時に仮想ページ1へ全要素を配置します。非同期完了statusは、現行の`task_status`と旧形式の`status`の両方に対応します。実行中は`Docling: chunk 1/36 pages 1-10 started`や`Docling: started`のように、チャンク進捗とstatus変化を表示します。Structure、Translate、Reviewは実行対象ページの開始・完了を表示し、LiteLLM呼出しは`LLM: translations attempt 1/2 started`のようにschema名と構造化応答の再生成状況を表示します。Docling Serve、LiteLLM、LibreTranslate、Qdrantへの通信障害、408、429、5xxは最大3回まで指数backoffで再試行します。最終DOCXは一時packageの整合性を確認してからatomic置換するため、Pandoc失敗時に既存DOCXを上書きしません。
+Docling ServeへはPDFを最大10ページずつ、DOCX/PPTXを一文書ずつ送ります。PDFの分割結果は参照、ページ番号、asset URIを全体文書用に再構成します。Office文書のDocling JSONにページ情報がない場合は、Normalize時に仮想ページ1へ全要素を配置します。非同期完了statusは、現行の`task_status`と旧形式の`status`の両方に対応します。実行中は`Docling: chunk 1/36 pages 1-10 started`や`Docling: started`のように、チャンク進捗とstatus変化を表示します。Structure、Translate、Reviewは実行対象ページの開始・完了を表示し、LiteLLM呼出しは`LLM: translations attempt 1/3 started`のようにschema名と構造化応答の再生成状況を表示します。Docling Serve、LiteLLM、LibreTranslate、Qdrantへの通信障害、408、429、5xxは最大3回まで指数backoffで再試行します。最終DOCXは一時packageの整合性を確認してからatomic置換するため、Pandoc失敗時に既存DOCXを上書きしません。
 
 ## 制約
 
