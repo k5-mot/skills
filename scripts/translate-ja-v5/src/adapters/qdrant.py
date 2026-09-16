@@ -66,7 +66,7 @@ def search(settings: Settings, query: str, limit: int = 5) -> list[dict[str, Any
 def replace_revision(
     settings: Settings, points: list[models.PointStruct], source: str, revision: str
 ) -> None:
-    """collectionを用意し、新revision検証後に旧revisionだけ削除する。
+    """新point検証後に旧revisionと同一revisionの余剰pointを削除する。
 
     Args:
         settings: Qdrant接続とcollection設定。
@@ -136,6 +136,23 @@ def replace_revision(
         lambda: client.delete(
             collection_name=collection,
             points_selector=old_filter,
+            wait=True,
+        )
+    )
+    # chunk方針変更で件数が減っても、同じfile revisionの古い末尾を残さない。
+    stale_tail_filter = models.Filter(
+        must=[
+            models.FieldCondition(key="source", match=models.MatchValue(value=source)),
+            models.FieldCondition(
+                key="revision", match=models.MatchValue(value=revision)
+            ),
+            models.FieldCondition(key="chunk", range=models.Range(gte=len(points))),
+        ]
+    )
+    retry_call(
+        lambda: client.delete(
+            collection_name=collection,
+            points_selector=stale_tail_filter,
             wait=True,
         )
     )

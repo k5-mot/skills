@@ -15,6 +15,7 @@ from src.adapters.docling import convert_document
 from src.adapters.langfuse import observed, update_current
 from src.adapters.llm import embeddings
 from src.adapters.qdrant import replace_revision
+from src.budget import approximate_tokens
 from src.config import Settings
 from src.model import Document, block_text, inline_text
 from src.processing.normalize import normalize_docling
@@ -190,27 +191,115 @@ def _semantic_parts(text: str) -> list[str]:
     return result
 
 
-def chunk_units(units: list[str], size: int = 1_500) -> list[Chunk]:
-    """意味blockを壊さず最大1,500文字を目安に連結する。
+def _split_text(text: str, size: int, overlap: int) -> list[str]:
+    """長文を読みやすい境界と重複を保って上限内へ分割する。
+
+    Args:
+        text: 分割する本文。
+        size: 各断片の概算token上限。
+        overlap: 隣接断片へ重ねる概算token数。
+
+    Returns:
+        空でなく上限内の断片列。
+    """
+
+    result: list[str] = []
+    start = 0
+    effective_overlap = min(overlap, max(0, size - 1))
+    while start < len(text):
+        end = min(start + size, len(text))
+        if end < len(text):
+            minimum = start + max(1, size // 2)
+            boundaries = [
+                position + len(separator)
+                for separator in ("\n\n", ". ", "? ", "! ", "; ", ", ", " ")
+                if (position := text.rfind(separator, minimum, end)) >= minimum
+            ]
+            if boundaries:
+                end = max(boundaries)
+        segment = text[start:end].strip()
+        if segment:
+            result.append(segment)
+        if end >= len(text):
+            break
+        start = max(start + 1, end - effective_overlap)
+    return result
+
+
+def _split_semantic_part(part: str, size: int, overlap: int) -> list[str]:
+    """意味blockを見出し文脈付きの上限内断片へ分ける。
+
+    Args:
+        part: 見出しと本文、または単独段落。
+        size: 各断片の概算token上限。
+        overlap: 隣接断片へ重ねる概算token数。
+
+    Returns:
+        見出しを可能な限り再掲した断片列。
+    """
+
+    if approximate_tokens(part) <= size:
+        return [part]
+    paragraphs = [
+        value.strip() for value in re.split(r"\n\s*\n", part) if value.strip()
+    ]
+    headings: list[str] = []
+    while paragraphs and re.match(r"^#{1,6}\s", paragraphs[0]):
+        headings.append(paragraphs.pop(0))
+    prefix = "\n\n".join(headings)
+    body = "\n\n".join(paragraphs)
+    if prefix and body and approximate_tokens(prefix, "\n\n") < size:
+        capacity = size - approximate_tokens(prefix, "\n\n")
+        return [
+            f"{prefix}\n\n{segment}"
+            for segment in _split_text(body, capacity, min(overlap, capacity - 1))
+        ]
+    return _split_text(part, size, overlap)
+
+
+def chunk_units(units: list[str], size: int = 1_000, overlap: int = 100) -> list[Chunk]:
+    """意味境界を優先して概算1,000 token以内へ分割する。
 
     Args:
         units: pageまたは文書単位の本文。
-        size: 1 chunkの文字数上限。単一blockが超える場合はblockを優先する。
+        size: 1 chunkの概算token上限。
+        overlap: 隣接chunkへ重ねる概算token数。
 
     Returns:
         unit番号と順序を持つchunk列。
+
+    Raises:
+        ValueError: sizeまたはoverlapが不正な場合。
     """
 
+    if size < 1:
+        raise ValueError("chunk size must be positive")
+    if overlap < 0:
+        raise ValueError("chunk overlap must not be negative")
     chunks: list[Chunk] = []
     for unit_index, unit in enumerate(units):
         current = ""
         for part in _semantic_parts(unit):
-            candidate = f"{current}\n\n{part}".strip() if current else part
-            if current and len(candidate) > size:
-                chunks.append(Chunk(current, unit_index, len(chunks)))
-                current = part
-            else:
-                current = candidate
+            segments = _split_semantic_part(part, size, overlap)
+            if len(segments) > 1:
+                if current:
+                    chunks.append(Chunk(current, unit_index, len(chunks)))
+                    current = ""
+                for segment in segments:
+                    chunks.append(Chunk(segment, unit_index, len(chunks)))
+                continue
+            for segment in segments:
+                candidate = f"{current}\n\n{segment}".strip() if current else segment
+                if current and approximate_tokens(candidate) > size:
+                    chunks.append(Chunk(current, unit_index, len(chunks)))
+                    available = max(0, size - approximate_tokens(segment, "\n\n"))
+                    prefix_size = min(overlap, available)
+                    prefix = current[-prefix_size:].strip() if prefix_size else ""
+                    current = f"{prefix}\n\n{segment}".strip() if prefix else segment
+                else:
+                    current = candidate
+                if approximate_tokens(current) > size:
+                    raise RuntimeError("chunk exceeds the configured token estimate")
         if current:
             chunks.append(Chunk(current, unit_index, len(chunks)))
     return chunks
