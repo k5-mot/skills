@@ -91,7 +91,7 @@ def structure_page(page: Page, image: Path, rules: str, settings: Settings) -> P
         許可されたpatchだけを適用したページcopy。
 
     Raises:
-        ValueError: modelが未知IDまたは不正変更を返す場合。
+        ValueError: modelが未知IDを返す場合。
     """
 
     update_current(
@@ -112,7 +112,7 @@ def structure_page(page: Page, image: Path, rules: str, settings: Settings) -> P
     response = structured_chat(
         settings,
         settings.structure_model,
-        "文書画像と抽出要素を比較し、必要な構造補正だけをJSONで返してください。要素の追加・削除・本文変更は禁止です。",
+        "文書画像と抽出要素を比較し、必要な構造補正だけをJSONで返してください。要素の追加・削除・本文変更は禁止です。kindがheadingでなければlevelをnull、kindがalertでなければalert_kindをnullにしてください。",
         f"Structureルール:\n{rules}\n\nページ要素:\n{json.dumps(summary, ensure_ascii=False)}",
         "structure_patches",
         STRUCTURE_SCHEMA,
@@ -128,15 +128,15 @@ def structure_page(page: Page, image: Path, rules: str, settings: Settings) -> P
         if kind is not None:
             block.kind = kind
         level = patch.get("level")
-        if level is not None:
-            if kind not in {None, "heading"} and block.kind != "heading":
-                raise ValueError(f"heading level on non-heading: {block.id}")
+        if block.kind == "heading" and level is not None:
             block.level = int(level)
+        elif block.kind != "heading":
+            block.level = None
         alert_kind = patch.get("alert_kind")
-        if alert_kind is not None:
-            if block.kind != "alert":
-                raise ValueError(f"alert kind on non-alert: {block.id}")
+        if block.kind == "alert" and alert_kind is not None:
             block.alert_kind = alert_kind
+        elif block.kind != "alert":
+            block.alert_kind = None
     _fix_heading_jumps(result)
     update_current(output=result.model_dump())
     return result

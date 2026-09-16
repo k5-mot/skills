@@ -110,6 +110,8 @@ uv run python scripts/translate-ja-v5/translate.py translate \
 - `templates/translation-rules.md`: Translationだけ
 - `templates/review-rules.md`: 翻訳内Reviewとstandalone Reviewだけ
 
+Structure応答に最終的なblock種別と両立しない見出しlevelまたはAlert種別が含まれた場合、その属性だけを決定的に破棄し、本文とblock種別は維持します。
+
 付録見出しを翻訳しない、英語と日本語を併記する、といった例外は`translation-rules.md`へ追加します。同じ例外をReviewでも許容する場合は、対応する規則を`review-rules.md`にも明記します。Rulesや用語集の変更は自動的なResume無効化対象ではないため、既存成果物へ反映する場合は`--force`を使用します。
 
 全大文字という理由だけでは本文や見出しを保護しません。URL、path、command option、コード形式の識別子は機械的に保護し、略語や製品名はTranslation RulesとReviewで維持します。複数語の英語原文がそのまま訳文へ返された場合は未翻訳としてReview対象になります。
