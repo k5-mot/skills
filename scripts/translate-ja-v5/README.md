@@ -63,7 +63,7 @@ v5が使用する主なPythonパッケージは次のとおりです。バージ
 curl "$OPENAI_BASE_URL/models" \
   --header "Authorization: Bearer $OPENAI_API_KEY" | jq
 
-curl "$QDRANT_URL/collections" \
+curl "$QDRANT_URI/collections" \
   --header "api-key: $QDRANT_API_KEY" | jq
 ```
 
@@ -72,7 +72,7 @@ curl "$QDRANT_URL/collections" \
 `.env`などへ次を設定します。
 
 ```dotenv
-DOCLING_URL=http://docling.example.test
+DOCLING_SERVER_URL=http://docling.example.test
 OPENAI_BASE_URL=http://litellm.example.test/v1
 OPENAI_API_KEY=replace-me
 OPENAI_STRUCTURE_MODEL=structure-model
@@ -80,7 +80,7 @@ OPENAI_TRANSLATION_MODEL=translation-model
 OPENAI_REVIEW_MODEL=review-model
 ```
 
-Qdrant、Langfuse、LibreTranslateの設定は、該当機能を使用する場合だけ必要です。Langfuseのページ画像uploadは既定で無効です。必要な場合だけ`LANGFUSE_MEDIA_ENABLED=true`を設定します。
+Qdrant、Langfuse、LibreTranslateの設定は、該当機能を使用する場合だけ必要です。Langfuseのページ画像uploadは無効です。
 
 ## 翻訳の実行
 
@@ -163,7 +163,7 @@ Docling固有の大きなJSONを、`Document`、`Page`、`Block`、`Inline`を�
 
 対象ページの各Inline IDを保ったまま日本語へ翻訳します。前後1ページの原文は文脈として参照しますが、出力するのは対象ページだけです。URL、path、command、codeなどの保護文字列や、入力IDの欠落・混同を検査します。結果は`.work/translated/`へ保存します。
 
-翻訳方針は`templates/translation-rules.md`、任意の用語集は`--glossary`で指定します。`--backend libretranslate`を選んでも、StructureとReviewはLiteLLMを使用します。
+翻訳方針は`templates/translation-rules.md`、任意の8列用語集は`--glossary`で指定します。用語集は`english-short,english-long,japanese-short,japanese-long,kind,description,note,reference`列を持ち、各promptには対象原文へ実際に出現する用語だけを含めます。`--backend libretranslate`を選んでも、StructureとReviewはLiteLLMを使用します。
 
 ### Review
 

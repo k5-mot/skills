@@ -201,9 +201,7 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
 
     fake = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
     monkeypatch.setattr(llm, "_client", lambda _settings: fake)
-    result = llm.structured_chat(
-        settings, "model", "system", "user", "answer", schema
-    )
+    result = llm.structured_chat(settings, "model", "system", "user", "answer", schema)
     assert result == {"value": "ok"}
     assert len(calls) == len(responses)
     assert calls[-1]["response_format"]["type"] == "json_schema"
@@ -223,13 +221,12 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
         assert "修復" in repair_messages[-1]["content"]
 
 
-def test_langfuse_media_is_opt_in(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_langfuse_media_is_disabled_without_extra_environment_contract(
+    tmp_path: Path,
 ) -> None:
-    """Langfuse画像を既定で無効にし、明示設定時だけ生成する。
+    """追加環境変数を使わずLangfuse画像uploadを無効に保つ。
 
     Args:
-        monkeypatch: LangfuseMediaを差し替えるfixture。
         tmp_path: 画像fileを置く一時directory。
 
     Returns:
@@ -238,13 +235,7 @@ def test_langfuse_media_is_opt_in(
 
     image = tmp_path / "page.png"
     image.write_bytes(b"png")
-    monkeypatch.setattr(langfuse_adapter, "LangfuseMedia", dict)
     assert langfuse_adapter.media(image) is None
-    monkeypatch.setenv("LANGFUSE_MEDIA_ENABLED", "true")
-    assert langfuse_adapter.media(image) == {
-        "file_path": str(image),
-        "content_type": "image/png",
-    }
 
 
 def test_libretranslate_preserves_protected_fragments(
@@ -488,9 +479,10 @@ def test_docling_converts_office_documents_with_shared_flow(
 
     monkeypatch.setattr(docling, "_convert_one", convert_one)
     output = tmp_path / "parsed.json"
-    assert docling.convert_document(
-        source, output, tmp_path / "assets", "http://docling"
-    ) == document
+    assert (
+        docling.convert_document(source, output, tmp_path / "assets", "http://docling")
+        == document
+    )
     assert called == [source]
     assert json.loads(output.read_text(encoding="utf-8")) == document
     assert docling.CONTENT_TYPES[suffix] == content_type

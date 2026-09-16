@@ -12,6 +12,7 @@ from langfuse import LangfuseMedia, get_client, observe
 
 LOGGER = logging.getLogger(__name__)
 T = TypeVar("T")
+MEDIA_UPLOAD_ENABLED = False
 
 
 def observed(
@@ -83,12 +84,7 @@ def media(path: Path) -> LangfuseMedia | None:
         遅延uploadされるLangfuseMedia。既定ではNone。
     """
 
-    if os.getenv("LANGFUSE_MEDIA_ENABLED", "").casefold() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }:
+    if not MEDIA_UPLOAD_ENABLED:
         return None
     return LangfuseMedia(file_path=str(path), content_type=cast(Any, "image/png"))
 

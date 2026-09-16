@@ -23,7 +23,7 @@ def _client(settings: Settings) -> QdrantClient:
     """
 
     if not settings.qdrant_url:
-        raise ValueError("QDRANT_URL is required")
+        raise ValueError("QDRANT_URI is required")
     return QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
 
 
