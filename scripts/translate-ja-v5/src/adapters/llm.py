@@ -16,6 +16,7 @@ from src.adapters.langfuse import media, observed, update_current
 from src.config import Settings
 
 T = TypeVar("T")
+STRUCTURED_RESPONSE_ATTEMPTS = 3
 
 
 class ContextLengthError(RuntimeError):
@@ -190,9 +191,9 @@ def structured_chat(
             temperature=0,
         )
 
-    # 通信再試行とは分離し、形式修復でAPI呼出しが無制限に増えないよう二回に限る。
-    for format_attempt in range(2):
-        attempt_label = f" attempt {format_attempt + 1}/2"
+    # 通信再試行とは分離し、local modelの一時的な空応答を含めて有限回だけ再生成する。
+    for format_attempt in range(STRUCTURED_RESPONSE_ATTEMPTS):
+        attempt_label = f" attempt {format_attempt + 1}/{STRUCTURED_RESPONSE_ATTEMPTS}"
         print(f"LLM: {schema_name}{attempt_label} started", flush=True)
         update_current(input={**trace_input, "system": system_prompt})
         try:
@@ -224,11 +225,12 @@ def structured_chat(
         except ValueError as error:
             print(f"LLM: {schema_name}{attempt_label} invalid response", flush=True)
             update_current(output={"invalid_response": value})
-            if format_attempt:
+            if format_attempt == STRUCTURED_RESPONSE_ATTEMPTS - 1:
                 raise ValueError(
                     "LLM did not return the required JSON object"
                 ) from error
-            invalid_response = value or ""
+            # 空応答は修復材料にならないため、同じrequestを一から再生成する。
+            invalid_response = value if value and value.strip() else None
             continue
         update_current(output=parsed)
         print(f"LLM: {schema_name}{attempt_label} success", flush=True)
