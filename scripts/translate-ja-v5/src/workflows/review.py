@@ -232,12 +232,20 @@ def build_review_graph(settings: Settings) -> Any:
             更新した候補訳。
         """
 
+        retry_policy = (
+            "再修正です。直前の指摘が残った場合は局所的な語句置換に固執せず、"
+            "意味を増減させない範囲で原文から文全体を再構成し、"
+            "理由、条件、選択肢の係り受けを明確にしてください。"
+            if state.get("verifications", 0) > 0
+            else ""
+        )
         response = structured_chat(
             settings,
             settings.review_model or "",
             "Reviserです。指摘箇所だけを必要最小限に修正し、原文にない情報を追加しないでください。"
             + SOURCE_BOUNDARY_POLICY
-            + SOURCE_NOISE_POLICY,
+            + SOURCE_NOISE_POLICY
+            + retry_policy,
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n元訳:\n{state['original']}\n\n候補訳:\n{state['candidate']}\n\n指摘:\n{json.dumps(state.get('findings', []), ensure_ascii=False)}\n\n根拠:\n{json.dumps(state.get('evidence', []), ensure_ascii=False)}",
             "revision",
             REVISION_SCHEMA,
