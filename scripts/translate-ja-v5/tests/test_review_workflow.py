@@ -393,7 +393,9 @@ def test_review_limits_assessment_output_but_not_revision(
         return {"approved": True, "findings": []}
 
     monkeypatch.setattr(review, "structured_chat", chat)
-    review.run_review("Source", "訳文", "固有ルール", settings)
+    review.run_review(
+        "warning order community", "警告命令コミュニティ", "固有ルール", settings
+    )
     assert limits == {
         "fidelity_findings": 2_048,
         "japanese_findings": 2_048,
@@ -401,9 +403,12 @@ def test_review_limits_assessment_output_but_not_revision(
         "verification": 2_048,
     }
     assert "固有ルール" in prompts["revision"]
-    assert "原文末尾より後を推測して欠落と判定せず" in systems[
-        "japanese_findings"
-    ]
+    assert "warning order community" in prompts["verification"]
+    assert "原文末尾より後を推測して欠落と判定せず" in systems["japanese_findings"]
+    for schema_name in ("japanese_findings", "revision", "verification"):
+        assert "参照文書は訳語選択の参考に限り" in systems[schema_name]
+        assert "短い図表ラベルや用語" in systems[schema_name]
+        assert "定義、関係者、背景説明を補うことを要求しない" in systems[schema_name]
     for schema_name in ("fidelity_findings", "japanese_findings", "verification"):
         assert "日本語の語順上完結して見えるだけ" in systems[schema_name]
 

@@ -96,6 +96,11 @@ FRAGMENT_REVIEW_POLICY = (
     "訳文が日本語の語順上完結して見えるだけでは問題にしないでください。"
     "原文にない意味や後続内容を訳文が追加した場合だけ指摘してください。"
 )
+SOURCE_BOUNDARY_POLICY = (
+    "参照文書は訳語選択の参考に限り、原文の一部や隠れた文脈として扱わないでください。"
+    "短い図表ラベルや用語は、その断片に明記された語だけで評価し、"
+    "参照文書から定義、関係者、背景説明を補うことを要求しないでください。"
+)
 
 
 def _parse_findings(value: Any) -> list[dict[str, Any]]:
@@ -194,6 +199,7 @@ def build_review_graph(settings: Settings) -> Any:
             assessment_settings.review_model or "",
             "Japanese Criticです。訳文は変更せず、用語、一貫性、自然さを最大8件、簡潔に指摘してください。"
             + FRAGMENT_REVIEW_POLICY
+            + SOURCE_BOUNDARY_POLICY
             + "参照がある場合はsourceを含む根拠をevidenceへ必ず示してください。",
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n訳文:\n{state['candidate']}\n\n参照:\n{json.dumps(evidence, ensure_ascii=False)}",
             "japanese_findings",
@@ -222,7 +228,8 @@ def build_review_graph(settings: Settings) -> Any:
         response = structured_chat(
             settings,
             settings.review_model or "",
-            "Reviserです。指摘箇所だけを必要最小限に修正し、原文にない情報を追加しないでください。",
+            "Reviserです。指摘箇所だけを必要最小限に修正し、原文にない情報を追加しないでください。"
+            + SOURCE_BOUNDARY_POLICY,
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n元訳:\n{state['original']}\n\n候補訳:\n{state['candidate']}\n\n指摘:\n{json.dumps(state.get('findings', []), ensure_ascii=False)}\n\n根拠:\n{json.dumps(state.get('evidence', []), ensure_ascii=False)}",
             "revision",
             REVISION_SCHEMA,
@@ -247,6 +254,7 @@ def build_review_graph(settings: Settings) -> Any:
             assessment_settings.review_model or "",
             "Verifierです。現在の候補訳を原文と直接比較してください。既存指摘は確認項目であり、存在するだけでは不合格にしません。"
             + FRAGMENT_REVIEW_POLICY
+            + SOURCE_BOUNDARY_POLICY
             + "現在も残る重大な誤訳、欠落、追加だけを最大8件返し、一つでもあればapproved=false、全て解消済みならapproved=trueにしてください。",
             f"原文:\n{state['source']}\n\n元訳:\n{state['original']}\n\n候補訳:\n{state['candidate']}\n\n既存指摘:\n{json.dumps(state.get('findings', []), ensure_ascii=False)}\n\n参照根拠:\n{json.dumps(state.get('evidence', []), ensure_ascii=False)}",
             "verification",
