@@ -147,7 +147,8 @@ def _review_page(
                 settings,
                 matching_glossary(source, glossary),
             ).text
-        except RuntimeError as error:
+        # Review内部の応答形式・検索失敗にも対象Inlineを残し、再開時の診断を可能にする。
+        except Exception as error:  # noqa: BLE001
             raise RuntimeError(f"Review failed for {item_id}: {error}") from error
     result = apply_layer(page, reviewed, "reviewed")
     update_current(output=result.model_dump())
