@@ -2071,19 +2071,14 @@ def test_require_qdrant_settings_reads_env_and_defaults(
 
     for name in (
         "QDRANT_URI",
-        "QDRANT_URL",
         "QDRANT_API_KEY",
         "QDRANT_COLLECTION",
-        "QDRANT_EMBEDDING_MODEL",
-        "QDRANT_VECTOR_NAME",
-        "QDRANT_TEXT_FIELD",
-        "QDRANT_SOURCE_FIELD",
-        "QDRANT_LOCATOR_FIELD",
-        "QDRANT_TOP_K",
+        "OPENAI_EMBEDDING_MODEL",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("QDRANT_URI", "https://qdrant.example.test/")
     monkeypatch.setenv("QDRANT_API_KEY", "secret")
+    monkeypatch.setenv("OPENAI_EMBEDDING_MODEL", "embedding")
 
     settings = AgentReview._settings()
 
@@ -2182,7 +2177,11 @@ def test_qdrant_collection_is_auto_selected_only_when_unique() -> None:
     )
     client = Mock()
     client.request.return_value = response
-    settings = QdrantSettings(uri="https://qdrant.example.test", api_key="secret")
+    settings = QdrantSettings(
+        uri="https://qdrant.example.test",
+        api_key="secret",
+        embedding_model="embedding",
+    )
 
     assert AgentReview._resolve_collection(client, settings) == "domain"
 
@@ -2277,6 +2276,7 @@ def test_multi_agent_review_uses_rag_and_adjudicates_disagreement(
     qdrant = QdrantSettings(
         uri="https://qdrant.example.test",
         api_key="secret",
+        embedding_model="embedding",
         collection="domain",
     )
     items = [

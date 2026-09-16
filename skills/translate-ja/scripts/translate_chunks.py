@@ -189,21 +189,35 @@ def _unit_map(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def translate_chunks(
-    input_path: Path, output_dir: Path, *, dictionary_csv: str | None, force: bool
+    input_path: Path,
+    output_dir: Path,
+    *,
+    dictionary_csv: str | None,
+    openai_timeout: int | None = None,
+    force: bool,
 ) -> None:
-    """Chunk JSONL を翻訳し、出力 JSONL と manifest を更新する。"""
+    """Chunk JSONLを翻訳し、出力JSONLとmanifestを更新する。
+
+    Args:
+        input_path: 入力Chunk JSONL。
+        output_dir: 翻訳成果物directory。
+        dictionary_csv: 任意の用語集CSV path。
+        openai_timeout: OpenAI request timeout秒。
+        force: 既存成果物を破棄して再実行するか。
+
+    Returns:
+        なし。
+    """
 
     chunks = read_jsonl(input_path)
-    glossary = load_dictionary_csv(
-        dictionary_csv or os.environ.get("TRANSLATE_JA_DICTIONARY_CSV")
-    )
+    glossary = load_dictionary_csv(dictionary_csv)
     dictionary_meta = {
         "path": glossary.path,
         "sha256": glossary.sha256,
         "raw_count": glossary.raw_count,
         "effective_count": glossary.effective_count,
     }
-    settings = require_openai_settings()
+    settings = require_openai_settings(timeout_seconds=openai_timeout)
     client = _load_openai_client(settings)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "chunks.ja.jsonl"
@@ -378,12 +392,11 @@ def main() -> int:
     parser.add_argument("--openai-timeout", type=int)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
-    if args.openai_timeout is not None:
-        os.environ["OPENAI_TIMEOUT_SECONDS"] = str(args.openai_timeout)
     translate_chunks(
         _resolve_input(args.input),
         Path(args.output),
         dictionary_csv=args.dictionary_csv,
+        openai_timeout=args.openai_timeout,
         force=args.force,
     )
     LOGGER.info("翻訳が完了しました output=%s", Path(args.output) / "chunks.ja.jsonl")

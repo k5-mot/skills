@@ -167,17 +167,13 @@ def test_color_formatter_colors_only_level_name() -> None:
     assert "\x1b" not in rendered.split(" ", 1)[1]
 
 
-def test_logging_suppresses_transport_debug(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_logging_suppresses_transport_debug() -> None:
     """既定DEBUGでもHTTP transportの内部logを抑えることを確認する。
-
-    Args:
-        monkeypatch: pytest monkeypatch fixture。
 
     Returns:
         なし。
     """
 
-    monkeypatch.delenv("LOG_LEVEL", raising=False)
     configure_logging()
     assert logging.getLogger().level == logging.DEBUG
     assert logging.getLogger("httpcore").level == logging.WARNING

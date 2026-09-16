@@ -216,7 +216,7 @@ def _settings(collection: str | None) -> tuple[str, str, str]:
         RuntimeError: 必須設定が不足する場合。
     """
 
-    uri = os.getenv("QDRANT_URI") or os.getenv("QDRANT_URL")
+    uri = os.getenv("QDRANT_URI")
     key = os.getenv("QDRANT_API_KEY")
     name = collection or os.getenv("QDRANT_COLLECTION")
     missing = [
@@ -244,10 +244,11 @@ def _embeddings() -> OpenAIEmbeddings:
     """
 
     key = os.getenv("OPENAI_API_KEY")
-    if not key:
-        raise RuntimeError("OPENAI_API_KEY is required")
+    model = os.getenv("OPENAI_EMBEDDING_MODEL")
+    if not key or not model:
+        raise RuntimeError("OPENAI_API_KEY and OPENAI_EMBEDDING_MODEL are required")
     return OpenAIEmbeddings(
-        model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+        model=model,
         base_url=os.getenv("OPENAI_BASE_URL"),
         api_key=SecretStr(key),
     )
@@ -323,7 +324,7 @@ def ingest(
         url=uri,
         api_key=key,
         collection_name=name,
-        vector_name=os.getenv("QDRANT_VECTOR_NAME", ""),
+        vector_name="",
         batch_size=batch_size,
     )
     if replace_source:

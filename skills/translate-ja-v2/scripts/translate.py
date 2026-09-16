@@ -53,8 +53,8 @@ REVIEW_META_FAILURE_MARKERS = (
     "提供されていません",
     "ご提示ください",
 )
-LOG_LEVEL = "DEBUG"
-DOCLING_TIMEOUT_SECONDS = 21600
+DEFAULT_LOG_LEVEL = "DEBUG"
+DEFAULT_DOCLING_TIMEOUT_SECONDS = 21600
 PAGE_IMAGE_SCALE = 1.0
 DOCLING_PDF_CHUNK_PAGES = 10
 DOCLING_COLLECTION_KEYS = (
@@ -68,7 +68,7 @@ DOCLING_COLLECTION_KEYS = (
 DOCLING_COLLECTION_REF_RE = re.compile(
     r"^#/(groups|texts|pictures|tables|key_value_items|form_items)/(\d+)$"
 )
-OPENAI_TIMEOUT_SECONDS = 1800
+DEFAULT_OPENAI_TIMEOUT_SECONDS = 1800
 OPENAI_MAX_ATTEMPTS = 6
 OPENAI_RETRY_INITIAL_SECONDS = 5.0
 OPENAI_RETRY_MAX_SECONDS = 60.0
@@ -77,11 +77,10 @@ OPENAI_MAX_OUTPUT_TOKENS = 4096
 OPENAI_BATCH_MAX_OUTPUT_TOKENS = 16384
 OPENAI_SAFE_OUTPUT_CHARS = 12000
 TRANSLATION_BATCH_MAX_CHARS = 1500
-LIBRETRANSLATE_TIMEOUT_SECONDS = 1800
+DEFAULT_LIBRETRANSLATE_TIMEOUT_SECONDS = 1800
 REVIEW_MAX_WORKERS = 2
-QDRANT_TIMEOUT_SECONDS = 60
-QDRANT_TOP_K = 3
-QDRANT_EMBEDDING_MODEL = "sentence-transformers/all-minilm-l6-v2"
+DEFAULT_QDRANT_TIMEOUT_SECONDS = 60
+DEFAULT_QDRANT_TOP_K = 3
 PIPELINE_STAGES = (
     "parse",
     "normalize",
@@ -222,7 +221,7 @@ class LibreTranslateSettings(FrozenModel):
 
     base_url: str
     api_key: str | None = None
-    timeout_seconds: int = LIBRETRANSLATE_TIMEOUT_SECONDS
+    timeout_seconds: int = DEFAULT_LIBRETRANSLATE_TIMEOUT_SECONDS
 
 
 class QdrantSettings(FrozenModel):
@@ -246,14 +245,14 @@ class QdrantSettings(FrozenModel):
 
     uri: str
     api_key: str
+    embedding_model: str
     collection: str | None = None
-    embedding_model: str = QDRANT_EMBEDDING_MODEL
     vector_name: str | None = None
     text_field: str = "text"
     source_field: str = "source"
     locator_field: str = "page"
-    top_k: int = Field(default=QDRANT_TOP_K, ge=1)
-    timeout_seconds: int = QDRANT_TIMEOUT_SECONDS
+    top_k: int = Field(default=DEFAULT_QDRANT_TOP_K, ge=1)
+    timeout_seconds: int = DEFAULT_QDRANT_TIMEOUT_SECONDS
 
 
 class StagePaths(FrozenModel):
@@ -349,7 +348,7 @@ def configure_logging(level_name: str | None = None) -> None:
 
     level = getattr(
         logging,
-        (level_name or LOG_LEVEL).upper(),
+        (level_name or DEFAULT_LOG_LEVEL).upper(),
         logging.DEBUG,
     )
     formatter = ColorFormatter(
@@ -392,24 +391,6 @@ def load_dotenv_file(path: str | Path = ".env") -> None:
     python_dotenv_load_dotenv(dotenv_path=env_path, override=False)
 
 
-def env_first(*names: str, default: str | None = None) -> str | None:
-    """複数の環境変数から最初に設定されている値を返す。
-
-    Args:
-        *names: 優先順の環境変数名。
-        default: どの環境変数も未設定の場合に返す値。
-
-    Returns:
-        最初に見つかった環境変数値、または default。
-    """
-
-    for name in names:
-        value = os.environ.get(name)
-        if value:
-            return value
-    return default
-
-
 def require_openai_settings(
     context_chars: int = OPENAI_CONTEXT_LIMIT_CHARS,
 ) -> OpenAISettings:
@@ -437,7 +418,7 @@ def require_openai_settings(
         base_url=base_url.rstrip("/"),
         api_key=api_key,
         model=model,
-        timeout_seconds=OPENAI_TIMEOUT_SECONDS,
+        timeout_seconds=DEFAULT_OPENAI_TIMEOUT_SECONDS,
         context_chars=context_chars,
     )
 
@@ -2358,30 +2339,28 @@ class AgentReview:
 
         Raises:
             RuntimeError: `QDRANT_URI`または`QDRANT_API_KEY`が未設定の場合。
-            ValueError: `QDRANT_TOP_K`が正の整数でない場合。
+            RuntimeError: embedding modelが未設定の場合。
         """
 
-        uri = env_first("QDRANT_URI", "QDRANT_URL")
+        uri = os.environ.get("QDRANT_URI")
         api_key = os.environ.get("QDRANT_API_KEY")
+        embedding_model = os.environ.get("OPENAI_EMBEDDING_MODEL")
         if not uri:
-            raise RuntimeError("QDRANT_URI or QDRANT_URL is required for Review RAG")
+            raise RuntimeError("QDRANT_URI is required for Review RAG")
         if not api_key:
             raise RuntimeError("QDRANT_API_KEY is required for Review RAG")
+        if not embedding_model:
+            raise RuntimeError("OPENAI_EMBEDDING_MODEL is required for Review RAG")
         return QdrantSettings(
             uri=uri.rstrip("/"),
             api_key=api_key,
             collection=os.environ.get("QDRANT_COLLECTION") or None,
-            embedding_model=env_first(
-                "QDRANT_EMBEDDING_MODEL", default=QDRANT_EMBEDDING_MODEL
-            )
-            or QDRANT_EMBEDDING_MODEL,
-            vector_name=os.environ.get("QDRANT_VECTOR_NAME") or None,
-            text_field=env_first("QDRANT_TEXT_FIELD", default="text") or "text",
-            source_field=env_first("QDRANT_SOURCE_FIELD", default="source") or "source",
-            locator_field=env_first("QDRANT_LOCATOR_FIELD", default="page") or "page",
-            top_k=int(
-                env_first("QDRANT_TOP_K", default=str(QDRANT_TOP_K)) or QDRANT_TOP_K
-            ),
+            embedding_model=embedding_model,
+            vector_name=None,
+            text_field="text",
+            source_field="source",
+            locator_field="page",
+            top_k=DEFAULT_QDRANT_TOP_K,
         )
 
     @staticmethod
@@ -3827,16 +3806,16 @@ class ParseStage(FrozenModel):
             RuntimeError: 必須環境変数が未設定の場合。
         """
 
-        server_url = env_first("DOCLING_SERVER_URL", "DOCLING_SERVE_URL")
-        api_key = env_first("DOCLING_API_KEY", "DOCLING_SERVE_API_KEY")
+        server_url = os.environ.get("DOCLING_SERVER_URL")
+        api_key = os.environ.get("DOCLING_API_KEY")
         if not server_url:
-            raise RuntimeError("DOCLING_SERVER_URL or DOCLING_SERVE_URL is required")
+            raise RuntimeError("DOCLING_SERVER_URL is required")
         if not api_key:
-            raise RuntimeError("DOCLING_API_KEY or DOCLING_SERVE_API_KEY is required")
+            raise RuntimeError("DOCLING_API_KEY is required")
         return DoclingSettings(
             server_url=server_url.rstrip("/"),
             api_key=api_key,
-            timeout_seconds=DOCLING_TIMEOUT_SECONDS,
+            timeout_seconds=DEFAULT_DOCLING_TIMEOUT_SECONDS,
         )
 
     @staticmethod
@@ -4516,7 +4495,7 @@ class ParseStage(FrozenModel):
         config_hash = sha256_json(
             {
                 "version": 3,
-                "payload": self._payload(DOCLING_TIMEOUT_SECONDS),
+                "payload": self._payload(DEFAULT_DOCLING_TIMEOUT_SECONDS),
                 "pdf_chunk_pages": DOCLING_PDF_CHUNK_PAGES,
                 "local_page_images": {
                     "renderer": "pypdfium2",
@@ -6308,20 +6287,14 @@ class ReviewStage(FrozenModel):
                 "glossary": glossary,
                 "qdrant": (
                     {
-                        "uri": env_first("QDRANT_URI", "QDRANT_URL"),
+                        "uri": os.environ.get("QDRANT_URI"),
                         "collection": os.environ.get("QDRANT_COLLECTION"),
-                        "embedding_model": env_first(
-                            "QDRANT_EMBEDDING_MODEL", default=QDRANT_EMBEDDING_MODEL
-                        ),
-                        "vector_name": os.environ.get("QDRANT_VECTOR_NAME"),
-                        "text_field": env_first("QDRANT_TEXT_FIELD", default="text"),
-                        "source_field": env_first(
-                            "QDRANT_SOURCE_FIELD", default="source"
-                        ),
-                        "locator_field": env_first(
-                            "QDRANT_LOCATOR_FIELD", default="page"
-                        ),
-                        "top_k": env_first("QDRANT_TOP_K", default=str(QDRANT_TOP_K)),
+                        "embedding_model": os.environ.get("OPENAI_EMBEDDING_MODEL"),
+                        "vector_name": None,
+                        "text_field": "text",
+                        "source_field": "source",
+                        "locator_field": "page",
+                        "top_k": DEFAULT_QDRANT_TOP_K,
                     }
                     if self.review_rag
                     else None

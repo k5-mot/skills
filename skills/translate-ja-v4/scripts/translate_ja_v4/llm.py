@@ -8,14 +8,14 @@ import os
 from functools import lru_cache
 from math import ceil
 from pathlib import Path
-from typing import Any, Literal, TypeVar, cast
+from typing import Any, TypeVar, cast
 from urllib.parse import urlparse
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
-from langfuse import Langfuse, get_client
+from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel
 
@@ -74,7 +74,7 @@ def _langfuse_client(
 
 
 def _prepare_langfuse_base_url() -> str | None:
-    """Langfuse接続先を検証し、旧環境変数を標準名へ正規化する。
+    """Langfuse OTEL hostをclient用base URLへ正規化する。
 
     Returns:
         正規化したbase URL。接続先が未設定ならNone。
@@ -82,16 +82,9 @@ def _prepare_langfuse_base_url() -> str | None:
     Raises:
         RuntimeError: URLがHTTP(S)の絶対URLでない場合。
 
-    Side Effects:
-        `LANGFUSE_BASE_URL` 未設定時にprocess環境へ正規化値を設定する。
     """
 
-    candidates = (
-        ("LANGFUSE_BASE_URL", os.getenv("LANGFUSE_BASE_URL")),
-        ("LANGFUSE_HOST", os.getenv("LANGFUSE_HOST")),
-        ("LANGFUSE_OTEL_HOST", os.getenv("LANGFUSE_OTEL_HOST")),
-    )
-    source, value = next(((key, item) for key, item in candidates if item), ("", None))
+    value = os.getenv("LANGFUSE_OTEL_HOST")
     if value is None:
         return None
     normalized = value.strip().rstrip("/")
@@ -100,10 +93,7 @@ def _prepare_langfuse_base_url() -> str | None:
         normalized = normalized[: -len(suffix)]
     parsed = urlparse(normalized)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise RuntimeError(f"{source} must be an absolute HTTP(S) URL")
-    if not os.getenv("LANGFUSE_BASE_URL"):
-        os.environ["LANGFUSE_BASE_URL"] = normalized
-        LOGGER.info("Using %s as LANGFUSE_BASE_URL", source)
+        raise RuntimeError("LANGFUSE_OTEL_HOST must be an absolute HTTP(S) URL")
     return normalized
 
 
@@ -132,7 +122,6 @@ def _langfuse_config(trace_name: str) -> RunnableConfig:
     }
     if public_key and secret_key:
         base_url = _prepare_langfuse_base_url()
-        os.environ["LANGFUSE_MEDIA_UPLOAD_ENABLED"] = "false"
         _langfuse_client(public_key, secret_key, base_url)
         config["callbacks"] = [CallbackHandler(public_key=public_key)]
     return config
@@ -155,8 +144,8 @@ def flush_langfuse() -> None:
         return
     try:
         public_key = os.environ["LANGFUSE_PUBLIC_KEY"]
-        _prepare_langfuse_base_url()
-        get_client(public_key=public_key).flush()
+        secret_key = os.environ["LANGFUSE_SECRET_KEY"]
+        _langfuse_client(public_key, secret_key, _prepare_langfuse_base_url()).flush()
     except Exception as error:
         LOGGER.warning("Failed to flush Langfuse traces error=%s", error)
 
@@ -290,14 +279,10 @@ def structured_model(
         検証済みschemaを返すrunnable。
     """
 
-    method = cast(
-        Literal["function_calling", "json_mode", "json_schema"],
-        os.getenv("OPENAI_STRUCTURED_METHOD", "json_mode"),
-    )
     runnable = cast(
         Runnable[Any, SchemaT],
         chat_model(options, max_tokens=max_tokens).with_structured_output(
-            schema, method=method
+            schema, method="json_mode"
         ),
     )
     return runnable.with_config(_langfuse_config(trace_name))

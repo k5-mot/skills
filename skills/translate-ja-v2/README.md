@@ -66,7 +66,7 @@ ReviewはFidelity ReviewerとTerminology Reviewerを並列実行し、不一致�
   --review-rag
 ```
 
-検索対象collectionは `QDRANT_EMBEDDING_MODEL` と同じQdrant inference modelで作成されている必要があります。named vectorを使うcollectionでは `QDRANT_VECTOR_NAME` も設定してください。
+検索対象collectionは`OPENAI_EMBEDDING_MODEL`と同じmodelで作成されている必要があります。default vectorを使い、取得件数は3件固定です。
 
 ### 引数
 

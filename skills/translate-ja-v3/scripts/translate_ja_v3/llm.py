@@ -6,7 +6,7 @@ import base64
 import mimetypes
 import os
 from pathlib import Path
-from typing import Any, Literal, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -45,7 +45,7 @@ def chat_model(options: PipelineOptions, *, max_tokens: int) -> ChatOpenAI:
         base_url=cast(str, values["OPENAI_BASE_URL"]),
         api_key=cast(str, values["OPENAI_API_KEY"]),
         temperature=0,
-        timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "1800")),
+        timeout=1_800.0,
         max_retries=5,
         max_tokens=max_tokens,
     )
@@ -65,14 +65,10 @@ def structured_model(
         検証済みschemaを返すrunnable。
     """
 
-    method = cast(
-        Literal["function_calling", "json_mode", "json_schema"],
-        os.getenv("OPENAI_STRUCTURED_METHOD", "json_mode"),
-    )
     return cast(
         Runnable[Any, SchemaT],
         chat_model(options, max_tokens=max_tokens).with_structured_output(
-            schema, method=method
+            schema, method="json_mode"
         ),
     )
 

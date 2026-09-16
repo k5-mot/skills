@@ -47,21 +47,21 @@ def load_dotenv(path: str | Path = ".env") -> None:
         os.environ.setdefault(key, value)
 
 
-def _env_first(*names: str, default: str | None = None) -> str | None:
-    """複数の環境変数名から最初に設定済みの値を返す。"""
-
-    for name in names:
-        value = os.environ.get(name)
-        if value:
-            return value
-    return default
-
-
 def require_docling_settings(*, timeout_seconds: int | None = None) -> DoclingSettings:
-    """Docling Serve の必須設定を検証して返す。"""
+    """Docling Serveの必須設定を検証して返す。
 
-    server_url = _env_first("DOCLING_SERVER_URL", "DOCLING_SERVE_URL")
-    api_key = _env_first("DOCLING_API_KEY", "DOCLING_SERVE_API_KEY")
+    Args:
+        timeout_seconds: CLI等で指定されたtimeout秒。Noneなら固定既定値を使う。
+
+    Returns:
+        検証済みDocling設定。
+
+    Raises:
+        RuntimeError: 必須環境変数が未設定の場合。
+    """
+
+    server_url = os.environ.get("DOCLING_SERVER_URL")
+    api_key = os.environ.get("DOCLING_API_KEY")
     if not server_url:
         raise RuntimeError("DOCLING_SERVER_URL is required")
     if not api_key:
@@ -69,13 +69,22 @@ def require_docling_settings(*, timeout_seconds: int | None = None) -> DoclingSe
     return DoclingSettings(
         server_url=server_url.rstrip("/"),
         api_key=api_key,
-        timeout_seconds=timeout_seconds
-        or int(os.environ.get("DOCLING_TIMEOUT_SECONDS", "21600")),
+        timeout_seconds=timeout_seconds or 21_600,
     )
 
 
 def require_openai_settings(*, timeout_seconds: int | None = None) -> OpenAISettings:
-    """OpenAI 互換 API の必須設定を検証して返す。"""
+    """OpenAI互換APIの必須設定を検証して返す。
+
+    Args:
+        timeout_seconds: CLI等で指定されたtimeout秒。Noneなら固定既定値を使う。
+
+    Returns:
+        検証済みOpenAI設定。
+
+    Raises:
+        RuntimeError: 必須環境変数が未設定の場合。
+    """
 
     base_url = os.environ.get("OPENAI_BASE_URL")
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -90,18 +99,20 @@ def require_openai_settings(*, timeout_seconds: int | None = None) -> OpenAISett
         base_url=base_url.rstrip("/"),
         api_key=api_key,
         model=model,
-        timeout_seconds=timeout_seconds
-        or int(os.environ.get("OPENAI_TIMEOUT_SECONDS", "1800")),
+        timeout_seconds=timeout_seconds or 1_800,
         max_retries=0,
     )
 
 
 def langfuse_enabled() -> bool:
-    """Langfuse 関連環境変数が設定されているかを返す。"""
+    """Langfuse認証情報が両方設定されているかを返す。
 
-    return any(
-        os.environ.get(name)
-        for name in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_OTEL_HOST")
+    Returns:
+        public keyとsecret keyが揃っていればTrue。
+    """
+
+    return bool(
+        os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")
     )
 
 
@@ -118,11 +129,7 @@ def build_langfuse_headers(
 
     if not langfuse_enabled():
         return {}
-    trace_user_id = (
-        os.environ.get("LANGFUSE_TRACE_USER_ID")
-        or os.environ.get("USER")
-        or "translate-ja"
-    )
+    trace_user_id = "translate-ja"
     session_id = sha256_text(input_identity)[:16]
     return {
         "langfuse_trace_id": run_id or str(uuid.uuid4()),

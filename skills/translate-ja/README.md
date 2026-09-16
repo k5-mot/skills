@@ -62,17 +62,14 @@ output/
 
 主な値:
 
-- `DOCLING_SERVE_URL`: Docling Serve の URL。
-- `DOCLING_SERVE_API_KEY`: Docling Serve の API キー。
+- `DOCLING_SERVER_URL`: Docling Serve の URL。
+- `DOCLING_API_KEY`: Docling Serve の API キー。
 - `OPENAI_BASE_URL`: OpenAI 互換 API の Base URL。
 - `OPENAI_API_KEY`: OpenAI 互換 API の API キー。
 - `OPENAI_MODEL`: 翻訳、構造補正に使うモデル。
-- `OPENAI_TIMEOUT_SECONDS`: OpenAI Python クライアントの timeout 秒数。
-- `LOG_LEVEL`: `INFO` または `DEBUG`。
-- `LANGFUSE_TRACE_ID` など: 設定されている場合だけ、非秘密の Langfuse trace header を LLM リクエストに付与します。
-- `TRANSLATE_JA_DICTIONARY_CSV`: `--dictionary-csv` 未指定時に使う用語辞書 CSV。
+- `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`、`LANGFUSE_OTEL_HOST`: 任意のLangfuse連携。
 
-`DOCLING_SERVER_URL` / `DOCLING_API_KEY` も利用できます。README 旧版の `DOCLING_SERVE_URL` / `DOCLING_SERVE_API_KEY` と両方を吸収します。
+timeoutは固定既定値またはCLI引数で指定し、用語辞書は`--dictionary-csv`だけで指定します。上記以外の環境変数や旧別名は読みません。
 
 ## 用語辞書 CSV
 
@@ -87,7 +84,7 @@ output/
 
 ## 機密文書の注意
 
-機密文書を翻訳する場合は、外部 API 送信先、ログ保存先、生成物の保管先を必ず確認してください。`LOG_LEVEL=DEBUG` では stream 差分ログに原文や翻訳文が含まれうるため、機密文書では DEBUG ログを使わないでください。
+機密文書を翻訳する場合は、外部 API 送信先、ログ保存先、生成物の保管先を必ず確認してください。ログには原文や翻訳文が含まれうるため、保存先のアクセス制御を確認してください。
 
 API キーや Authorization ヘッダーはログ、manifest、例外に出さない実装方針です。ただし、入力文書、翻訳結果、Docling JSON、チャンク JSONL、辞書 CSV、`artifacts/` の画像は機密情報そのものになりえます。
 

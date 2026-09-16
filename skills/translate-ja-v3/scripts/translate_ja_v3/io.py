@@ -57,7 +57,7 @@ class ColorFormatter(logging.Formatter):
 
 
 def configure_logging() -> None:
-    """環境変数LOG_LEVELを使って英語ログを設定する。
+    """固定DEBUG levelで英語ログを設定する。
 
     Returns:
         なし。
@@ -66,7 +66,7 @@ def configure_logging() -> None:
         root loggerのhandlerとlevelを更新する。
     """
 
-    level = getattr(logging, os.getenv("LOG_LEVEL", "DEBUG").upper(), logging.DEBUG)
+    level = logging.DEBUG
     handler = logging.StreamHandler()
     handler.setFormatter(
         ColorFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
