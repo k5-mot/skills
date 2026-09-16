@@ -16,7 +16,7 @@ from src.adapters.langfuse import media, observed, update_current
 from src.config import Settings
 
 T = TypeVar("T")
-STRUCTURED_RESPONSE_ATTEMPTS = 3
+STRUCTURED_RESPONSE_ATTEMPTS = 5
 
 
 class ContextLengthError(RuntimeError):

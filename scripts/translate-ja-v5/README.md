@@ -82,6 +82,8 @@ OPENAI_REVIEW_MODEL=review-model
 
 Qdrant、Langfuse、LibreTranslateの設定は、該当機能を使用する場合だけ必要です。Langfuseのページ画像uploadは無効です。
 
+空、非JSON、必須キー不足の構造化応答は最大5回まで再生成します。Review中に上限へ達した場合は、対象Inline IDを含むエラーで停止します。
+
 ## 翻訳の実行
 
 repository rootから実行します。

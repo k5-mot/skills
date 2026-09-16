@@ -172,6 +172,43 @@ def test_review_page_passes_only_matching_glossary_per_inline(
     assert received == [["API"], []]
 
 
+def test_review_page_reports_inline_id_for_structured_response_failure(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """Reviewの構造化応答失敗に対象Inline IDを付加する。
+
+    Args:
+        monkeypatch: Reviewを差し替えるfixture。
+        settings: 共通Settings fixture。
+
+    Returns:
+        なし。
+    """
+
+    page = _page(2, ["Source"])
+    page.blocks[0].translated = [Inline(id="i2-0", text="訳文")]
+
+    def review(*_args: object, **_kwargs: object) -> ReviewOutcome:
+        """構造化応答失敗を模擬する。
+
+        Args:
+            *_args: 未使用位置引数。
+            **_kwargs: 未使用keyword引数。
+
+        Returns:
+            正常時のReview結果。常に例外となるため返さない。
+
+        Raises:
+            ValueError: 常に送出する。
+        """
+
+        raise ValueError("LLM did not return the required JSON object")
+
+    monkeypatch.setattr(review_workflow, "run_review", review)
+    with pytest.raises(RuntimeError, match=r"Review failed for i2-0: LLM"):
+        workflow._review_page(page, "rules", settings, [])
+
+
 def test_structure_clamps_heading_level_jumps(
     monkeypatch: pytest.MonkeyPatch, settings: Settings, tmp_path: Path
 ) -> None:

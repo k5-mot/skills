@@ -212,8 +212,8 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
     assert "tools" not in calls[-1]
     assert "JSON Schema" in calls[-1]["messages"][0]["content"]
     output = capsys.readouterr().out
-    assert "LLM: answer attempt 1/3 started" in output
-    assert f"LLM: answer attempt {len(responses)}/3 success" in output
+    assert "LLM: answer attempt 1/5 started" in output
+    assert f"LLM: answer attempt {len(responses)}/5 success" in output
     assert output.count("invalid response") == len(responses) - 1
     if len(responses) > 1:
         repair_messages = calls[1]["messages"]
@@ -228,10 +228,10 @@ def test_structured_chat_uses_json_schema_and_accepts_local_model_json(
             assert len(repair_messages) == 2
 
 
-def test_structured_chat_stops_after_three_invalid_responses(
+def test_structured_chat_stops_after_five_invalid_responses(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> None:
-    """structured応答が3回とも不正なら有限回で失敗する。
+    """structured応答が5回とも不正なら有限回で失敗する。
 
     Args:
         monkeypatch: OpenAI clientを差し替えるfixture。
@@ -273,7 +273,7 @@ def test_structured_chat_stops_after_three_invalid_responses(
             "answer",
             {"type": "object"},
         )
-    assert calls == 3
+    assert calls == 5
 
 
 def test_langfuse_media_is_disabled_without_extra_environment_contract(
