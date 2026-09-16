@@ -18,7 +18,7 @@ from src.adapters.pandoc import (
 from src.config import Backend, Settings, read_rules
 from src.model import Document, Page, page_text
 from src.processing.normalize import normalize_docling
-from src.processing.quality import GlossaryEntry, read_glossary
+from src.processing.quality import GlossaryEntry, matching_glossary, read_glossary
 from src.processing.render import render_document, validate_document
 from src.processing.structure import structure_page
 from src.processing.translation import apply_layer, translate_page, translation_units
@@ -109,13 +109,6 @@ def _review_page(
 
     from src.workflows.review import run_review
 
-    update_current(
-        input={
-            "page": page.model_dump(),
-            "rules": rules,
-            "glossary": [item.model_dump() for item in glossary],
-        }
-    )
     # 原文側の走査順を流用せず、実在するtranslated層だけをReview対象にする。
     translated_page = page.model_copy(deep=True)
     pairs: list[tuple[str, str, str]] = []
@@ -127,11 +120,28 @@ def _review_page(
             for item in values:
                 if item.id in source_by_id:
                     pairs.append((item.id, source_by_id[item.id], item.text))
+    update_current(
+        input={
+            "page": page.model_dump(),
+            "rules": rules,
+            "glossary": [
+                item.model_dump()
+                for item in matching_glossary(
+                    "\n".join(source for _item_id, source, _target in pairs),
+                    glossary,
+                )
+            ],
+        }
+    )
     reviewed: dict[str, str] = {}
     for item_id, source, target in pairs:
         try:
             reviewed[item_id] = run_review(
-                source, target, rules, settings, glossary
+                source,
+                target,
+                rules,
+                settings,
+                matching_glossary(source, glossary),
             ).text
         except RuntimeError as error:
             raise RuntimeError(f"Review failed for {item_id}: {error}") from error
