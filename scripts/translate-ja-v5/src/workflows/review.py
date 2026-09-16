@@ -101,6 +101,11 @@ SOURCE_BOUNDARY_POLICY = (
     "短い図表ラベルや用語は、その断片に明記された語だけで評価し、"
     "参照文書から定義、関係者、背景説明を補うことを要求しないでください。"
 )
+SOURCE_NOISE_POLICY = (
+    "原文のOCR・抽出に由来する空白、句読点、括弧の欠落や不整合は、意味の欠落や追加として扱わないでください。"
+    "訳文で自然な表記へ正規化されていても指摘や不合格の理由にせず、"
+    "原文と同じ壊れた記号列へ戻すよう要求しないでください。"
+)
 
 
 def _parse_findings(value: Any) -> list[dict[str, Any]]:
@@ -171,7 +176,8 @@ def build_review_graph(settings: Settings) -> Any:
             assessment_settings,
             assessment_settings.review_model or "",
             "忠実性Criticです。訳文は変更せず、意味、欠落、追加、否定、条件、比較、因果関係の問題を最大8件、簡潔に指摘してください。"
-            + FRAGMENT_REVIEW_POLICY,
+            + FRAGMENT_REVIEW_POLICY
+            + SOURCE_NOISE_POLICY,
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n訳文:\n{state['candidate']}",
             "fidelity_findings",
             FINDINGS_SCHEMA,
@@ -200,6 +206,7 @@ def build_review_graph(settings: Settings) -> Any:
             "Japanese Criticです。訳文は変更せず、用語、一貫性、自然さを最大8件、簡潔に指摘してください。"
             + FRAGMENT_REVIEW_POLICY
             + SOURCE_BOUNDARY_POLICY
+            + SOURCE_NOISE_POLICY
             + "参照がある場合はsourceを含む根拠をevidenceへ必ず示してください。",
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n訳文:\n{state['candidate']}\n\n参照:\n{json.dumps(evidence, ensure_ascii=False)}",
             "japanese_findings",
@@ -229,7 +236,8 @@ def build_review_graph(settings: Settings) -> Any:
             settings,
             settings.review_model or "",
             "Reviserです。指摘箇所だけを必要最小限に修正し、原文にない情報を追加しないでください。"
-            + SOURCE_BOUNDARY_POLICY,
+            + SOURCE_BOUNDARY_POLICY
+            + SOURCE_NOISE_POLICY,
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n元訳:\n{state['original']}\n\n候補訳:\n{state['candidate']}\n\n指摘:\n{json.dumps(state.get('findings', []), ensure_ascii=False)}\n\n根拠:\n{json.dumps(state.get('evidence', []), ensure_ascii=False)}",
             "revision",
             REVISION_SCHEMA,
@@ -255,6 +263,7 @@ def build_review_graph(settings: Settings) -> Any:
             "Verifierです。現在の候補訳を原文と直接比較してください。既存指摘は確認項目であり、存在するだけでは不合格にしません。"
             + FRAGMENT_REVIEW_POLICY
             + SOURCE_BOUNDARY_POLICY
+            + SOURCE_NOISE_POLICY
             + "現在も残る重大な誤訳、欠落、追加だけを最大8件返し、一つでもあればapproved=false、全て解消済みならapproved=trueにしてください。",
             f"原文:\n{state['source']}\n\n元訳:\n{state['original']}\n\n候補訳:\n{state['candidate']}\n\n既存指摘:\n{json.dumps(state.get('findings', []), ensure_ascii=False)}\n\n参照根拠:\n{json.dumps(state.get('evidence', []), ensure_ascii=False)}",
             "verification",

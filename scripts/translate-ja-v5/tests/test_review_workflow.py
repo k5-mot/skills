@@ -411,6 +411,14 @@ def test_review_limits_assessment_output_but_not_revision(
         assert "定義、関係者、背景説明を補うことを要求しない" in systems[schema_name]
     for schema_name in ("fidelity_findings", "japanese_findings", "verification"):
         assert "日本語の語順上完結して見えるだけ" in systems[schema_name]
+    for schema_name in (
+        "fidelity_findings",
+        "japanese_findings",
+        "revision",
+        "verification",
+    ):
+        assert "括弧の欠落や不整合" in systems[schema_name]
+        assert "原文と同じ壊れた記号列へ戻すよう要求しない" in systems[schema_name]
 
 
 def test_japanese_critic_propagates_rag_evidence(
