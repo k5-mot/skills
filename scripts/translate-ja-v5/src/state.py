@@ -216,6 +216,8 @@ def invalidate_state(
         "backend"
     ) != config.get("backend"):
         starts.append(STAGES.index("translate"))
+    if old.get("glossary_hash") != config.get("glossary_hash"):
+        starts.append(STAGES.index("translate"))
     if old.get("review_model") != config.get("review_model"):
         starts.append(STAGES.index("review"))
     if starts:

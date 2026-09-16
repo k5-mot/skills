@@ -33,6 +33,7 @@ def _config(**updates: str) -> dict[str, str | None]:
         "review_model": "r",
         "embedding_model": "e",
         "backend": "openai",
+        "glossary_hash": None,
     }
     value.update(updates)
     return value
@@ -100,6 +101,7 @@ def test_output_lock_rejects_second_holder(tmp_path: Path) -> None:
         ({"review_model": "r2"}, {"review", "markdown", "docx"}),
         ({"embedding_model": "e2"}, set()),
         ({"backend": "libretranslate"}, {"translate", "review", "markdown", "docx"}),
+        ({"glossary_hash": "g2"}, {"translate", "review", "markdown", "docx"}),
     ],
 )
 def test_model_changes_invalidate_fixed_range(

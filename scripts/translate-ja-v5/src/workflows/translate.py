@@ -34,12 +34,15 @@ from src.state import (
 )
 
 
-def _config_snapshot(settings: Settings, backend: Backend) -> dict[str, str | None]:
+def _config_snapshot(
+    settings: Settings, backend: Backend, glossary_path: Path | None
+) -> dict[str, str | None]:
     """Resume判定に必要な設定だけを抽出する。
 
     Args:
         settings: 実行設定。
         backend: 翻訳backend。
+        glossary_path: 任意の用語集path。
 
     Returns:
         認証情報を含まない設定mapping。
@@ -53,6 +56,7 @@ def _config_snapshot(settings: Settings, backend: Backend) -> dict[str, str | No
         "review_model": settings.review_model,
         "embedding_model": settings.embedding_model,
         "backend": backend,
+        "glossary_hash": sha256_file(glossary_path) if glossary_path else None,
     }
 
 
@@ -238,7 +242,7 @@ def run_translation(
     output = output_root / source.stem
     work = output / ".work"
     state_path = work / "state.json"
-    config = _config_snapshot(settings, backend)
+    config = _config_snapshot(settings, backend, glossary_path)
     # lock前の読み取りは計画表示用であり、実書込みはlock取得後だけ行う。
     existing = load_json(state_path)
     state = (
