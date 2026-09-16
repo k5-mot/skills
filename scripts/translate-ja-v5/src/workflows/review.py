@@ -106,6 +106,10 @@ SOURCE_NOISE_POLICY = (
     "訳文で自然な表記へ正規化されていても指摘や不合格の理由にせず、"
     "原文と同じ壊れた記号列へ戻すよう要求しないでください。"
 )
+TYPO_REVISION_POLICY = (
+    "誤字、文字重複、不自然な表記が指摘され、問題文字列が引用されている場合は、"
+    "その文字列を候補訳へ残さず、文脈に合う自然な表記へ必ず校正してください。"
+)
 
 
 def _parse_findings(value: Any) -> list[dict[str, Any]]:
@@ -245,6 +249,7 @@ def build_review_graph(settings: Settings) -> Any:
             "Reviserです。指摘箇所だけを必要最小限に修正し、原文にない情報を追加しないでください。"
             + SOURCE_BOUNDARY_POLICY
             + SOURCE_NOISE_POLICY
+            + TYPO_REVISION_POLICY
             + retry_policy,
             f"Reviewルール:\n{state['rules']}\n\n原文:\n{state['source']}\n\n元訳:\n{state['original']}\n\n候補訳:\n{state['candidate']}\n\n指摘:\n{json.dumps(state.get('findings', []), ensure_ascii=False)}\n\n根拠:\n{json.dumps(state.get('evidence', []), ensure_ascii=False)}",
             "revision",

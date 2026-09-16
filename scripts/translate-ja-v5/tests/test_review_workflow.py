@@ -288,6 +288,7 @@ def test_review_revises_and_retries_verifier_once(
     assert "critic-meaning" in revision_prompts[0]
     assert "critic-meaning" not in revision_prompts[1]
     assert "verifier-omission" in revision_prompts[1]
+    assert all("その文字列を候補訳へ残さず" in value for value in revision_systems)
     assert "文全体を再構成" not in revision_systems[0]
     assert "文全体を再構成" in revision_systems[1]
     assert "理由、条件、選択肢の係り受け" in revision_systems[1]
